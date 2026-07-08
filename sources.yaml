@@ -1,0 +1,67 @@
+# Source registry. Adding/removing a source is config, not code.
+# url template: https://raw.githubusercontent.com/{repo}/{branch}/{file}
+#
+# default_terms: per-file hint applied (confidence "inferred") when a row's
+# title carries no term signal of its own.
+
+sources:
+  - name: simplify
+    adapter: simplify_json
+    repo: SimplifyJobs/Summer2026-Internships
+    branch: dev
+    files: [".github/scripts/listings.json"]
+    # Single JSON carries ALL terms (Fall 2026, Spring 2027, Summer 2027, ...).
+    # When SimplifyJobs/Summer2027-Internships launches, add it as a new row
+    # with this same adapter.
+
+  - name: jobright-swe
+    adapter: jobright_md
+    repo: jobright-ai/2026-Software-Engineer-Internship
+    branch: master
+    files: ["README.md"]
+
+  - name: jobright-eng
+    adapter: jobright_md
+    repo: jobright-ai/2026-Engineer-Internship
+    branch: master
+    files: ["README.md"]
+
+  - name: jobright-pm
+    adapter: jobright_md
+    repo: jobright-ai/2026-Product-Management-Internship
+    branch: master
+    files: ["README.md"]
+
+  - name: jobright-data
+    adapter: jobright_md
+    repo: jobright-ai/2026-Data-Analysis-Internship
+    branch: master
+    files: ["README.md"]
+    # Data Scientist / analytics internships land here, NOT in the SWE or
+    # Engineer repos (Universal's "Data Scientist, Commercial Audience
+    # Science" only ever appeared in this repo). Mixes in business/marketing
+    # analyst rows -- strict_sources in the user config gates those out.
+
+  - name: vanshb03-2027
+    adapter: vanshb03_md
+    repo: vanshb03/Summer2027-Internships
+    branch: dev
+    files: ["README.md", "OFFSEASON_README.md"]
+    default_terms:
+      README.md: ["Summer 2027"]
+      # OFFSEASON_README.md mixes Fall/Spring rows -- no safe default; term
+      # inference / LLM handles those.
+
+  - name: speedyapply
+    adapter: speedyapply_md
+    repo: speedyapply/2026-SWE-College-Jobs
+    branch: main
+    files: ["README.md"]
+
+  - name: ats-boards
+    adapter: ats_boards
+    boards_file: data/ats_boards.yaml
+    # Official public JSON APIs of Greenhouse/Lever/Ashby for every company
+    # in the top/Atlanta lists that has a discoverable board. Catches
+    # postings the moment they appear, independent of any curator.
+    # Regenerate the board list with: python scripts/discover_ats_boards.py

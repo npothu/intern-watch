@@ -1,0 +1,23 @@
+Software Engineer Intern, Backend — Fall 2026
+
+The platform team owns the services that every product surface depends on.
+As an intern you will ship production code to distributed systems serving
+millions of requests per day.
+
+Responsibilities
+- Design and build RESTful APIs and backend services
+- Write efficient SQL and evolve relational database schemas
+- Improve caching and latency of high-throughput endpoints
+- Containerize services with Docker and deploy via CI/CD
+
+Requirements
+- Pursuing a degree in Computer Science
+- Proficiency in Python, Java, or Golang
+- Solid understanding of databases (MySQL or PostgreSQL) and SQL
+- Understanding of REST APIs and HTTP
+- Experience with Git and testing practices
+
+Nice to have
+- Experience with microservices and distributed systems
+- Familiarity with NoSQL stores
+- Linux fundamentals

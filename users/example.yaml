@@ -1,0 +1,139 @@
+name: example
+notify:
+  # email digests, batched: matches accumulate in an outbox and are flushed
+  # at the first run after each send slot.
+  email:
+    smtp_user_env: GMAIL_ADDRESS        # secret holding the sending Gmail account
+    smtp_pass_env: GMAIL_APP_PASSWORD   # secret holding its app password
+    # to: defaults to the smtp user (the GMAIL_ADDRESS account). A comma-
+    # separated list delivers to every address.
+    # to: "you@example.com, friend@example.com"
+    # Slot hours in `timezone` (DST-tracking, so the send stays at a fixed local
+    # clock time year-round). 8am/12pm/6pm America/New_York here. The cron must
+    # tick at each slot hour in both seasons (see watch.yml); a slot only fires
+    # on the first run at/after it. Legacy fixed-UTC `send_at_utc` is still
+    # honored when `send_at_local` is omitted.
+    timezone: America/New_York
+    send_at_local: [8, 12, 18]
+  # discord_webhook_env: DISCORD_WEBHOOK_EXAMPLE   # instant channel, off for now
+
+# Keep a "📋 intern-watch matches" GitHub issue updated with every match;
+# tick a row's checkbox there once you've applied (it persists run-to-run).
+dashboard: true
+
+# Hard requirements: these kill a job even when it's a SWE match.
+eliminate:
+  countries_allowed: ["United States"]  # other international dropped;
+                                                  # unrecognized locations kept
+  unpaid: true
+  grad_only: true          # PhD/Master's-only roles (Simplify degrees field +
+                           # title patterns; "BS/MS" and "Undergraduate" stay)
+  active_clearance: true   # requires an already-held clearance (TS/SCI, poly,
+                           # "cleared"); clearance-OBTAINABLE roles stay
+                           # (US citizen, can get cleared)
+  veteran_only: true       # veteran/SkillBridge/active-duty programs
+  # max_age_days: 30       # drop postings older than N days (by date_posted);
+                           # off when unset, and a job with no date_posted is
+                           # always kept
+
+role_filter:
+  include_keywords: [software, swe, developer, engineer, backend, back end,
+                     front end, frontend, full stack, fullstack, cloud,
+                     platform, devops, infrastructure, sre, ml, machine learning,
+                     artificial intelligence, " ai ", data engineer, data science,
+                     data scientist,   # "data science" is NOT a substring of "Data Scientist"
+                     embedded, firmware, systems, security, cyber, robotics,
+                     computer vision, quant, product manag, apm, technical program]
+  exclude_keywords: [civil, mechanical, electrical engineer, chemical, hardware
+                       design, manufacturing, quality engineer, sales engineer,
+                     construction, hvac, " hr ", human resources, recruiting,
+                     marketing, accounting, finance intern, supply chain,
+                     procurement, welding, technician, structural,
+                     packaging engineer, college grad, new grad, skillbridge,
+                     # hardware / physical engineering disciplines
+                     propulsion, thermal engineer, harness,
+                     environmental test, hitl, industrialization,
+                     payload engineer, fluids engineer, process engineer,
+                     mission engineer, optical engineer, rf engineer,
+                     materials engineer, test & evaluation,
+                     # research-track roles (typically want publication records)
+                     research intern, research scientist, research engineer,
+                     researcher, applied scientist, research fellow,
+                     research associate, research assistant,
+                     # R&D org titles are research-track too and often PhD-only;
+                     # title-only sources (jobright) can't be caught by the JD
+                     # grad-only filter, so reject the title outright.
+                     "research & development", "r&d"]
+  # jobright "Engineer" repo mixes hardware + SW -- require a clearly SW keyword
+  # (not bare "engineer") for any job from that source.
+  strict_sources: [jobright-eng]
+  strict_include_keywords: [software, swe, developer, backend, back end,
+                             front end, frontend, full stack, fullstack, cloud,
+                             platform, devops, infrastructure, sre, ml,
+                             machine learning, artificial intelligence, " ai ",
+                             data engineer, data science, data scientist,
+                             embedded, firmware,
+                             security, cyber, robotics, computer vision, quant,
+                             product manag, apm, technical program]
+
+terms_wanted: ["Fall 2026", "Spring 2027", "Summer 2027"]
+unknown_term_policy: llm        # llm | drop | keep
+
+rules:
+  - when: { term: ["Fall 2026", "Spring 2027"] }
+    accept_if_any:
+      - company_in_file: data/top_companies.txt
+      - company_in_file: data/atlanta_companies.txt   # ATL-rooted companies whose
+                                                      # postings sometimes omit the city
+      - location_within: { center: "Atlanta, GA", radius_miles: 35 }  # covers Alpharetta,
+                                                  # Marietta, etc.; city allowlist in v1
+      - location_matches: [atlanta, alpharetta, sandy springs, marietta, "remote"]
+  - when: { term: ["Summer 2027"] }
+    accept_if_any:
+      - always: true
+
+llm:
+  enabled: true
+  provider: gemini                # anthropic | gemini
+  model: gemini-flash-lite-latest # alias tracking the newest Flash-Lite
+  api_key_env: GEMINI_API_KEY
+  max_jobs_per_run: 40            # cost guard
+  # Transient-error retry around the provider call (timeouts, HTTP 429, 5xx).
+  # Defaults shown; uncomment to tune. Retry-After headers are always honored.
+  # retry:
+  #   max_attempts: 3               # total tries incl. the first (1 = no retry)
+  #   base_delay: 1.0               # seconds; full-jitter exponential backoff
+  tasks: [term_inference, top_company_judgment, atlanta_metro_judgment]
+  # Subjective knob: interpolated into the classifier prompt verbatim.
+  top_company_definition: >
+    A "top company" is one where a software internship carries strong signal:
+    big tech (FAANG-tier and peers), well-known high-growth startups and
+    unicorns, leading AI labs and AI-infrastructure companies, quant trading
+    firms and HFTs, elite developer-tools or fintech companies, and
+    famous hard-tech companies (aerospace, autonomy, robotics). Err on the
+    side of inclusive: a company most CS students at a strong program would
+    recognize and be excited about counts. Obscure consultancies, staffing
+    agencies, and small local IT shops do not.
+
+# Resume builder only (python -m src.resume / the "resume" Actions workflow).
+# Bullet rewriting is constrained prose, not bulk classification -- it gets a
+# stronger model than the watcher's flash-lite, at one call per resume.
+resume_llm:
+  provider: gemini
+  model: gemini-2.5-pro
+  api_key_env: GEMINI_API_KEY
+
+# Auto-build a tailored resume for matched jobs (off by default — enabling is
+# an explicit opt-in; with enabled:false or empty modes the watcher does
+# nothing new). modes is any subset of [commit, email, dashboard]: commit
+# writes resumes/<user>/ into the repo, email attaches the .docx to the digest
+# (also committed, since the outbox sends on a later run), dashboard builds
+# on-demand via the issue-comment workflow. use_llm gates the gemini-2.5-pro
+# rewrite; allow_scrape lets JD acquisition fall back to a generic page scrape;
+# max_per_run caps builds (and thus LLM calls) per watcher run.
+resume_build:
+  enabled: false
+  modes: []
+  use_llm: true
+  allow_scrape: true
+  max_per_run: 20

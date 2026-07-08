@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.env
+tests/fixtures/_full_*
+resumes/
+out/
+# auto-apply: persisted browser logins (contain auth cookies) + run artifacts
+state/apply_sessions/
+state/apply_artifacts/
+# auto-apply: ATS login credentials (contain passwords). *.example.yaml is OK.
+users/*_logins.yaml

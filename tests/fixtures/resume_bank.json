@@ -1,0 +1,512 @@
+{
+  "header": {
+    "name": "Alex Example",
+    "contact_line": "Atlanta, Georgia 30332 | (555) 010-4477 | alex@example.com",
+    "citizen_prefix": "US Citizen | ",
+    "links": [
+      {
+        "text": "linkedin.com/in/alex-example",
+        "url": "https://linkedin.com/in/alex-example"
+      },
+      {
+        "text": "github.com/example",
+        "url": "https://github.com/example"
+      }
+    ]
+  },
+  "education": {
+    "institution": "Georgia Institute of Technology | Atlanta, GA",
+    "grad_date": "Expected Graduation May 2027",
+    "degree": "B.S Computer Science - GPA 3.7/4.0",
+    "threads": "Concentrations: Systems and Architecture & Information Internetworks"
+  },
+  "skills": {
+    "coursework": [
+      {
+        "name": "Operating Systems",
+        "keywords": [
+          "operating systems",
+          "kernel",
+          "systems programming",
+          "linux"
+        ]
+      },
+      {
+        "name": "Compilers & Interpreters",
+        "keywords": [
+          "compilers",
+          "interpreters",
+          "code analysis",
+          "program analysis"
+        ]
+      },
+      {
+        "name": "Computer Organization",
+        "keywords": [
+          "computer organization",
+          "computer architecture",
+          "assembly",
+          "low-level"
+        ]
+      },
+      {
+        "name": "Machine Learning",
+        "keywords": [
+          "machine learning",
+          "ml",
+          "deep learning",
+          "ai"
+        ]
+      },
+      {
+        "name": "Data Structures & Algorithms",
+        "keywords": [
+          "data structures",
+          "algorithms"
+        ]
+      },
+      {
+        "name": "Analysis of Algorithms",
+        "keywords": [
+          "algorithms",
+          "complexity",
+          "algorithm analysis"
+        ]
+      },
+      {
+        "name": "Digital Design Lab (FPGA Programming)",
+        "keywords": [
+          "fpga",
+          "verilog",
+          "vhdl",
+          "digital design",
+          "hardware"
+        ]
+      }
+    ],
+    "languages": [
+      {
+        "name": "C",
+        "keywords": [
+          "c"
+        ]
+      },
+      {
+        "name": "C++",
+        "keywords": [
+          "c++"
+        ]
+      },
+      {
+        "name": "Assembly (RISC-V, MIPS, x86)",
+        "keywords": [
+          "assembly",
+          "risc-v",
+          "mips",
+          "x86"
+        ]
+      },
+      {
+        "name": "Golang",
+        "keywords": [
+          "golang",
+          "go"
+        ]
+      },
+      "Java",
+      "Python",
+      "JavaScript",
+      "TypeScript",
+      "SQL"
+    ],
+    "tools": [
+      "Docker",
+      "React",
+      {
+        "name": "Node.js",
+        "keywords": [
+          "node.js",
+          "node"
+        ]
+      },
+      "FastAPI",
+      "SQL",
+      {
+        "name": "Firebase (NoSQL)",
+        "keywords": [
+          "firebase",
+          "firestore",
+          "nosql"
+        ]
+      },
+      {
+        "name": "Git/GitHub",
+        "keywords": [
+          "git",
+          "github"
+        ]
+      },
+      "Linux",
+      "Playwright",
+      {
+        "name": "Azure Cloud",
+        "keywords": [
+          "azure",
+          "cloud"
+        ]
+      },
+      "PyTorch"
+    ],
+    "certifications": [
+      "Azure AI Cloud Developer Associate",
+      "Azure Fundamentals"
+    ]
+  },
+  "work_experience": {
+    "United Parcel Service, Inc.": {
+      "location": "Alpharetta, GA",
+      "role": "Software Engineering Intern",
+      "date": "June - August 2026",
+      "bullets": {
+        "base": [
+          "Developing and deploying features for a transportation management system using Azure, .NET, C#, and Kubernetes"
+        ]
+      }
+    }
+  },
+  "projects": {
+    "Simple Prep": {
+      "tech": [
+        "React",
+        "ASP.NET Core",
+        "PostgreSQL",
+        "Docker",
+        "Azure"
+      ],
+      "date": "April - June 2026",
+      "tags": [
+        "full-stack",
+        "react",
+        "asp.net",
+        ".net",
+        "c#",
+        "rest apis",
+        "postgresql",
+        "docker",
+        "azure",
+        "cloud",
+        "serverless",
+        "ci/cd",
+        "redis",
+        "web"
+      ],
+      "bullets": {
+        "base": [
+          "Developed meal planning platform that aggregates weekly recipes into store-specific grocery carts, with ASP.NET Core REST APIs and serverless workers to generate prefilled Instacart / Amazon Grocery cart payloads.",
+          "Containerized frontend, API, database, and integration services with Docker, deploying cloud infrastructure on Azure with Container Apps, App Service, Static Web Apps, Functions, Key Vault, and Redis.",
+          "Automated release and configuration workflows through CI/CD pipelines, environment-based secrets management, and deployment monitoring to support repeatable cloud infrastructure updates."
+        ]
+      }
+    },
+    "Finance Autofiller": {
+      "tech": [
+        "JavaScript",
+        "REST APIs",
+        "Google Cloud"
+      ],
+      "date": "Jan 2026 – Present",
+      "tags": [
+        "automation",
+        "cloud",
+        "gcp",
+        "rest apis",
+        "chrome extensions",
+        "javascript",
+        "browser automation",
+        "pdf parsing",
+        "ocr",
+        "apis"
+      ],
+      "bullets": {
+        "base": [
+          "Built Chrome extension that automates finance form workflows for student organizations using cookie-authenticated REST API calls, bypassing manual multi-step form navigation.",
+          "Integrated Google Sheets, Drive, pdf.js, and Tesseract.js APIs to read event metadata and budget data from spreadsheets, parse reimbursement PDFs, and validate purchase receipts via OCR"
+        ]
+      }
+    },
+    "XV6 Kernel Extensions & Optimizations": {
+      "tech": [
+        "C",
+        "Unix",
+        "x86",
+        "Docker"
+      ],
+      "date": "Jan – May 2026",
+      "tags": [
+        "systems",
+        "operating systems",
+        "unix",
+        "c",
+        "multithreading",
+        "concurrency",
+        "memory management",
+        "embedded",
+        "kernel",
+        "low-level"
+      ],
+      "bullets": {
+        "base": [
+          "Reduced context switch overhead by 25% through Round-Robin and FIFO schedulers in a Unix-based kernel",
+          "Implemented clone() system call enabling kernel-level multithreading with shared address spaces; built user-space concurrency library w/ C11 atomic spinlocks and mutexes ensuring thread safety while multi-threading",
+          "Optimized physical memory utilization by architecting Copy-on-Write semantics and zero-page allocation"
+        ],
+        "withOptional": [
+          "Reduced context switch overhead by 25% through Round-Robin and FIFO schedulers in a Unix-based kernel",
+          "Implemented clone() system call enabling kernel-level multithreading with shared address spaces; built user-space concurrency library w/ C11 atomic spinlocks and mutexes ensuring thread safety while multi-threading",
+          "Optimized physical memory utilization by architecting Copy-on-Write semantics and zero-page allocation",
+          "Hardened kernel API enforcing memory isolation and resource deallocation to prevent system panics from malicious inputs"
+        ]
+      }
+    },
+    "Lumos AI (GT Hacklytics 2026 - 2nd Place)": {
+      "tech": [
+        "Python",
+        "FastAPI",
+        "Docker"
+      ],
+      "date": "February 2026",
+      "tags": [
+        "rest apis",
+        "python",
+        "cloud",
+        "deployment",
+        "caching",
+        "async",
+        "data pipelines",
+        "json",
+        "scalability",
+        "high-throughput",
+        "model serving",
+        "machine learning"
+      ],
+      "bullets": {
+        "base": [
+          "Engineered a RESTful API serving JSON safety scores for 136,000+ U.S. cities, processing 48 GB of FBI NIBRS crime data (59M+ incidents) into a 25-feature XGBoost model with <2s inference latency",
+          "Deployed containerized services on Vultr cloud; reduced API response time under concurrent load by caching model predictions with LRU eviction and adding TTL caches to eliminate redundant upstream HTTP requests"
+        ],
+        "mlFocused": [
+          "Engineered a data pipeline processing 48 GB of FBI NIBRS crime data (59M+ incidents) into a 25-feature XGBoost model scoring safety for 136,000+ U.S. cities, with automated feature engineering from raw incident-level records",
+          "Deployed containerized model serving on Vultr cloud; implemented LRU model caching reducing inference latency to <2s across 11 parallel async API calls"
+        ]
+      }
+    },
+    "Audio Streaming Service Database": {
+      "tech": [
+        "MySQL",
+        "SQL",
+        "Stored Procedures"
+      ],
+      "date": "Jan – March 2026",
+      "tags": [
+        "sql",
+        "mysql",
+        "postgresql",
+        "databases",
+        "stored procedures",
+        "data modeling",
+        "schema design",
+        "views",
+        "business logic"
+      ],
+      "bullets": {
+        "base": [
+          "Designed a normalized relational schema in MySQL for a multi-entity streaming platform enforcing domain and CHECK constraints across users, content, playlists, and subscriptions",
+          "Implemented 18 stored procedures enforcing business rules (subscription limits, playlist caps, collaborator ceilings) with diagnostic error messages"
+        ]
+      }
+    },
+    "Tiger Language Compiler": {
+      "tech": [
+        "Java",
+        "IR Language",
+        "MIPS"
+      ],
+      "date": "Jan – May 2026",
+      "tags": [
+        "java",
+        "compilers",
+        "code analysis",
+        "optimization",
+        "cfg",
+        "tooling"
+      ],
+      "bullets": {
+        "base": [
+          "Architected a multi-stage compiler translating high-level source into optimized IR; reduced instruction count over tests by 15% via CFG-based dead-code elimination and constant folding",
+          "Implemented instruction selection and greedy intra-block register allocation, minimizing reads/write to memory"
+        ]
+      }
+    },
+    "Liver Transplant Outcome Prediction": {
+      "tech": [
+        "Python",
+        "Pandas",
+        "Scikit-learn",
+        "XGBoost"
+      ],
+      "date": "Aug – December 2025",
+      "tags": [
+        "machine learning",
+        "python",
+        "scikit-learn",
+        "sql",
+        "pandas",
+        "feature engineering",
+        "data cleaning",
+        "clustering",
+        "healthcare"
+      ],
+      "bullets": {
+        "base": [
+          "Advanced graft-survival prediction on 300K+ OPTN records / 900+ clinical variables by engineering features, applied selection and PCA, and training XGBoost, Random Forest, and Logistic Regression models",
+          "Applied K-Means and DBSCAN clustering for exploratory data analysis, identifying distinct patient subgroups to inform feature engineering and model stratification strategies"
+        ]
+      }
+    },
+    "Multichannel EEG Seizure Detection Pipeline": {
+      "tech": [
+        "Python",
+        "PyTorch",
+        "XGBoost"
+      ],
+      "date": "Feb – May 2026",
+      "tags": [
+        "machine learning",
+        "python",
+        "pytorch",
+        "data pipelines",
+        "signal processing",
+        "feature engineering",
+        "dimensionality reduction",
+        "attention models",
+        "deep learning"
+      ],
+      "bullets": {
+        "base": [
+          "Built multichannel EEG signal processing pipeline: parsed 23-channel recordings, applied bandpass filtering, and engineered 438 features along time-domain, Welch PSD band powers, & cross-channel correlation matrices",
+          "Reduced 23 EEG channels to 2–3 patient-specific channels and cut feature dimensionality ~90% w/ an attention-based channel selection model (CAtt-MLP) over per-channel STFT spectrograms"
+        ],
+        "condensed": [
+          "Built ML pipeline parsing 23-channel recordings, applying bandpass filtering, and engineering 438 features; implemented attention-based channel selection model reducing dimensionality by ~90%"
+        ]
+      }
+    },
+    "GT Exploratory Rocketry Club - Avionics Flight Computer": {
+      "tech": [
+        "C++",
+        "Linux",
+        "Docker"
+      ],
+      "date": "Aug – December 2025",
+      "tags": [
+        "embedded",
+        "c++",
+        "hardware",
+        "real-time",
+        "spi",
+        "i2c",
+        "testing",
+        "sensors",
+        "state machines",
+        "firmware"
+      ],
+      "bullets": {
+        "base": [
+          "Architected real-time flight computer software in C++ for autonomous state-machine transitions",
+          "Implemented SPI/I2C hardware drivers for ADIS IMU and auxiliary sensors; validated telemetry accuracy through serial debug output and bench testing"
+        ]
+      }
+    },
+    "Sys-savesync — Background Save Sync Sysmodule": {
+      "tech": [
+        "Rust",
+        "C",
+        "TCP"
+      ],
+      "date": "April – May 2026",
+      "tags": [
+        "systems",
+        "rust",
+        "c",
+        "embedded",
+        "ipc",
+        "networking",
+        "tcp",
+        "sockets",
+        "daemon",
+        "low-level",
+        "operating systems",
+        "open source"
+      ],
+      "bullets": {
+        "base": [
+          "Publishing a background daemon (sysmodule) for the Nintendo Switch's microkernel OS that automatically backs up game saves to a TCP server on every game close, addressing a highly-requested Homebrew community feature",
+          "Using five Horizon OS services to observe process events, mount save filesystems, check network state, open sockets, and register a custom IPC interface for homebrew configuration app communication",
+          "Deployed companion python server that receives save data over custom TCP Protocol and versions by timestamp"
+        ]
+      }
+    }
+  },
+  "community": {
+    "Teaching Assistant": {
+      "heading_runs": [
+        {
+          "text": "Teaching Assistant (",
+          "bold": true
+        },
+        {
+          "text": "ECE 2035: Software/Hardware Co-Design) ",
+          "italics": true
+        },
+        {
+          "text": "| ",
+          "bold": true
+        },
+        {
+          "text": "C, RISC-V, MIPS, Golang"
+        }
+      ],
+      "date": "May 2025 – Present",
+      "bullets": {
+        "base": [
+          "Guides 200+ students in writing and debugging low-level systems code through review sessions and office hours",
+          "Enhanced hardware-level RISC-V memory viewer in VSCode extension using Golang & React"
+        ],
+        "standard": [
+          "Guides 200+ students in writing and debugging low-level systems code through review sessions and office hours"
+        ]
+      }
+    },
+    "Treasurer": {
+      "heading_runs": [
+        {
+          "text": "Treasurer",
+          "bold": true
+        },
+        {
+          "text": " | "
+        },
+        {
+          "text": "Society of Asian Scientists and Engineers @ GT ",
+          "italics": true
+        }
+      ],
+      "date": "Jan 2025 - Present",
+      "bullets": {
+        "base": [
+          "Manages a ~$20,000 annual budget, documenting transactions for a 250+ member base and coordinating travel for national conferences. Leads event execution with sponsors, vendors, finance office, and executive board."
+        ]
+      }
+    }
+  }
+}

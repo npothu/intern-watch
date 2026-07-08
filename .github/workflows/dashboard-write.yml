@@ -1,0 +1,87 @@
+# One dashboard write (applied / hidden toggle, or a tracker status on the
+# applications ledger) committed straight into state.
+#
+# The dashboard issue only renders the newest rows (byte-budgeted), so older
+# matches have no checkbox to write through -- and tracker statuses have no
+# issue representation at all. The webui dispatches this workflow instead:
+# src.statewrite edits the match/ledger record, src.dashboard repaints the
+# issue (which also syncs the ledger), and the state commit follows the
+# exact watch.yml pattern. Shares the `watch` concurrency group so state
+# committers serialize instead of racing.
+
+name: dashboard-write
+
+on:
+  workflow_dispatch:
+    inputs:
+      user:
+        description: "watcher user (users/<name>.yaml)"
+        required: true
+        type: string
+      short:
+        description: "12-hex dashboard short key of the match"
+        required: true
+        type: string
+      field:
+        description: "which field"
+        required: true
+        type: choice
+        options: [applied, dismissed, status]
+      value:
+        description: "true/false, or a status name for field=status"
+        required: true
+        type: string
+      note:
+        description: "history note (field=status only)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Apply the write
+        env:  # note is user-typed text; env quoting keeps it inert
+          NOTE: ${{ inputs.note }}
+        run: |
+          python -m src.statewrite \
+            --user "${{ inputs.user }}" \
+            --short "${{ inputs.short }}" \
+            --field "${{ inputs.field }}" \
+            --value "${{ inputs.value }}" \
+            --note "$NOTE"
+
+      - name: Repaint the dashboard issue
+        run: python -m src.dashboard --user "${{ inputs.user }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit state
+        run: |
+          git config user.name "intern-watch[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          [ -f state/applications.json ] && git add state/applications.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "state: dashboard write (${{ inputs.field }})"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi

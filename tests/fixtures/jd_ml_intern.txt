@@ -1,0 +1,24 @@
+Machine Learning Engineer Intern — Summer 2027
+
+About the team
+Our applied ML group builds models that power personalization across the
+product. You will work with senior ML engineers to take models from
+notebook to production.
+
+What you'll do
+- Build and evaluate machine learning models on large-scale datasets
+- Develop data pipelines for feature engineering and model training
+- Productionize models behind low-latency inference services
+- Analyze experiments and communicate results to the team
+
+Minimum qualifications
+- Pursuing a BS in Computer Science or a related field
+- Strong Python skills; experience with pandas and NumPy
+- Coursework or projects in machine learning
+- Familiarity with PyTorch or TensorFlow
+- Experience with SQL and working with large datasets
+
+Preferred qualifications
+- Experience with XGBoost or gradient boosting methods
+- Experience deploying models with Docker on cloud infrastructure
+- Familiarity with REST APIs and model serving

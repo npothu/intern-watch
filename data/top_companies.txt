@@ -1,0 +1,177 @@
+# One company per line. '|' separates aliases (all forms match).
+# '#' starts a comment. Matching is case-insensitive and ignores Inc./LLC/etc.
+# Edit freely -- this file is the deterministic "top company" list; the LLM
+# only judges companies that are NOT in here.
+
+# --- Big tech
+Google | Alphabet | YouTube | Google DeepMind | DeepMind | Verily | Waymo
+Meta | Facebook | Instagram | WhatsApp
+Apple
+Amazon | AWS | Amazon Web Services | Twitch | Audible | Zoox | Lab126
+Microsoft | GitHub | LinkedIn
+Netflix
+NVIDIA
+Tesla
+Adobe
+Salesforce | Slack | Tableau
+Oracle
+IBM
+Intel
+AMD | Advanced Micro Devices
+Qualcomm
+Broadcom | VMware
+Arm
+Cisco
+Texas Instruments
+Uber
+Lyft
+Airbnb
+DoorDash
+Instacart
+Pinterest
+Snap | Snapchat
+TikTok | ByteDance
+Reddit
+Spotify
+Dropbox
+Atlassian
+Intuit | Intuit Mailchimp | Mailchimp | Credit Karma
+Workday
+ServiceNow
+Shopify
+Block | Square | Cash App
+PayPal | Venmo
+eBay
+Zoom
+Twilio
+Roblox
+Epic Games
+Riot Games
+Unity
+Electronic Arts | EA
+
+# --- AI labs & AI infrastructure
+Anthropic
+OpenAI
+xAI
+Mistral | Mistral AI
+Cohere
+Perplexity | Perplexity AI
+Scale AI | Scale
+Hugging Face
+Together AI
+Groq
+Cerebras
+Runway
+ElevenLabs
+Cursor | Anysphere
+
+# --- Data / dev infrastructure
+Databricks
+Snowflake
+Palantir | Palantir Technologies
+Datadog
+MongoDB
+Elastic
+Confluent
+HashiCorp
+Cloudflare
+Vercel
+Replit
+Modal
+Docker
+Redis
+Supabase
+Neon
+Temporal
+
+# --- Fintech
+Stripe
+Plaid
+Brex
+Ramp
+Mercury
+Coinbase
+Robinhood
+Affirm
+Chime
+Visa
+Mastercard
+American Express | Amex
+Capital One
+Bloomberg
+Goldman Sachs
+Morgan Stanley
+JPMorgan | JPMorgan Chase | J.P. Morgan | JPMC | Chase
+
+# --- Quant / HFT
+Jane Street
+Citadel | Citadel Securities
+Two Sigma
+Hudson River Trading | HRT
+Jump Trading | Jump
+DRW
+IMC | IMC Trading
+Optiver
+Susquehanna | SIG | Susquehanna International Group
+Akuna Capital
+Five Rings
+Tower Research | Tower Research Capital
+Virtu | Virtu Financial
+D. E. Shaw | DE Shaw | D.E. Shaw | D. E. Shaw & Co.
+Point72 | Cubist
+Millennium | Millennium Management
+Bridgewater | Bridgewater Associates
+AQR | AQR Capital Management
+Belvedere Trading
+Chicago Trading Company | CTC
+Flow Traders
+Wolverine Trading
+
+# --- Hard tech: aerospace, autonomy, robotics, defense-tech
+SpaceX
+Blue Origin
+Anduril | Anduril Industries
+Shield AI
+Rocket Lab
+Relativity Space
+Astranis
+Cruise
+Aurora | Aurora Innovation
+Nuro
+Zipline
+Applied Intuition
+Boston Dynamics
+Figure | Figure AI
+Skydio
+
+# --- High-growth product companies
+Figma
+Notion
+Canva
+Discord
+Duolingo
+Airtable
+Linear
+Rippling
+Gusto
+Carta
+Samsara
+Verkada
+Whatnot
+OpenSea
+Faire
+Benchling
+
+# --- Security
+CrowdStrike
+Palo Alto Networks
+Okta
+Wiz
+Vanta
+Snyk
+
+# --- Defense primes (delete this section if you don't count them as "top")
+Lockheed Martin
+Northrop Grumman
+RTX | Raytheon

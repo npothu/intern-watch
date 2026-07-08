@@ -1,0 +1,95 @@
+import datetime as dt
+
+import pytest
+
+from src.normalize import (extract_jobright_id, infer_terms, norm_company,
+                           normalize_url, parse_month_day, split_locations,
+                           strip_tracking)
+
+TODAY = dt.date(2026, 6, 11)
+
+
+@pytest.mark.parametrize("title,terms,conf", [
+    ("Software Engineer Intern (Fall 2026)", ["Fall 2026"], "explicit"),
+    ("SWE Intern - Summer '27", ["Summer 2027"], "explicit"),
+    ("Intern, Fall2026 Cohort", ["Fall 2026"], "explicit"),
+    ("Software Intern Autumn 2026", ["Fall 2026"], "explicit"),
+    ("Intern (Fall 2026 & Spring 2027)", ["Fall 2026", "Spring 2027"], "explicit"),
+    ("Product Manager Intern - 2026 Summer (BS/MS)", ["Summer 2026"], "explicit"),
+    ("January 2027 Start - Developer Co-op", ["Spring 2027"], "inferred"),
+    ("Sept 2026 Engineering Co-op", ["Fall 2026"], "inferred"),
+    ("Fall Software Co-op", ["Fall 2026"], "inferred"),     # season, no year
+    ("2027 Software Engineer Intern", ["Summer 2027"], "inferred"),  # bare year
+    ("Software Engineer Intern", [], "unknown"),
+    ("Backend Developer Intern - Atlanta", [], "unknown"),
+])
+def test_infer_terms(title, terms, conf):
+    got_terms, got_conf = infer_terms(title, TODAY)
+    assert got_terms == terms
+    assert got_conf == conf
+
+
+def test_season_no_year_rolls_forward():
+    # asking in November 2026 about a "Spring" intern -> Spring 2027
+    assert infer_terms("Spring Developer Co-op", dt.date(2026, 11, 1))[0] == ["Spring 2027"]
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Google LLC", "google"),
+    ("NVIDIA Corporation", "nvidia"),
+    ("Stripe, Inc.", "stripe"),
+    ("The Home Depot", "the home depot"),
+    ("D. E. Shaw & Co.", "d e shaw and"),
+])
+def test_norm_company(a, b):
+    assert norm_company(a) == b
+
+
+def test_norm_company_matches_aliases():
+    assert norm_company("Citadel Securities LLC") == norm_company("Citadel Securities")
+
+
+def test_split_locations():
+    assert split_locations("Atlanta, GA / NYC") == ["Atlanta, GA", "NYC"]
+    assert split_locations("Portland, OR") == ["Portland, OR"]
+    runon = ("Atlanta, Georgia, United States Boston, Massachusetts, "
+             "United States Costa Mesa, California, United States")
+    got = split_locations(runon)
+    assert len(got) == 3
+    assert got[0] == "Atlanta, Georgia, United States"
+    assert split_locations("Remote or Atlanta, GA") == ["Remote", "Atlanta, GA"]
+    assert split_locations("Boston, MA New York, NY") == ["Boston, MA", "New York, NY"]
+    assert split_locations("NYC<br/>Seattle, WA") == ["NYC", "Seattle, WA"]
+
+
+def test_url_tracking_strip_and_normalize():
+    url = "https://jobright.ai/jobs/info/6a0b2c8c538d03366dc8273a?utm_campaign=1079&utm_source=git"
+    assert strip_tracking(url) == "https://jobright.ai/jobs/info/6a0b2c8c538d03366dc8273a"
+    # job-id query params survive normalization, tracking ones don't
+    u = "https://Stoke.com/careers/?gh_jid=598&jr_id=69fae0acd21cf86d1e3cd79c&utm_source=x"
+    assert normalize_url(u) == "https://stoke.com/careers?gh_jid=598"
+    # same posting, different tracking -> same canonical form
+    assert normalize_url(url + "&utm_medium=z") == normalize_url(url)
+    # greenhouse publishes the same job with and without ?gh_jid=<path id>
+    assert normalize_url("https://boards.greenhouse.io/x/jobs/514?gh_jid=514") \
+        == normalize_url("https://boards.greenhouse.io/x/jobs/514")
+    # workday locale prefix is not identity
+    assert normalize_url("https://co.wd5.myworkdayjobs.com/en-US/site/job/X/Y_J1") \
+        == normalize_url("https://co.wd5.myworkdayjobs.com/site/job/X/Y_J1")
+
+
+def test_extract_jobright_id():
+    assert extract_jobright_id(
+        "https://jobright.ai/jobs/info/6A0B2C8C538D03366DC8273A?utm=1") \
+        == "6a0b2c8c538d03366dc8273a"
+    assert extract_jobright_id(
+        "https://x.com/job?a=1&jr_id=69eaa8e4dc35f7132c4ab803") \
+        == "69eaa8e4dc35f7132c4ab803"
+    assert extract_jobright_id("https://x.com/job") is None
+
+
+def test_parse_month_day_year_rollover():
+    assert parse_month_day("Jun 11", TODAY) == dt.date(2026, 6, 11)
+    assert parse_month_day("Dec 30", dt.date(2026, 1, 5)) == dt.date(2025, 12, 30)
+    assert parse_month_day("garbage", TODAY) is None
+    assert parse_month_day("Feb 30", TODAY) is None

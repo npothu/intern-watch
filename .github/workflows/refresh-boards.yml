@@ -1,0 +1,57 @@
+name: refresh-boards
+
+# Monthly re-discovery of public ATS boards (Greenhouse/Lever/Ashby) for the
+# companies in data/*.txt. Opens/updates a PR with the diff instead of
+# committing directly -- a short alias can occasionally match an unrelated
+# company's board, so the diff wants human eyes (see the header comment in
+# data/ats_boards.yaml).
+#
+# NOTE: creating PRs with GITHUB_TOKEN requires the repo setting
+# Settings -> Actions -> General -> "Allow GitHub Actions to create and
+# approve pull requests" to be enabled.
+
+on:
+  schedule:
+    - cron: "0 7 3 * *"   # 07:00 UTC on the 3rd of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: refresh-boards
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Rediscover ATS boards
+        run: python scripts/discover_ats_boards.py
+
+      - name: Open PR with the diff
+        uses: peter-evans/create-pull-request@v6
+        with:
+          add-paths: data/ats_boards.yaml
+          commit-message: "data: refresh ATS boards"
+          branch: refresh-ats-boards
+          delete-branch: true
+          title: "data: monthly ATS board refresh"
+          body: |
+            Automated re-run of `scripts/discover_ats_boards.py` against the
+            current company lists.
+
+            **Review before merging:** removed rows usually mean a board went
+            empty or moved ATS; added rows can occasionally be a slug
+            collision with an unrelated company -- spot-check anything
+            unfamiliar (the board URL pattern is in the script header).

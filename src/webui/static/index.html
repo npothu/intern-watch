@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>intern-watch</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%2333604a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap">
+<style>
+  :root {
+    --bg: #f4f2ed;
+    --surface: #fcfbf8;
+    --ink: #211f1a;
+    --ink-2: #6b6557;
+    --line: #e2ded3;
+    --line-2: #cdc8ba;
+    --accent: #33604a;
+    --accent-ink: #f2f8f4;
+    --amber: #96691e;
+    --red: #a8402f;
+    --chip: #ebe8de;
+    --mono: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171612; --surface: #1e1c17; --ink: #e9e5d9; --ink-2: #9d977f;
+      --line: #2d2a22; --line-2: #403c30; --accent: #83b79a;
+      --accent-ink: #12211a; --amber: #d0a04f; --red: #d3705d;
+      --chip: #2a2820;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 14px/1.45 Switzer, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 22px 20px 90px; }
+
+  /* header */
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .brand { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+  .brand .user { color: var(--ink-2); font-weight: 400; }
+  .spacer { flex: 1; }
+  .updated { color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .updated.stale { color: var(--amber); }
+  .statline { margin: 6px 0 18px; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .statline b { color: var(--ink); font-weight: 600; }
+  .statline .seg { cursor: pointer; }
+  .statline .seg:hover, .statline .seg:hover b {
+    color: var(--accent); text-decoration: underline dashed;
+  }
+
+  /* tracker funnel bar */
+  .funnelbar {
+    display: flex; height: 14px; margin: 10px 0 8px; overflow: hidden;
+    border: 1px solid var(--line-2); border-radius: 7px;
+  }
+  .funnelbar[hidden] { display: none; }
+  .funnelbar span { display: block; min-width: 8px; }
+  .fb-applied { background: color-mix(in srgb, var(--accent) 75%, transparent); }
+  .fb-oa, .fb-phone_screen { background: var(--amber); }
+  .fb-interview, .fb-offer { background: var(--accent); }
+  .fb-rejected { background: var(--red); }
+  .fb-withdrawn { background: color-mix(in srgb, var(--ink-2) 50%, transparent); }
+
+  .banner {
+    border: 1px solid var(--line-2); border-left: 3px solid var(--amber);
+    background: var(--surface); color: var(--ink-2);
+    padding: 8px 12px; margin: 0 0 14px; font-size: 13px; border-radius: 4px;
+  }
+
+  /* controls */
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+  input[type=search] {
+    flex: 1; min-width: 220px; padding: 7px 10px; font: inherit;
+    color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line-2); border-radius: 5px; outline: none;
+  }
+  input[type=search]:focus { border-color: var(--accent); }
+  select {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line-2); border-radius: 5px; padding: 7px 8px;
+  }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .chip {
+    border: 1px solid var(--line-2); background: transparent; color: var(--ink-2);
+    font: 500 12.5px/1 Switzer, sans-serif; padding: 6px 10px;
+    border-radius: 999px; cursor: pointer;
+  }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+  button { font: inherit; cursor: pointer; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line-2); background: var(--surface); color: var(--ink);
+    padding: 6px 10px; border-radius: 5px; font-size: 13px; font-weight: 500;
+    text-decoration: none; white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--ink-2); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.quiet { border-color: transparent; background: transparent; color: var(--ink-2); }
+  .btn.quiet:hover { color: var(--ink); }
+  .btn svg { width: 14px; height: 14px; }
+
+  /* sections + rows */
+  h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-2); margin: 26px 0 6px;
+  }
+  h2 .n { color: var(--ink-2); font-weight: 400; letter-spacing: 0; margin-left: 6px; }
+  .rows { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+  .row {
+    display: grid; grid-template-columns: 22px minmax(0,1fr) auto;
+    gap: 2px 12px; padding: 10px 12px; border-top: 1px solid var(--line);
+    align-items: start;
+  }
+  .row:first-child { border-top: 0; }
+  .row.applied .head, .row.applied .meta { opacity: .5; }
+  .row.new { box-shadow: inset 3px 0 0 var(--accent); }
+  .newdot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); margin-right: 6px; vertical-align: 1px;
+  }
+  .row.cur, .trow.cur { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .row.new.cur { box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1.5px var(--accent); }
+  .head { min-width: 0; }
+  .company { font-weight: 600; }
+  .title { color: var(--ink); text-decoration: none; }
+  .title:hover { color: var(--accent); text-decoration: underline; }
+  .tag {
+    display: inline-block; background: var(--chip); color: var(--ink-2);
+    font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 3px;
+    margin-left: 6px; vertical-align: 1px;
+  }
+  .tag.gone { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+  .tag.wait { color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+  .tag.st { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .btn.x:hover { color: var(--red); }
+
+  /* tabs */
+  .tabs { display: flex; gap: 2px; margin: 14px 0 16px; border-bottom: 1px solid var(--line); }
+  .tab {
+    font: 500 13.5px Switzer, sans-serif; padding: 7px 14px 9px; cursor: pointer;
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    color: var(--ink-2); margin-bottom: -1px;
+  }
+  .tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .tab .n { font-size: 12px; margin-left: 5px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+
+  /* tracker */
+  .trow {
+    display: grid; grid-template-columns: 128px minmax(0,1fr) auto;
+    gap: 2px 12px; padding: 10px 12px; border-top: 1px solid var(--line);
+    align-items: start;
+  }
+  .trow:first-child { border-top: 0; }
+  .trow .meta { grid-column: 2; }
+  .trow .acts { grid-row: span 2; }
+  select.st {
+    width: 100%; font: 500 12.5px Switzer, sans-serif; cursor: pointer;
+    border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 8px;
+    background: var(--surface); color: var(--ink);
+  }
+  select.st:disabled { cursor: not-allowed; opacity: .5; }
+  select.st.pending { opacity: .55; }
+  select.st.s-oa, select.st.s-phone_screen { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 55%, transparent); }
+  select.st.s-interview, select.st.s-offer { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  select.st.s-offer { font-weight: 600; }
+  select.st.s-rejected { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+  select.st.s-withdrawn { color: var(--ink-2); }
+  .lastnote { font-style: italic; }
+  .hist { margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
+  .hist li { display: grid; grid-template-columns: 76px 110px minmax(0,1fr); gap: 10px; padding: 6px 0; border-top: 1px dashed var(--line); }
+  .hist li:first-child { border-top: 0; }
+  .hist .on { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  #toasts .toast button {
+    font: 600 12.5px Switzer, sans-serif; cursor: pointer; margin-left: 10px;
+    background: transparent; color: inherit; border: 1px solid currentColor;
+    border-radius: 4px; padding: 2px 8px;
+  }
+  .meta {
+    grid-column: 2; color: var(--ink-2); font-size: 12.5px;
+    font-variant-numeric: tabular-nums; margin-top: 1px;
+  }
+  .meta .short { font-family: var(--mono); font-size: 11.5px; }
+  .acts { display: flex; gap: 6px; align-items: center; grid-row: span 2; }
+  .acts .built { color: var(--accent); }
+  .ext { width: 12px; height: 12px; vertical-align: -1px; margin-left: 3px; color: var(--ink-2); }
+
+  /* checkbox — input stays in the accessibility tree, box is the visual */
+  .tick { margin-top: 2px; position: relative; }
+  .tick input {
+    position: absolute; inset: 0; width: 16px; height: 16px;
+    opacity: 0; margin: 0; cursor: pointer;
+  }
+  .tick input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tick span {
+    display: block; width: 16px; height: 16px; border-radius: 4px;
+    border: 1.5px solid var(--line-2); cursor: pointer; position: relative;
+  }
+  .tick input:checked + span { background: var(--accent); border-color: var(--accent); }
+  .tick input:checked + span::after {
+    content: ""; position: absolute; left: 4.5px; top: 1.5px;
+    width: 4px; height: 8px; border: solid var(--accent-ink);
+    border-width: 0 2px 2px 0; transform: rotate(42deg);
+  }
+  .tick input:disabled + span { opacity: .4; cursor: not-allowed; }
+
+  /* JD paste panel */
+  .jd { grid-column: 1 / -1; margin-top: 8px; }
+  .jd textarea {
+    width: 100%; min-height: 130px; font: 12.5px/1.4 var(--mono);
+    color: var(--ink); background: var(--bg); border: 1px solid var(--line-2);
+    border-radius: 5px; padding: 8px; resize: vertical;
+  }
+  .jd .hint { color: var(--ink-2); font-size: 12.5px; margin: 2px 0 6px; }
+  .jd .bar { display: flex; gap: 8px; margin-top: 6px; }
+
+  .empty { padding: 28px 14px; color: var(--ink-2); text-align: center; }
+
+  /* dialogs */
+  dialog {
+    border: 1px solid var(--line-2); border-radius: 8px; padding: 0;
+    background: var(--surface); color: var(--ink); max-width: min(880px, 92vw);
+  }
+  dialog::backdrop { background: rgba(20, 18, 12, .45); }
+  .dlg-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .dlg-head b { font-size: 14px; }
+  .dlg-body { padding: 14px 16px; max-height: 72vh; overflow: auto; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .shots figure { margin: 0; }
+  .shots img { width: 100%; border: 1px solid var(--line); border-radius: 4px; display: block; }
+  .shots figcaption { font: 11.5px var(--mono); color: var(--ink-2); margin-top: 3px; }
+  .report { font: 12.5px/1.5 var(--mono); white-space: pre-wrap; margin: 0; }
+
+  /* toasts */
+  #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+  .toast {
+    background: var(--ink); color: var(--bg); padding: 9px 13px;
+    border-radius: 6px; font-size: 13px; max-width: 380px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  }
+  .toast.err { background: var(--red); color: #fff; }
+
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 18px 14px 80px; }
+    .row { grid-template-columns: 22px minmax(0,1fr); }
+    .trow { grid-template-columns: minmax(0,1fr); }
+    .row .acts, .trow .acts {
+      grid-column: 1 / -1; grid-row: auto;
+      justify-content: flex-start; margin-top: 6px;
+    }
+    .trow .meta { grid-column: 1 / -1; }
+    select.st { width: auto; }
+    .hist li { grid-template-columns: 70px minmax(0,1fr); }
+    .hist li span:last-child { grid-column: 1 / -1; }
+    .toolbar { gap: 6px; }
+    input[type=search] { min-width: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">intern-watch <span class="user" id="who"></span></div>
+    <div class="spacer"></div>
+    <span class="updated" id="updated"></span>
+    <a class="btn quiet" id="issue-link" target="_blank" rel="noopener" hidden>issue</a>
+    <button class="btn" id="refresh"></button>
+  </header>
+  <div id="banners"></div>
+
+  <nav class="tabs">
+    <button class="tab on" data-tab="matches">Matches</button>
+    <button class="tab" data-tab="tracker">Tracker<span class="n" id="tcount"></span></button>
+  </nav>
+
+  <div id="view-matches">
+    <div class="statline" id="stats"></div>
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search company, title, location…" autocomplete="off">
+      <select id="status">
+        <option value="all">All</option>
+        <option value="todo">To apply</option>
+        <option value="applied">Applied</option>
+        <option value="resume">Has resume</option>
+        <option value="agent">Agent touched</option>
+        <option value="stale">Likely closed</option>
+        <option value="hidden">Hidden</option>
+      </select>
+    </div>
+    <div class="chips" id="terms"></div>
+    <main id="list"></main>
+  </div>
+
+  <div id="view-tracker" hidden>
+    <div class="funnelbar" id="funnelbar"></div>
+    <div class="statline" id="funnel"></div>
+    <div class="toolbar">
+      <input type="search" id="tq" placeholder="Search applications…" autocomplete="off">
+    </div>
+    <div class="chips" id="tchips"></div>
+    <main id="tlist"></main>
+  </div>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg-head"><b id="dlg-title"></b><div class="spacer"></div>
+    <button class="btn quiet" id="dlg-close"></button></div>
+  <div class="dlg-body" id="dlg-body"></div>
+</dialog>
+<div id="toasts"></div>
+
+<script>
+"use strict";
+
+const ICON = {
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></svg>',
+  ext: '<svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h6"/><path d="M9 13h6M9 17h6"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
+};
+
+// Tracker pipeline: keep in sync with src/ledger.py STATUSES.
+const STATUSES = { applied: "Applied", oa: "OA", phone_screen: "Phone screen",
+                   interview: "Interview", offer: "Offer",
+                   rejected: "Rejected", withdrawn: "Withdrawn" };
+const ACTIVE_ST = ["applied", "oa", "phone_screen", "interview"];
+const GHOST_DAYS = 21;                 // untouched this long = awaiting response
+
+// pipeline semantics for the match tags; * = judged by the LLM (cached per employer)
+const TAG_TITLE = {
+  TOP: "top company — matched by rules",
+  "TOP*": "top company — judged by the LLM, cached per employer",
+  ATL: "Atlanta metro (~35 mi) — matched by rules",
+  "ATL*": "Atlanta metro (~35 mi) — judged by the LLM",
+  REMOTE: "remote role",
+};
+
+let DATA = null;                       // last /api/state payload
+const UI = { q: "", status: "all", term: "All",
+             tab: "matches", tq: "", tfilter: "all" };
+const busy = new Set();                // shorts with a build in flight
+const reports = new Map();             // short -> build report markdown
+
+// new-since-last-visit: read the prior stamp once; today is claimed only
+// once data actually lands (see load), so a failed visit stays unclaimed
+const LAST_VISIT = localStorage.getItem("iw-last-visit");
+
+let loadedAt = 0;                      // ms timestamp of the last fresh data landing
+let cursor = null;                     // short of the keyboard-triage cursor row
+
+const $ = (s, el) => (el || document).querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function toast(msg, err, action) {
+  const el = document.createElement("div");
+  el.className = "toast" + (err ? " err" : "");
+  el.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.textContent = action.label;
+    b.onclick = () => { el.remove(); action.run(); };
+    el.append(b);
+  }
+  $("#toasts").append(el);
+  setTimeout(() => el.remove(), err ? 7000 : action ? 6000 : 3500);
+}
+
+async function api(path, body) {
+  const resp = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok && !data.error) data.error = `HTTP ${resp.status}`;
+  return data;
+}
+
+/* ---------- rendering ---------- */
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const likelyClosed = m => (m.stale_days ?? 0) >= 7;
+
+function visible(m) {
+  // dismissed rows live only behind the Hidden filter
+  if (UI.status === "hidden" ? !m.dismissed : m.dismissed) return false;
+  if (UI.term !== "All" && (m.term || "Unknown term") !== UI.term) return false;
+  if (UI.status === "todo" && m.applied) return false;
+  if (UI.status === "applied" && !m.applied) return false;
+  if (UI.status === "resume" && !(m.resume || m.local_resume)) return false;
+  if (UI.status === "agent" && !m.artifacts) return false;
+  if (UI.status === "stale" && !likelyClosed(m)) return false;
+  if (UI.q) {
+    const hay = `${m.company} ${m.title} ${m.location} ${m.short}`.toLowerCase();
+    if (!hay.includes(UI.q)) return false;
+  }
+  return true;
+}
+
+function resumeAction(m) {
+  if (m.local_resume)
+    return `<a class="btn built" href="/files/out/${encodeURIComponent(m.local_resume)}">${ICON.doc} resume</a>`
+      + (reports.has(m.short)
+         ? ` <button class="btn quiet" data-report="${m.short}">report</button>` : "");
+  if (m.resume)
+    return `<a class="btn built" href="/files/repo/${encodeURI(m.resume)}">${ICON.doc} resume</a>`;
+  const b = busy.has(m.short);
+  return `<button class="btn" data-build="${m.short}" ${b ? "disabled" : ""}>` +
+         `${b ? `<span class="spin">${ICON.refresh}</span> building…` : `${ICON.doc} build resume`}</button>`;
+}
+
+function rowHtml(m) {
+  const canWrite = DATA.issue && DATA.issue.writable;
+  const salary = m.salary ? ` · ${esc(m.salary)}` : "";
+  const st = m.status && m.status !== "applied"
+    ? `<span class="tag st">${esc(STATUSES[m.status] || m.status)}</span>` : "";
+  const tagv = m.tag ? m.tag.replace(/[\[\]]/g, "") : "";
+  const tags = (tagv ? `<span class="tag"${TAG_TITLE[tagv] ? ` title="${esc(TAG_TITLE[tagv])}"` : ""}>${esc(tagv)}</span>` : "") + st;
+  const isNew = LAST_VISIT && m.added && m.added > LAST_VISIT;
+  const gone = likelyClosed(m) && !m.dismissed
+    ? `<span class="tag gone" title="not seen in any source for ${m.stale_days} days — the posting is probably closed">gone ${m.stale_days}d</span>`
+    : "";
+  const shots = m.artifacts
+    ? `<button class="btn quiet" data-shots="${m.short}">${ICON.cam} ${m.artifacts.reduce((n, g) => n + g.files.length, 0)}</button>`
+    : "";
+  const dismiss = !canWrite ? ""
+    : m.dismissed
+      ? `<button class="btn quiet" data-restore="${m.short}" title="restore to the matches list">${ICON.undo} restore</button>`
+      : `<button class="btn quiet x" data-dismiss="${m.short}" title="hide — moves to the issue's Hidden section">${ICON.x}</button>`;
+  return `<div class="row ${m.applied ? "applied" : ""}${isNew ? " new" : ""}" id="r-${m.short}">
+    <label class="tick" title="${canWrite ? "applied — writes through the dashboard issue" : "read-only (no GitHub token)"}">
+      <input type="checkbox" data-applied="${m.short}" ${m.applied ? "checked" : ""} ${canWrite ? "" : "disabled"}><span></span>
+    </label>
+    <div class="head">
+      ${isNew ? '<span class="newdot" title="new since your last visit"></span>' : ""}<span class="company">${esc(m.company)}</span>${tags}${gone}
+      — <a class="title" href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}${ICON.ext}</a>
+    </div>
+    <div class="acts">${shots}${resumeAction(m)}${dismiss}</div>
+    <div class="meta">${esc(m.location)}${salary} · seen ${fmtDate(m.added)} · <span class="short">${m.short}</span></div>
+  </div>`;
+}
+
+function render() {
+  if (!DATA) return;
+  const ms = DATA.matches;
+
+  $("#who").textContent = "— " + DATA.user;
+  const active = ms.filter(m => !m.dismissed);
+  const applied = active.filter(m => m.applied).length;
+  const resumes = active.filter(m => m.resume || m.local_resume).length;
+  const hidden = ms.length - active.length;
+  const stat = (n, label, f) =>
+    `<span class="seg" data-stat="${f}"><b>${n}</b> ${label}</span>`;
+  $("#stats").innerHTML =
+    stat(active.length, "matches", "all") + " · " +
+    stat(applied, "applied", "applied") + " · " +
+    stat(active.length - applied, "to go", "todo") + " · " +
+    stat(resumes, "resumes", "resume") +
+    (hidden ? " · " + stat(hidden, "hidden", "hidden") : "");
+  const t = new Date(DATA.generated);
+  $("#updated").textContent = "as of " +
+    t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) +
+    (DATA.fetched_main ? "" : " (local copy)");
+
+  const link = $("#issue-link");
+  if (DATA.issue && DATA.issue.url) {
+    link.hidden = false;
+    link.href = DATA.issue.url;
+    link.innerHTML = `#${DATA.issue.number}${ICON.ext}`;
+  } else link.hidden = true;
+
+  $("#banners").innerHTML = (DATA.warnings || [])
+    .map(w => `<div class="banner">${esc(w)}</div>`).join("");
+
+  // term chips: configured order first, then whatever else appears
+  const inData = [...new Set(ms.map(m => m.term || "Unknown term"))];
+  const terms = ["All",
+    ...DATA.terms_order.filter(t => inData.includes(t)),
+    ...inData.filter(t => !DATA.terms_order.includes(t)).sort()];
+  $("#terms").innerHTML = terms.map(t =>
+    `<button class="chip ${UI.term === t ? "on" : ""}" data-term="${esc(t)}">${esc(t)}</button>`).join("");
+
+  const shown = ms.filter(visible);
+  const byTerm = new Map();
+  for (const m of shown) {
+    const k = m.term || "Unknown term";
+    if (!byTerm.has(k)) byTerm.set(k, []);
+    byTerm.get(k).push(m);
+  }
+  const order = terms.slice(1).filter(t => byTerm.has(t));
+  $("#list").innerHTML = order.map(t => {
+    const group = byTerm.get(t).sort((a, b) =>
+      (b.added || "").localeCompare(a.added || "") ||
+      a.company.localeCompare(b.company));
+    return `<section><h2>${esc(t)}<span class="n">${group.length}</span></h2>
+      <div class="rows">${group.map(rowHtml).join("")}</div></section>`;
+  }).join("") || `<div class="rows empty">Nothing matches the current filters.</div>`;
+
+  renderTracker();
+  $("#view-matches").hidden = UI.tab !== "matches";
+  $("#view-tracker").hidden = UI.tab !== "tracker";
+  document.querySelectorAll(".tab").forEach(t =>
+    t.classList.toggle("on", t.dataset.tab === UI.tab));
+  applyCursor();
+}
+
+/* ---------- tracker ---------- */
+
+const lastActivity = rec => {
+  const h = rec.history || [];
+  return h.length ? h[h.length - 1].on : rec.applied;
+};
+const waitingDays = rec => {
+  if (!ACTIVE_ST.includes(rec.status)) return 0;
+  const d = new Date(lastActivity(rec) + "T00:00:00");
+  return Math.floor((Date.now() - d.getTime()) / 864e5);
+};
+const lastNote = rec =>
+  (rec.history || []).map(e => e.note).filter(Boolean).pop() || "";
+
+function tvisible(short, rec) {
+  if (UI.tfilter === "waiting" && waitingDays(rec) < GHOST_DAYS) return false;
+  if (STATUSES[UI.tfilter] && rec.status !== UI.tfilter) return false;
+  if (UI.tq) {
+    const hay = `${rec.company} ${rec.title} ${lastNote(rec)} ${short}`.toLowerCase();
+    if (!hay.includes(UI.tq)) return false;
+  }
+  return true;
+}
+
+function trowHtml([short, rec]) {
+  const canWrite = DATA.issue && DATA.issue.writable;
+  const wd = waitingDays(rec);
+  const wait = wd >= GHOST_DAYS
+    ? `<span class="tag gone" title="no status change in ${wd} days">no response ${wd}d</span>`
+    : ACTIVE_ST.includes(rec.status) && wd >= 10
+      ? `<span class="tag wait" title="no status change in ${wd} days">waiting ${wd}d</span>` : "";
+  const note = lastNote(rec);
+  const opts = Object.entries(STATUSES).map(([v, label]) =>
+    `<option value="${v}" ${v === rec.status ? "selected" : ""}>${label}</option>`).join("");
+  const resume = rec.resume
+    ? `<a class="btn quiet" title="tailored resume" href="/files/repo/${encodeURI(rec.resume)}">${ICON.doc}</a>` : "";
+  return `<div class="trow" id="t-${short}">
+    <select class="st s-${esc(rec.status)}${rec.pending ? " pending" : ""}"
+            data-setst="${short}" ${canWrite ? "" : "disabled"}
+            title="${canWrite ? "status — commits via the dashboard-write workflow" : "read-only (no GitHub token)"}">${opts}</select>
+    <div class="head">
+      <span class="company">${esc(rec.company)}</span>${wait}
+      — <a class="title" href="${esc(rec.url)}" target="_blank" rel="noopener">${esc(rec.title)}${ICON.ext}</a>
+    </div>
+    <div class="acts">${resume}
+      <button class="btn quiet" data-tnote="${short}">${ICON.plus} note</button>
+      <button class="btn quiet" data-thist="${short}">history</button>
+    </div>
+    <div class="meta">applied ${fmtDate(rec.applied)} · last activity ${fmtDate(lastActivity(rec))}${rec.pending ? " · syncing…" : ""}${note ? ` · <span class="lastnote">${esc(note)}</span>` : ""}</div>
+  </div>`;
+}
+
+function renderTracker() {
+  const entries = Object.entries(DATA.applications || {});
+  $("#tcount").textContent = entries.length || "";
+
+  const counts = {};
+  let waiting = 0;
+  for (const [, rec] of entries) {
+    counts[rec.status] = (counts[rec.status] || 0) + 1;
+    if (waitingDays(rec) >= GHOST_DAYS) waiting++;
+  }
+  const present = Object.entries(STATUSES).filter(([v]) => counts[v]);
+  const bar = $("#funnelbar");
+  bar.hidden = !present.length;
+  bar.innerHTML = present.map(([v, label]) =>
+    `<span class="fb-${v}" style="flex:${counts[v]}" title="${counts[v]} ${esc(label.toLowerCase())}"></span>`).join("");
+  const seg = (v, n, label) =>
+    `<span class="seg" data-tstat="${v}"><b>${n}</b> ${esc(label)}</span>`;
+  $("#funnel").innerHTML = present
+    .map(([v, label]) => seg(v, counts[v], label.toLowerCase()))
+    .join(" · ") + (waiting ? " · " + seg("waiting", waiting, "awaiting response") : "");
+
+  const chips = [["all", "All"],
+    ...Object.entries(STATUSES).filter(([v]) => counts[v]),
+    ...(waiting ? [["waiting", `Awaiting ${GHOST_DAYS}d+`]] : [])];
+  $("#tchips").innerHTML = chips.map(([v, label]) =>
+    `<button class="chip ${UI.tfilter === v ? "on" : ""}" data-tfilter="${v}">${esc(label)}</button>`).join("");
+
+  const shown = entries.filter(([s, r]) => tvisible(s, r))
+    .sort((a, b) => lastActivity(b[1]).localeCompare(lastActivity(a[1])) ||
+                    a[1].company.localeCompare(b[1].company));
+  $("#tlist").innerHTML = shown.length
+    ? `<div class="rows">${shown.map(trowHtml).join("")}</div>`
+    : `<div class="rows empty">${entries.length
+        ? "Nothing matches the current filters."
+        : "No applications yet — tick a match as applied and it lands here permanently."}</div>`;
+}
+
+/* ---------- actions ---------- */
+
+async function load(refresh) {
+  const btn = $("#refresh");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin">${ICON.refresh}</span> refresh`;
+  DATA = refresh ? await api("/api/refresh", {}) : await api("/api/state");
+  btn.disabled = false;
+  btn.innerHTML = `${ICON.refresh} refresh`;
+  if (DATA.error) { toast(DATA.error, true); return; }
+  loadedAt = Date.now();
+  localStorage.setItem("iw-last-visit", new Date().toISOString().slice(0, 10));
+  checkStale();
+  render();
+}
+
+// the watcher cron runs every 2h; flag the header once data outlives one cycle
+function checkStale() {
+  const el = $("#updated");
+  const stale = loadedAt && Date.now() - loadedAt > 2 * 3600e3;
+  el.classList.toggle("stale", stale);
+  el.title = stale ? "data is older than one cron cycle — hit refresh" : "";
+}
+setInterval(checkStale, 60e3);
+
+async function setApplied(short, applied, input) {
+  const m = DATA.matches.find(m => m.short === short);
+  m.applied = applied;            // optimistic
+  render();
+  const res = await api("/api/applied", { short, applied });
+  if (res.error) {
+    m.applied = !applied;
+    render();
+    toast(res.error, true);
+  } else if (res.queued) {
+    toast("Row is off the issue — queued a state write, lands in ~1 min");
+  }
+}
+
+async function setDismissed(short, dismissed) {
+  const m = DATA.matches.find(m => m.short === short);
+  m.dismissed = dismissed;        // optimistic
+  render();
+  const res = await api("/api/dismissed", { short, dismissed });
+  if (res.error) {
+    m.dismissed = !dismissed;
+    render();
+    toast(res.error, true);
+  } else if (dismissed) {
+    toast(`Hidden ${m.company} — ${m.title}` +
+          (res.queued ? " (queued, lands in ~1 min)" : ""), false,
+          { label: "Undo", run: () => setDismissed(short, false) });
+  } else if (res.queued) {
+    toast("Row is off the issue — queued a state write, lands in ~1 min");
+  }
+}
+
+async function setStatus(short, status, note) {
+  const rec = DATA.applications[short];
+  const prev = rec.status;
+  rec.status = status;            // optimistic; overlay confirms after commit
+  rec.pending = true;
+  const m = DATA.matches.find(m => m.short === short);
+  if (m) { m.status = status; m.applied = true; }
+  render();
+  const res = await api("/api/status", { short, status, note: note || "" });
+  if (res.error) {
+    rec.status = prev;
+    rec.pending = false;
+    if (m) m.status = prev;
+    render();
+    toast(res.error, true);
+  } else {
+    toast(`${STATUSES[status]}${note ? " + note" : ""} queued — lands in ~1 min`);
+  }
+}
+
+function notePanel(short) {
+  const row = $("#t-" + short);
+  if (!row || $(".jd", row)) return;
+  const div = document.createElement("div");
+  div.className = "jd";
+  div.innerHTML = `<textarea rows="2" style="min-height:52px"
+      placeholder="Note for the history — e.g. 'OA due Friday', 'recruiter: Sam'"></textarea>
+    <div class="bar">
+      <button class="btn" data-tnotego="${short}">save note</button>
+      <button class="btn quiet" data-jdx>cancel</button>
+    </div>`;
+  row.append(div);
+  $("textarea", div).focus();
+}
+
+function showHistory(short) {
+  const rec = DATA.applications[short];
+  $("#dlg-title").textContent = `${rec.company} — history`;
+  $("#dlg-body").innerHTML = `<ul class="hist">` +
+    (rec.history || []).slice().reverse().map(e =>
+      `<li><span class="on">${fmtDate(e.on)}</span>
+       <span>${esc(STATUSES[e.status] || e.status)}</span>
+       <span>${esc(e.note || "")}</span></li>`).join("") + `</ul>`;
+  $("#dlg").showModal();
+}
+
+async function build(short, jdText) {
+  busy.add(short);
+  render();
+  const res = await api("/api/resume", { short, jd_text: jdText || "" });
+  busy.delete(short);
+  if (res.ok) {
+    const m = DATA.matches.find(m => m.short === short);
+    m.local_resume = res.file;
+    reports.set(short, res.report);
+    render();
+    toast(`Resume built (${res.pages} pages${res.used_llm ? ", LLM rewrite" : ""})`);
+  } else if (res.needs_jd) {
+    render();
+    jdPanel(short, res.error);
+  } else {
+    render();
+    toast(res.error || "build failed", true);
+  }
+}
+
+function jdPanel(short, why) {
+  const row = $("#r-" + short);
+  if (!row || $(".jd", row)) return;
+  const div = document.createElement("div");
+  div.className = "jd";
+  div.innerHTML = `<div class="hint">${esc(why)}</div>
+    <textarea placeholder="Paste the full job description here…"></textarea>
+    <div class="bar">
+      <button class="btn" data-jdgo="${short}">${ICON.doc} build with pasted JD</button>
+      <button class="btn quiet" data-jdx>cancel</button>
+    </div>`;
+  row.append(div);
+  $("textarea", div).focus();
+}
+
+function showShots(m) {
+  $("#dlg-title").textContent = `${m.company} — apply-run screenshots`;
+  $("#dlg-body").innerHTML = `<div class="shots">` + m.artifacts.map(g =>
+    g.files.map(f => {
+      const src = `/files/artifacts/${encodeURIComponent(g.run)}/${encodeURIComponent(g.slug)}/${encodeURIComponent(f)}`;
+      return `<figure><a href="${src}" target="_blank"><img src="${src}" loading="lazy"></a>
+        <figcaption>${esc(g.run)}/${esc(g.slug)}/${esc(f)}</figcaption></figure>`;
+    }).join("")).join("") + `</div>`;
+  $("#dlg").showModal();
+}
+
+function showReport(short) {
+  const m = DATA.matches.find(m => m.short === short);
+  $("#dlg-title").textContent = `Build report — ${m.company}`;
+  $("#dlg-body").innerHTML = `<pre class="report">${esc(reports.get(short))}</pre>`;
+  $("#dlg").showModal();
+}
+
+/* ---------- wiring ---------- */
+
+$("#refresh").innerHTML = `${ICON.refresh} refresh`;
+$("#dlg-close").innerHTML = ICON.x;
+$("#dlg-close").onclick = () => $("#dlg").close();
+$("#refresh").onclick = () => load(true);
+$("#q").oninput = e => { UI.q = e.target.value.trim().toLowerCase(); render(); };
+$("#status").onchange = e => { UI.status = e.target.value; render(); };
+$("#tq").oninput = e => { UI.tq = e.target.value.trim().toLowerCase(); render(); };
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-term],[data-build],[data-shots],[data-report],[data-jdgo],[data-jdx],[data-dismiss],[data-restore],[data-tab],[data-tfilter],[data-tnote],[data-tnotego],[data-thist],[data-stat],[data-tstat]");
+  if (!t) return;
+  if (t.dataset.term) { UI.term = t.dataset.term; render(); }
+  else if (t.dataset.stat) { UI.status = t.dataset.stat; $("#status").value = t.dataset.stat; render(); }
+  else if (t.dataset.tstat) { UI.tfilter = t.dataset.tstat; render(); }
+  else if (t.dataset.tab) { UI.tab = t.dataset.tab; render(); }
+  else if (t.dataset.tfilter) { UI.tfilter = t.dataset.tfilter; render(); }
+  else if (t.dataset.tnote) notePanel(t.dataset.tnote);
+  else if (t.dataset.thist) showHistory(t.dataset.thist);
+  else if (t.dataset.tnotego) {
+    const note = $("textarea", t.closest(".jd")).value.trim();
+    if (!note) { toast("write the note first", true); return; }
+    const short = t.dataset.tnotego;
+    t.closest(".jd").remove();
+    setStatus(short, DATA.applications[short].status, note);
+  }
+  else if (t.dataset.dismiss) setDismissed(t.dataset.dismiss, true);
+  else if (t.dataset.restore) setDismissed(t.dataset.restore, false);
+  else if (t.dataset.build) build(t.dataset.build);
+  else if (t.dataset.shots) showShots(DATA.matches.find(m => m.short === t.dataset.shots));
+  else if (t.dataset.report) showReport(t.dataset.report);
+  else if (t.dataset.jdgo) {
+    const jd = $("textarea", t.closest(".jd")).value.trim();
+    if (!jd) { toast("paste the JD first", true); return; }
+    t.closest(".jd").remove();
+    build(t.dataset.jdgo, jd);
+  }
+  else if ("jdx" in t.dataset) t.closest(".jd").remove();
+});
+
+document.addEventListener("change", e => {
+  if (e.target.dataset.applied)
+    setApplied(e.target.dataset.applied, e.target.checked, e.target);
+  else if (e.target.dataset.setst)
+    setStatus(e.target.dataset.setst, e.target.value);
+});
+
+/* ---------- keyboard triage ---------- */
+
+// visible cursorable rows of the active tab, in DOM order
+const cursorRows = () => [...$(UI.tab === "matches" ? "#list" : "#tlist")
+  .querySelectorAll(UI.tab === "matches" ? ".row" : ".trow")];
+const rowShort = row => row.id.slice(2);          // "r-abc"/"t-abc" -> "abc"
+
+function applyCursor() {
+  document.querySelectorAll(".row.cur, .trow.cur").forEach(r => r.classList.remove("cur"));
+  if (!cursor) return;
+  const pfx = UI.tab === "matches" ? "r-" : "t-";
+  const row = document.getElementById(pfx + cursor);
+  if (row) row.classList.add("cur");
+  else cursor = null;
+}
+
+function moveCursor(delta) {
+  const rows = cursorRows();
+  if (!rows.length) return;
+  let i = rows.findIndex(r => rowShort(r) === cursor);
+  i = i < 0 ? (delta > 0 ? 0 : rows.length - 1)
+            : Math.max(0, Math.min(rows.length - 1, i + delta));
+  cursor = rowShort(rows[i]);
+  applyCursor();
+  rows[i].scrollIntoView({ block: "nearest" });
+}
+
+document.addEventListener("keydown", e => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || $("#dlg").open) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === "/") { e.preventDefault(); $(UI.tab === "matches" ? "#q" : "#tq").focus(); return; }
+  if (k === "j") { e.preventDefault(); moveCursor(1); return; }
+  if (k === "k") { e.preventDefault(); moveCursor(-1); return; }
+  if (k === "Escape") { cursor = null; applyCursor(); return; }
+  if (!cursor) return;
+  if (k === "Enter") {
+    const a = $(".title", document.getElementById((UI.tab === "matches" ? "r-" : "t-") + cursor));
+    if (a) window.open(a.href, "_blank", "noopener");
+    return;
+  }
+  if (UI.tab !== "matches") return;
+  if (k === "x") {
+    const box = $(`#r-${cursor} input[data-applied]`);
+    if (!box) return;
+    if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
+    setApplied(cursor, !box.checked, box);
+  } else if (k === "h") {
+    setDismissed(cursor, true);
+  }
+});
+
+load(false);
+</script>
+</body>
+</html>

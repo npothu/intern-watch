@@ -1,0 +1,38 @@
+# ATS login credentials for auto-apply. COPY this to users/<you>_logins.yaml
+# (which is GITIGNORED) and fill in real values. Never commit the real file.
+#
+# How it's used (src/apply/auth.py): for a login-walled ATS (Workday), the
+# filler picks the account whose `domain` appears in the apply URL, else the
+# `default`. It SIGNS IN with these creds; if no account exists yet it CREATES
+# one. Set method: google to use "Continue with Google" SSO instead. Email
+# verification / MFA can't be fully automated — emailed links/OTPs are resolved
+# via the inbox; app/SMS MFA must be done once interactively (session persists).
+
+# Used when no domain-specific account matches. Most Workday tenants accept the
+# same email; you register per-tenant on first apply.
+default:
+  email: "you@example.com"
+  password: "a-strong-password"
+  first_name: "Alex"
+  last_name: "Example"
+
+# Optional per-employer overrides (e.g. a tenant where you already have an
+# account with different creds). `domain` is matched as a substring of the URL.
+accounts:
+  - domain: "nvidia.wd5.myworkdayjobs.com"
+    email: "you@example.com"
+    password: "different-password"
+    first_name: "Alex"
+    last_name: "Example"
+
+  # method: google -> use "Continue with Google" SSO instead of a password.
+  # `email` is your Google address; leave `password` blank. This relies on a
+  # Google session already logged in once in the persisted browser profile —
+  # if Google asks for a password/2FA, do that one-time login interactively.
+  - domain: "jobs.lever.co"
+    email: "you@gmail.com"
+    method: google
+
+# Email-inbox integration (verification links + OTP codes) reuses the watcher's
+# Gmail app-password secrets (GMAIL_ADDRESS / GMAIL_APP_PASSWORD) over IMAP.
+# Tune or disable it under `inbox:` in users/<you>_apply.yaml.

@@ -1,0 +1,84 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "totalFound": 3,
+  "content": [
+    {
+      "id": "744000111100001",
+      "name": "Software Engineer Intern - Summer 2027",
+      "uuid": "a1a1a1a1-0000-0000-0000-000000000001",
+      "refNumber": "REF11111A",
+      "company": {
+        "identifier": "Visa",
+        "name": "Visa"
+      },
+      "releasedDate": "2026-06-01T09:00:00.000Z",
+      "location": {
+        "city": "Austin",
+        "region": "TX",
+        "country": "us",
+        "remote": false,
+        "hybrid": true,
+        "fullLocation": "Austin, TX, United States"
+      },
+      "typeOfEmployment": {
+        "id": "intern",
+        "label": "Internship"
+      },
+      "visibility": "PUBLIC",
+      "applyUrl": "https://jobs.smartrecruiters.com/Visa/744000111100001-software-engineer-intern-summer-2027?oga=true",
+      "postingUrl": "https://jobs.smartrecruiters.com/Visa/744000111100001-software-engineer-intern-summer-2027",
+      "ref": "https://api.smartrecruiters.com/v1/companies/Visa/postings/744000111100001"
+    },
+    {
+      "id": "744000111100002",
+      "name": "Director, Cyber Security",
+      "uuid": "a1a1a1a1-0000-0000-0000-000000000002",
+      "refNumber": "REF11111B",
+      "company": {
+        "identifier": "Visa",
+        "name": "Visa"
+      },
+      "releasedDate": "2026-05-20T11:08:12.368Z",
+      "location": {
+        "city": "Bengaluru",
+        "region": "KA",
+        "country": "in",
+        "remote": false,
+        "fullLocation": "Bengaluru, KA, India"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "visibility": "PUBLIC",
+      "applyUrl": "https://jobs.smartrecruiters.com/Visa/744000111100002-director-cyber-security",
+      "ref": "https://api.smartrecruiters.com/v1/companies/Visa/postings/744000111100002"
+    },
+    {
+      "id": "744000111100003",
+      "name": "Data Science Internship (Fall 2026)",
+      "uuid": "a1a1a1a1-0000-0000-0000-000000000003",
+      "refNumber": "REF11111C",
+      "company": {
+        "identifier": "Visa",
+        "name": "Visa"
+      },
+      "releasedDate": "2026-06-05T14:30:00.000Z",
+      "location": {
+        "city": "Toronto",
+        "region": "ON",
+        "country": "ca",
+        "remote": false,
+        "fullLocation": "Toronto, ON, Canada"
+      },
+      "typeOfEmployment": {
+        "id": "intern",
+        "label": "Internship"
+      },
+      "visibility": "PUBLIC",
+      "applyUrl": "https://jobs.smartrecruiters.com/Visa/744000111100003-data-science-internship-fall-2026?utm_source=foo",
+      "ref": "https://api.smartrecruiters.com/v1/companies/Visa/postings/744000111100003"
+    }
+  ]
+}

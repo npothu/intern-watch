@@ -1,0 +1,119 @@
+name: resume-ondemand
+
+# On-demand resume build from the dashboard issue: comment `/resume <12-hex>`
+# on the "📋 intern-watch matches — <user>" issue and this builds the tailored
+# .docx for that match, publishes it as a release asset (downloads directly as
+# a .docx, no artifact-zip wrapper), and replies with the download link.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: write   # publish the .docx as a release asset
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Only on the matches dashboard, and only for /resume comments.
+    if: >-
+      contains(github.event.issue.title, 'intern-watch matches') &&
+      startsWith(github.event.comment.body, '/resume')
+    steps:
+      - name: React 👀
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes >/dev/null || true
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Parse short key and user
+        id: parse
+        env:
+          BODY: ${{ github.event.comment.body }}
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          # Trailing 12-hex short key from the comment body.
+          short=$(printf '%s' "$BODY" | grep -oiE '[0-9a-f]{12}' | head -n1)
+          if [ -z "$short" ]; then
+            echo "no 12-hex short key in comment" >&2
+            exit 1
+          fi
+          # User is the tail of "… matches — <user>" (em dash separator).
+          user=$(printf '%s' "$TITLE" | sed 's/.*—[[:space:]]*//' | tr -d '[:space:]')
+          if [ -z "$user" ]; then
+            echo "cannot parse user from issue title: $TITLE" >&2
+            exit 1
+          fi
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "user=$user" >> "$GITHUB_OUTPUT"
+          # Optional pasted JD: everything below the first line (the /resume
+          # line). Empty when the user just typed `/resume <key>`. This is how
+          # blocked-site jobs (Tesla et al.) get a JD we can't scrape.
+          printf '%s' "$BODY" | tail -n +2 > /tmp/ondemand_jd.txt || true
+
+      - name: Build resume
+        id: build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # The CLI prints the .docx path on success (exit 0) and the reason on
+          # failure (exit 1); logging goes to stderr, so stdout is just the path.
+          if out=$(python -m src.resume.ondemand \
+                     --user "${{ steps.parse.outputs.user }}" \
+                     --short "${{ steps.parse.outputs.short }}" \
+                     --jd /tmp/ondemand_jd.txt); then
+            docx=$(printf '%s' "$out" | tail -n1)
+            {
+              echo "ok=1"
+              echo "docx=$docx"
+              echo "name=$(basename "$docx")"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish .docx as a release asset
+        if: steps.build.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # One rolling "resumes" release holds every build; assets download
+          # directly as the .docx (no artifact zip). Filenames are clean
+          # (First_Last_Company.docx, no short-key suffix), so --clobber
+          # means newest-wins ACROSS jobs at the same company: an older
+          # /resume comment's link then serves the newer build. Accepted --
+          # rebuild via the older comment (or the local webui) if needed.
+          gh release view resumes >/dev/null 2>&1 \
+            || gh release create resumes --title "Tailored resumes" \
+                 --notes "On-demand resume builds. Each asset downloads directly as a .docx." \
+            || true
+          gh release upload resumes "${{ steps.build.outputs.docx }}" --clobber
+
+      - name: Reply with the .docx link
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DL: https://github.com/${{ github.repository }}/releases/download/resumes/${{ steps.build.outputs.name }}
+        run: |
+          if [ "${{ steps.build.outputs.ok }}" = "1" ]; then
+            gh issue comment "${{ github.event.issue.number }}" \
+              --repo "${{ github.repository }}" \
+              --body "📄 Resume ready: [**${{ steps.build.outputs.name }}**]($DL) — downloads directly as a .docx."
+          else
+            gh issue comment "${{ github.event.issue.number }}" \
+              --repo "${{ github.repository }}" \
+              --body "⚠️ Couldn't reach the JD for \`${{ steps.parse.outputs.short }}\` (the site may block bots). Re-comment with the JD pasted on the lines **below** the \`/resume\` line. [Run log]($RUN_URL)."
+          fi

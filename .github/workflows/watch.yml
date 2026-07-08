@@ -1,0 +1,68 @@
+name: watch
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"   # every 2h; jobright rows can vanish within ~5h of
+                            # appearing (observed 2026-06-12), so 6h had a gap.
+                            # Even-hour ticks also cover the EDT send slots
+                            # (8am/12pm/6pm ET = 12/16/22 UTC).
+    - cron: "0 13,17,23 * * *"  # EST send-slot ticks (8am/12pm/6pm ET in winter
+                                # = 13/17/23 UTC, odd hours the 2h cron misses).
+                                # Off-season these ticks just find "not due".
+  workflow_dispatch:
+    inputs:
+      send_now:
+        description: "Flush the email outbox immediately, ignoring send slots"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write     # match-dashboard issue (users with `dashboard: true`)
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run intern-watch
+        run: python -m src.main ${{ inputs.send_now == true && '--send-now' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}        # polite fetching, optional
+          # LLM classifier keys -- expose whichever providers users configure
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # one block per user -- env var names must match the user yaml's
+          # notify.email.smtp_*_env / notify.discord_webhook_env
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+
+      # Committing state also keeps the repo active, which prevents GitHub
+      # from disabling the scheduled workflow after 60 days of inactivity.
+      - name: Commit state
+        run: |
+          git config user.name "intern-watch[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          # the applications ledger appears with the first applied tick;
+          # resumes/ once commit/email mode has built one. A missing
+          # pathspec would abort the add, so guard both.
+          [ -f state/applications.json ] && git add state/applications.json || true
+          [ -d resumes ] && git add resumes/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "state: $(date -u +'%Y-%m-%d %H:%MZ')"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi

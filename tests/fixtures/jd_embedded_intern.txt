@@ -1,0 +1,21 @@
+Embedded Software Engineer Intern
+
+Join the flight software team building avionics for our next-generation
+vehicle. You will write firmware that runs on real hardware and flies.
+
+What you'll work on
+- Develop embedded C/C++ software for real-time flight systems
+- Implement and debug hardware drivers (SPI, I2C, UART) for sensors
+- Work with RTOS task scheduling and interrupt handling
+- Bench-test firmware against hardware-in-the-loop setups
+
+Basic qualifications
+- Pursuing a BS in Computer Science, Computer Engineering, or similar
+- Strong C and C++ programming skills
+- Understanding of operating systems, concurrency, and memory management
+- Experience reading sensor datasheets and debugging on hardware
+
+Preferred
+- Experience with microcontrollers (STM32 or similar)
+- Familiarity with kernel-level or low-level systems programming
+- Experience with Linux and Git

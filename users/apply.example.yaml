@@ -1,0 +1,169 @@
+# Auto-apply profile TEMPLATE — comprehensive answer book used to fill forms.
+# COPY this to users/<you>_apply.yaml and replace every value with your own.
+# No secrets here: cloud-browser / LLM / inbox credentials are read from the env
+# vars named below (and from a gitignored .env). See src/apply/profile.py.
+
+name: "Alex J. Example"
+email: "alex@example.com"      # used on applications; matches the inbox we read
+phone: "(555) 010-4477"
+city: "Atlanta"
+state: "Georgia"
+country: "United States"
+
+links:
+  linkedin: "https://www.linkedin.com/in/alex-example/"
+  github: "https://github.com/example"
+  portfolio: "https://example.com"
+  website: ""
+
+# Field labels to NEVER fill (case-insensitive substring match). Throwaway /
+# open-ended "anything to add?" prompts go here so we don't waste a generic
+# answer on them; everything else we DO fill whenever the answer book matches.
+do_not_fill:
+  - "Additional information"
+  - "anything else"                 # "anything else you'd like us to know?"
+  - "anything to add"
+  - "anything you'd like"
+  - "additional comments"
+  - "questions for us"              # "do you have any questions for us?"
+  - "anything we should know"
+  - "is there anything"
+
+# Street/zip (city & state are on the root above). Used for address fields.
+address:
+  street: ""
+  line2: ""
+  postal_code: "30332"
+
+personal:
+  preferred_name: "Alex"       # blank -> defaults to first name
+  pronouns: ""
+
+work_authorization:
+  authorized_us: true
+  requires_sponsorship: false
+  authorized_canada: false
+  citizenship: "US Citizen"
+
+# EEO self-identification. Every field may also be a "decline" phrasing —
+# match what the forms offer (e.g. "Decline to self-identify").
+eeo:
+  gender: "Decline to self-identify"
+  race: "Decline to self-identify"
+  hispanic_latino: "Decline to self-identify"
+  veteran_status: "I am not a protected veteran"
+  disability_status: "Decline to self-identify"
+
+education:
+  school: "Georgia Institute of Technology"
+  degree: "Bachelor's"
+  major: "Computer Science"
+  gpa: "3.7"
+  grad_month: "May"
+  grad_year: "2027"
+
+compensation:
+  desired_salary: "Open"        # "Open" / "Negotiable" / "$30/hr" / ...
+  current_salary: ""
+  currency: "USD"
+
+experience:
+  years_experience: "0"
+  current_title: "Student"
+  current_employer: "Georgia Institute of Technology"
+
+logistics:
+  start_date: "Flexible"             # open to any timeframe; term-specific below
+  notice_period: "None"
+  work_preference: "No preference"   # Remote | Hybrid | On-site | No preference
+  willing_to_travel: true
+  preferred_locations: ["Atlanta, GA", "Remote"]
+
+# Yes/No screeners (rendered Yes/No, or matched to a select's options).
+screening:
+  over_18: true
+  legally_authorized: true
+  felony_conviction: false
+  background_check_consent: true
+  drug_test_consent: true
+  driver_license: true
+  security_clearance: ""        # "" / "None" / "Secret (active)" / ...
+
+referral:
+  how_heard: "Company website"
+  referred_by: ""
+
+willing_to_relocate: true
+resume_dir: "resumes"
+
+# Generic fallback .docx (repo-relative) attached when no tailored per-company
+# resume exists — used by scripts/apply_batch.py.
+base_resume: ""
+
+# Fail-closed submit gate. When true (default), submit mode refuses to click
+# submit if a detected-required field is still blank (status blocked_incomplete);
+# set false to restore the prior fire-and-submit behavior. Per-run override:
+# --submit-gate / --no-submit-gate on `python -m src.apply`.
+submit_gate: true
+
+cloud:
+  provider: "browserbase"            # "browserbase" (hosted) | "local" (CLI Chromium)
+  api_key_env: "BROWSERBASE_API_KEY"
+  project_id_env: "BROWSERBASE_PROJECT_ID"
+  session_dir: "state/apply_sessions"
+  headless: true                     # local provider only
+  solve_captcha: false               # opt-in; ToS-hostile, leave off
+
+# Email inbox for auto-resolving account-verification links + OTP codes during
+# account creation. Reuses the watcher's Gmail app-password secrets over IMAP.
+inbox:
+  enabled: true
+  user_env: "GMAIL_ADDRESS"
+  password_env: "GMAIL_APP_PASSWORD"
+  imap_host: "imap.gmail.com"
+  imap_port: 993
+
+# Long-tail freeform questions. Keys are matched loosely (substring / token
+# overlap) against the question on the form; value is what to type or select.
+questions:
+  "How did you hear about us?": "Company website"
+  "Are you at least 18 years old?": "Yes"
+  "Notice period": "None"
+  # Term-specific start dates.
+  "When can you start for a Fall internship?": "August 2026"
+  "When can you start for a Spring internship?": "January 2027"
+  "Preferred internship start date": "August 2026 (Fall) or January 2027 (Spring)"
+  # Company-specific motivation essays are LLM-written with the company + job
+  # description context. Generic canned drafts read badly when pasted into
+  # specific prompts — keep factual long-answers here, leave essays to the LLM.
+  # "Why do you want to work here?": "..."              # -> LLM, company context
+  # "Why are you interested in this role?": "..."        # -> LLM, company context
+  "What are your research interests?": "Systems and software engineering — distributed systems, computer networking, and applied machine learning."
+  # Keep in sync with your resume bank's skills.languages.
+  "List the programming languages you are most proficient in": "Python, Java, C/C++, Go, JavaScript/TypeScript, SQL"
+  "What programming languages do you know?": "Python, Java, C/C++, Go, JavaScript/TypeScript, SQL"
+  "How many months are you available?": "Flexible — I can do 4, 8, 12, or 16 months."
+  "How long are you available to join?": "Flexible — I can do 4, 8, 12, or 16 months."
+  "Preferred internship duration": "Flexible (4–16 months)"
+  # Availability — answer affirmatively when actively seeking internships.
+  "Are you available for a full-time internship?": "Yes"
+  "Are you available to work full-time?": "Yes"
+  "Are you able to work full-time during the internship?": "Yes"
+  "Please confirm the season you are applying for": "Fall"
+  "Which season are you applying for?": "Fall"
+  "When are you able to join": "August 2026"
+  "When do you plan on ending your internship?": "December 2026"
+  "Are you comfortable working onsite": "Yes"
+  "willing to work onsite": "Yes"
+  # Screening / logistics.
+  "prior government experience": "No"
+  "government experience": "No"
+  "public sector experience": "No"
+  "graduation date": "2027-05-10"
+  "expected graduation date": "2027-05-10"
+  "anchor days": "Yes"                     # in-office on the company's set days
+  "able to commit to working from": "Yes"
+  # Visa / enrollment screeners.
+  "Are you an F-1 student?": "No"
+  "currently enrolled in a university, and will you return to studies": "Yes"
+  "will you return to studies after the internship": "Yes"

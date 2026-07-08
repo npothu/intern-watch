@@ -1,0 +1,3 @@
+# Normalize line endings: the Actions runner (Linux) and local Windows
+# checkouts must agree, or every state commit rewrites all of seen.json.
+* text=auto eol=lf

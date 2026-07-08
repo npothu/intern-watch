@@ -1,0 +1,38 @@
+{
+  "id": "744000111100001",
+  "name": "Software Engineer Intern - Summer 2027",
+  "refNumber": "REF11111A",
+  "company": {
+    "identifier": "Visa",
+    "name": "Visa"
+  },
+  "releasedDate": "2026-06-01T09:00:00.000Z",
+  "location": {
+    "city": "Austin",
+    "region": "TX",
+    "country": "us",
+    "fullLocation": "Austin, TX, United States"
+  },
+  "postingUrl": "https://jobs.smartrecruiters.com/Visa/744000111100001-software-engineer-intern-summer-2027",
+  "applyUrl": "https://jobs.smartrecruiters.com/Visa/744000111100001-software-engineer-intern-summer-2027?oga=true",
+  "jobAd": {
+    "sections": {
+      "companyDescription": {
+        "title": "Company Description",
+        "text": "<p>Visa is a world leader in payments and technology.</p>"
+      },
+      "jobDescription": {
+        "title": "Job Description",
+        "text": "<p>As a Software Engineer Intern you will build payment services and collaborate across teams.</p>"
+      },
+      "qualifications": {
+        "title": "Qualifications",
+        "text": "<p>Basic Qualifications:</p><ul><li>Currently pursuing a Bachelor&rsquo;s degree.</li><li>This position requires an <strong>active security clearance</strong>.</li></ul>"
+      },
+      "additionalInformation": {
+        "title": "Additional Information",
+        "text": "<p>Visa is an EEO Employer.</p>"
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- A POST-LOGIN Workday application page. The common real case is a sign-in /
+     create-account wall BEFORE this; that path is covered by an inline fixture
+     in test_apply_workday.py. -->
+<html>
+<head><meta charset="utf-8"><title>Workday Application</title></head>
+<body>
+  <div data-automation-id="legalNameSection">
+    <label>First Name</label>
+    <input data-automation-id="legalNameSection_firstName" type="text">
+    <label>Last Name</label>
+    <input data-automation-id="legalNameSection_lastName" type="text">
+  </div>
+  <label>Email</label>
+  <input data-automation-id="email" type="email">
+  <label>Phone</label>
+  <input data-automation-id="phone-number" type="tel">
+  <label>Resume</label>
+  <input data-automation-id="fileUploadField" type="file">
+  <button data-automation-id="bottom-navigation-next-button" type="button">Next</button>
+</body>
+</html>

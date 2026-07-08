@@ -1,0 +1,101 @@
+name: resume-batch
+
+# Batch resume build from the dashboard issue. Tick the "📄 build resume" box on
+# the rows you want, then tick the top "Build selected resumes" box. This builds
+# a tailored .docx for every ticked-and-not-yet-built row (commit mode ->
+# resumes/<user>/), commits them with the updated state, and repaints the issue
+# so each built row shows its resume link and the trigger resets itself.
+#
+# The guard fires only when the trigger box is ticked, so ordinary applied-box
+# ticks don't run this. The repaint always renders the trigger unchecked, so the
+# bot's own edit can't re-trigger the workflow (no loop).
+
+on:
+  issues:
+    types: [edited]
+
+permissions:
+  issues: write
+  contents: write   # commit resumes/ + state/seen.json
+
+concurrency:
+  group: resume-batch-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: >-
+      contains(github.event.issue.title, 'intern-watch matches') &&
+      contains(github.event.issue.body, '[x] **Build selected resumes**')
+    steps:
+      - name: React 👀
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/reactions" \
+            -f content=eyes >/dev/null || true
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: User from issue title
+        id: who
+        env:
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          # "📋 intern-watch matches — <user>" (em dash separator).
+          user=$(printf '%s' "$TITLE" | sed 's/.*—[[:space:]]*//' | tr -d '[:space:]')
+          if [ -z "$user" ]; then
+            echo "cannot parse user from issue title: $TITLE" >&2
+            exit 1
+          fi
+          echo "user=$user" >> "$GITHUB_OUTPUT"
+
+      - name: Build selected resumes
+        id: build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # JD reacquisition (jobright)
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python -m src.resume.batch \
+            --user "${{ steps.who.outputs.user }}" \
+            --summary /tmp/batch_comment.md
+
+      - name: Commit built resumes + state
+        if: steps.build.outputs.built != '0' && steps.build.outputs.built != ''
+        run: |
+          git config user.name "intern-watch[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          [ -d resumes ] && git add resumes/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "resume: batch build from dashboard"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi
+
+      - name: Repaint dashboard issue
+        if: always()
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m src.dashboard --user "${{ steps.who.outputs.user }}" || true
+
+      - name: Comment summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -s /tmp/batch_comment.md ]; then
+            gh issue comment "${{ github.event.issue.number }}" \
+              --repo "${{ github.repository }}" \
+              --body-file /tmp/batch_comment.md
+          fi

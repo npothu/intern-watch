@@ -1,0 +1,9 @@
+httpx>=0.27
+pyyaml>=6.0
+pydantic>=2.7
+anthropic>=0.40
+python-docx>=1.1
+playwright>=1.44        # auto-apply browser driver (local + Browserbase CDP)
+stagehand>=3.21,<4      # AI act/extract/observe for the unknown-ATS agent filler
+pytest>=8.0
+tzdata>=2024.1   # zoneinfo DB for local send slots (Windows has no system tz)

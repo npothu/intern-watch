@@ -1,0 +1,75 @@
+name: resume
+
+# Build a JD-tailored one-page resume on demand:
+# Actions -> resume -> Run workflow -> paste the job description.
+# The .docx is published as a GitHub Release asset (downloads as a raw
+# .docx, not a zip — Actions artifacts are always zipped). The build
+# report (project order, keyword gaps, page estimate) lands in the run
+# summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      company:
+        description: "Company name (used in the filename)"
+        required: true
+      jd:
+        description: "Paste the job description text"
+        required: true
+      user:
+        description: "User (users/<name>_resume.json; blank = the sole bank)"
+        required: false
+      use_llm:
+        description: "LLM bullet rewrite (needs the provider API key secret)"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # required to publish the Release asset
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Write JD to file
+        env:
+          JD: ${{ inputs.jd }}
+        run: printf '%s' "$JD" > /tmp/jd.txt
+
+      - name: Build resume
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python -m src.resume \
+            --jd /tmp/jd.txt \
+            --user "${{ inputs.user }}" \
+            --company "${{ inputs.company }}" \
+            --out out/ \
+            --report out/report.md \
+            ${{ inputs.use_llm == false && '--no-llm' || '' }}
+
+      - name: Report to run summary
+        if: always()
+        run: cat out/report.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Publish .docx as a Release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docx=$(ls out/*.docx | head -n1)
+          [ -n "$docx" ] || { echo "no .docx produced"; exit 1; }
+          tag="resume-${{ github.run_id }}"
+          gh release create "$tag" "$docx" \
+            --title "Resume: ${{ inputs.company }} (run ${{ github.run_number }})" \
+            --notes "JD-tailored resume for **${{ inputs.company }}** (user: ${{ inputs.user }}). Download the .docx asset below." \
+            --target "${{ github.sha }}"
+          url=$(gh release view "$tag" --json assets --jq '.assets[0].url')
+          echo "## Download" >> "$GITHUB_STEP_SUMMARY"
+          echo "[**$(basename "$docx")**]($url) — raw .docx (no zip)" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Greenhouse Application</title></head>
+<body>
+  <form id="application-form">
+    <label for="first_name">First Name</label>
+    <input id="first_name" name="first_name" type="text">
+
+    <label for="last_name">Last Name</label>
+    <input id="last_name" name="last_name" type="text">
+
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email">
+
+    <label for="phone">Phone</label>
+    <input id="phone" name="phone" type="tel">
+
+    <label for="linkedin">LinkedIn Profile</label>
+    <input id="linkedin" name="linkedin" type="url">
+
+    <label for="github">GitHub</label>
+    <input id="github" name="github" type="url">
+
+    <label for="resume">Resume/CV</label>
+    <input id="resume" name="resume" type="file">
+
+    <label for="gender">Gender</label>
+    <select id="gender" name="gender">
+      <option value="">Please select</option>
+      <option value="Male">Male</option>
+      <option value="Female">Female</option>
+      <option value="Decline to self-identify">Decline to self-identify</option>
+    </select>
+
+    <label for="race">Race / Ethnicity</label>
+    <select id="race" name="race">
+      <option value="">Please select</option>
+      <option value="Asian">Asian</option>
+      <option value="White">White</option>
+      <option value="Decline to self-identify">Decline to self-identify</option>
+    </select>
+
+    <button type="button" id="submit"
+      onclick="document.body.innerHTML='<div id=&quot;confirmation&quot;>Application submitted</div>'">
+      Submit Application</button>
+  </form>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# Companies rooted in (or with a major engineering hub in) metro Atlanta.
+# Used as an *addition* to location matching for Fall/Spring rules: a match
+# here accepts the company's postings even when the location string omits the
+# city (e.g. "Hybrid", "US"). Caveat: a genuinely non-ATL posting from one of
+# these companies will also pass -- keep the list to companies that are
+# overwhelmingly Atlanta-based. Same format as top_companies.txt.
+
+NCR Voyix
+NCR Atleos
+Calendly
+Salesloft
+Greenlight | Greenlight Financial Technology
+OneTrust
+Flock Safety
+Stord
+FullStory
+CallRail
+Delta Air Lines | Delta
+The Home Depot | Home Depot
+UPS | United Parcel Service
+Chick-fil-A
+Cox Enterprises | Cox Automotive | Cox Communications | Autotrader | Kelley Blue Book
+Equifax
+Global Payments
+Fiserv
+Invesco
+Intercontinental Exchange | ICE
+Truist
+Manhattan Associates
+Georgia Tech Research Institute | GTRI
+Secureworks
+Bakkt
