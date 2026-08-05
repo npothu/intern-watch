@@ -32,7 +32,7 @@ def test_dismissed_rows_move_to_the_hidden_section():
     a, b = dashboard.short_key("url:a"), dashboard.short_key("url:b")
 
     # header: only active rows count as matches; hidden counted separately
-    assert body.startswith("**1 matches · 0 applied · 1 hidden**")
+    assert body.startswith("**1 matches · 0 applied · 0 saved · 1 hidden**")
     # the dismissed row is out of the term groups (no applied box for it) and
     # inside a details block with its hide box ticked
     checked, present = dashboard.parse_checkboxes(body)

@@ -44,6 +44,11 @@ _BUILD_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\].*?<!--iwb:([0-9a-f]{12})-->",
 # next repaint, where unticking restores them.
 _DISMISS_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\].*?<!--iwd:([0-9a-f]{12})-->",
                          re.MULTILINE)
+# Per-row "saved" (bookmark) checkbox; distinct marker so it never collides
+# with `iw:`/`iwb:`/`iwd:`. Purely a persisted flag, no side effects like
+# `dismissed` moving the row -- symmetric with `applied`.
+_SAVE_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\].*?<!--iws:([0-9a-f]{12})-->",
+                      re.MULTILINE)
 # Top-level "build selected resumes" trigger box.
 _TRIGGER_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\].*?<!--iw:build-->",
                          re.MULTILINE)
@@ -72,6 +77,16 @@ def parse_dismissed(body: str) -> tuple[set[str], set[str]]:
     """(short keys hidden, short keys carrying a hide box) from a body."""
     checked, present = set(), set()
     for mark, short in _DISMISS_RE.findall(body):
+        present.add(short)
+        if mark in "xX":
+            checked.add(short)
+    return checked, present
+
+
+def parse_saved(body: str) -> tuple[set[str], set[str]]:
+    """(short keys saved, short keys carrying a save box) from a body."""
+    checked, present = set(), set()
+    for mark, short in _SAVE_RE.findall(body):
         present.add(short)
         if mark in "xX":
             checked.add(short)
@@ -119,10 +134,14 @@ def _row(item: dict, repo: str = "", branch: str = "main") -> str:
     bbox = "x" if built else " "
     blabel = "📄 resume built" if built else "📄 build resume"
     sub = f"  - [{bbox}] {blabel} <!--iwb:{short}-->"
+    # Saved toggle: a plain bookmark flag, read back like `applied` (see
+    # parse_saved) -- no side effect on the row's position.
+    sbox = "x" if item.get("saved") else " "
+    save = f"  - [{sbox}] ⭐ saved <!--iws:{short}-->"
     # Hide toggle: tick it and the row moves to the Hidden section on the
     # next repaint (read back like `applied`, see parse_dismissed).
     hide = f"  - [ ] 🚫 hide <!--iwd:{short}-->"
-    return f"{main}\n{sub}\n{hide}"
+    return f"{main}\n{sub}\n{save}\n{hide}"
 
 
 def _hidden_row(item: dict) -> str:
@@ -144,19 +163,21 @@ def build_body(matches: list[dict], terms_order: list[str],
     dismissed = sorted((i for i in matches if i.get("dismissed")),
                        key=lambda i: i.get("added", ""), reverse=True)
     applied = sum(1 for i in matches if i.get("applied"))
+    saved = sum(1 for i in matches if i.get("saved"))
 
     def render(n: int, d_n: int) -> str:
         shown, overflow = active[:n], active[n:]
         d_shown, d_overflow = dismissed[:d_n], dismissed[d_n:]
         parts = [
-            f"**{len(active)} matches · {applied} applied · "
+            f"**{len(active)} matches · {applied} applied · {saved} saved · "
             f"{len(dismissed)} hidden** — updated "
             f"{now.strftime('%b %d, %I:%M %p UTC').lstrip('0')}",
             "",
             "Maintained automatically by intern-watch. **Tick a row's "
             "checkbox once you've applied** — it is read back into state on "
-            "the next run. Tick **🚫 hide** to move a row to the Hidden "
-            "section. Any other edit to this issue gets overwritten.",
+            "the next run. Tick **⭐ saved** to bookmark a row for later. "
+            "Tick **🚫 hide** to move a row to the Hidden section. Any "
+            "other edit to this issue gets overwritten.",
             "",
             "To get tailored resumes: tick the **📄 build resume** box under "
             "each job you want, then tick the trigger below. Already-built "
@@ -273,6 +294,11 @@ def sync_user(state: dict, user: str, terms_order: list[str],
                     state, user,
                     {by_short[s] for s in hidden if s in by_short},
                     {by_short[s] for s in h_present if s in by_short})
+                saved, s_present = parse_saved(body)
+                st.matches_set_saved(
+                    state, user,
+                    {by_short[s] for s in saved if s in by_short},
+                    {by_short[s] for s in s_present if s in by_short})
 
         # after read-back (so a manual restore this cycle wins first), sweep
         # long-gone postings into the Hidden section
