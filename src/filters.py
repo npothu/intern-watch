@@ -94,6 +94,13 @@ _VETERAN_ONLY_RE = re.compile(
     r"\bveterans?\b|skillbridge|active duty|military fellow", re.I)
 
 
+# Job boards/aggregators jobright sometimes reports as the employer (e.g. a
+# TikTok role listed with company "Dice"). The real employer is unknowable
+# from the row, and a top-company verdict cached under the board's name would
+# apply to every future posting from it, so drop these outright.
+_AGGREGATOR_COMPANIES = {"dice"}
+
+
 # --- JD-body variants. A description mentions degrees and clearances in
 # passing far more often than a title does, so the title patterns above are
 # too trigger-happy here. No veteran check on the body at all: "veteran
@@ -347,6 +354,8 @@ class UserFilter:
         date.today()) anchors the optional stale-posting cutoff."""
         if today is None:
             today = date.today()
+        if norm_company(job.company) in _AGGREGATOR_COMPANIES:
+            return "eliminated:aggregator-board"
         if self.elim_max_age_days is not None and job.date_posted is not None \
                 and job.date_posted < today - timedelta(days=self.elim_max_age_days):
             return "eliminated:stale"

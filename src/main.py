@@ -28,7 +28,7 @@ from .dedupe import dedupe
 from .filters import UserFilter, Verdict, load_users
 from .llm import api_key_env_for, classify
 from .models import Job, SourceConfig
-from .normalize import norm_company
+from .normalize import extract_jobright_id, norm_company
 from .notify import (build_digest, build_email, build_health_email,
                      match_item, primary_term, send_discord, send_email)
 from .resume.build import build_for_job, resume_build_cfg
@@ -123,7 +123,8 @@ class _JobrightEnricher:
     Fail open: any fetch/parse miss keeps the job and the description stays None.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, session=None) -> None:
+        self.session = session
         self.client: httpx.Client | None = None
         self.fetched = 0
         self.attempted: set[str] = set()
@@ -149,8 +150,17 @@ class _JobrightEnricher:
             return True
         self.attempted.add(job.dedup_key)
         try:
-            job.description = fetch_description(self._ensure_client(),
-                                                job.jobright_id)
+            # The authed fetch carries the JD and the employer link in one
+            # request (the later resolve step hits the session memo), but a
+            # broken login must not cost the JD we used to get anonymously.
+            if self.session is not None:
+                from .adapters.jobright_page import compose_description
+                job_result = self.session.fetch_job_result(job.jobright_id)
+                if job_result:
+                    job.description = compose_description(job_result)
+            if not job.description:
+                job.description = fetch_description(self._ensure_client(),
+                                                    job.jobright_id)
             self.fetched += 1
         except Exception as exc:  # noqa: BLE001 - a jobright change must never
             log.warning("jobright JD fetch failed for %s (%s) -- keeping job",
@@ -211,6 +221,28 @@ def _drop_content_dupes(state: dict, name: str,
         st.content_mark(state, name, sig, job.dedup_key, today)
         kept.append((job, reasons))
     return kept
+
+
+def _resolve_employer_urls(accepted: list[tuple[Job, list[str]]], state: dict,
+                           resolver) -> None:
+    """Resolve accepted jobright jobs to their employer apply url, so email,
+    dashboard and webui snapshots show it instead of the info page. Fails open:
+    keeps the jobright url when there is no resolver, the url is already an
+    employer link, or resolution returns nothing. Runs before any display
+    snapshot is taken and never touches job.jobright_id."""
+    if resolver is None:
+        return
+    for job, _reasons in accepted:
+        jr_id = extract_jobright_id(job.url)
+        if jr_id is None:
+            continue
+        url = st.apply_url_get(state, job.dedup_key)
+        if url is None:
+            url = resolver.resolve_apply_url(jr_id)
+            if url is not None:
+                st.apply_url_put(state, job.dedup_key, url)
+        if url is not None:
+            job.url = url
 
 
 def _finalize(uf: UserFilter, job: Job, facts: dict) -> Verdict:
@@ -281,7 +313,8 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
 
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
-                 enricher: "_JobrightEnricher | None" = None) -> None:
+                 enricher: "_JobrightEnricher | None" = None,
+                 resolver=None) -> None:
     uf = UserFilter(user_cfg, ROOT)
     name = uf.name
     llm_cfg = user_cfg.get("llm", {})
@@ -373,6 +406,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # neither builds a resume nor reaches the email/dashboard.
     terms_order = list(user_cfg.get("terms_wanted", []))
     accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
+    _resolve_employer_urls(accepted, state, resolver)
 
     # ---- Auto resume build (commit/email modes): tailor a .docx per accepted
     # job into resumes/<user>/ so both delivery modes can find the file. Built
@@ -769,7 +803,9 @@ def main(argv: list[str] | None = None) -> int:
         relevant |= st.pending_keys(state, user_cfg["name"])
     enrich_jds([merged_by_key[k] for k in relevant if k in merged_by_key])
 
-    enricher = _JobrightEnricher()
+    from .adapters.jobright_auth import JobrightSession
+    resolver = JobrightSession.from_env()
+    enricher = _JobrightEnricher(session=resolver)
     for user_cfg in users:
         name = user_cfg["name"]
         candidates = list(new_jobs)
@@ -784,10 +820,18 @@ def main(argv: list[str] | None = None) -> int:
                 candidates.append(job)
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
-                         send_now=args.send_now, enricher=enricher)
+                         send_now=args.send_now, enricher=enricher,
+                         resolver=resolver)
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()
+    if resolver is not None and resolver.auth_failed_msg:
+        st.record_source_failure(state, "jobright-auth", resolver.auth_failed_msg,
+                                 today, floor=st.HEALTH_ALERT_AFTER)
+    elif resolver is not None and resolver.succeeded:
+        st.record_source_success(state, "jobright-auth")
+    if resolver is not None:
+        resolver.close()
 
     st.prune(state, today)
     if args.dry_run:

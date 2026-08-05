@@ -95,6 +95,14 @@ def was_notified(state: dict, key: str, user: str) -> bool:
     return user in state["jobs"].get(key, {}).get("notified_for", [])
 
 
+def apply_url_get(state: dict, key: str) -> str | None:
+    return state["jobs"].get(key, {}).get("apply_url")
+
+
+def apply_url_put(state: dict, key: str, url: str) -> None:
+    state["jobs"].setdefault(key, {})["apply_url"] = url
+
+
 # "pending" = this user still owes a decision/notification for the job
 # (LLM cost-guard deferral, API failure, or webhook non-2xx). Pending jobs are
 # re-fed into that user's pipeline on the next run even though they are no
@@ -163,13 +171,13 @@ def company_top_put(state: dict, company: str, user: str, verdict: bool,
 # only in Actions logs. An entry exists only while a source is failing.
 
 def record_source_failure(state: dict, name: str, error: str,
-                          today: dt.date) -> int:
+                          today: dt.date, floor: int = 0) -> int:
     """Bump the consecutive-failure count for `name`; returns the new count."""
     health = state["_meta"].setdefault("source_health", {})
     e = health.setdefault(name, {"consecutive_failures": 0,
                                  "first_failure": today.isoformat(),
                                  "alerted_for": []})
-    e["consecutive_failures"] += 1
+    e["consecutive_failures"] = max(e["consecutive_failures"] + 1, floor)
     e["last_error"] = str(error)[:300]
     return e["consecutive_failures"]
 

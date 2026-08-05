@@ -167,6 +167,20 @@ def test_max_age_days_keeps_unknown_date():
     assert uf.evaluate(job, today=today).status == "accept"
 
 
+@pytest.mark.parametrize("company", ["Dice", "dice", "Dice Inc"])
+def test_aggregator_board_company_rejected(uf, company):
+    v = uf.evaluate(_job(company=company, terms=["Summer 2027"], locations=["Boise, ID"]))
+    assert v.status == "reject"
+    assert "eliminated:aggregator-board" in v.reasons
+
+
+def test_non_aggregator_company_not_rejected(uf):
+    v = uf.evaluate(_job(company="Palantir Technologies", terms=["Summer 2027"],
+                         locations=["Boise, ID"]))
+    assert v.status == "accept"
+    assert "eliminated:aggregator-board" not in v.reasons
+
+
 @pytest.mark.parametrize("loc,expected", [
     ("Atlanta, GA", True),
     ("Alpharetta, GA", True),

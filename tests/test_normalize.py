@@ -4,7 +4,7 @@ import pytest
 
 from src.normalize import (extract_jobright_id, infer_terms, norm_company,
                            normalize_url, parse_month_day, split_locations,
-                           strip_tracking)
+                           strip_html, strip_tracking)
 
 TODAY = dt.date(2026, 6, 11)
 
@@ -86,6 +86,14 @@ def test_extract_jobright_id():
         "https://x.com/job?a=1&jr_id=69eaa8e4dc35f7132c4ab803") \
         == "69eaa8e4dc35f7132c4ab803"
     assert extract_jobright_id("https://x.com/job") is None
+
+
+def test_strip_html_drops_script_style_noscript_content():
+    html = ("<html><head><style>.a{color:red}</style>"
+            "<script>var x = 1; document.write('bad');</script></head>"
+            "<body><p>Hello world</p><noscript>no js msg</noscript>"
+            "<p>Goodbye</p></body></html>")
+    assert strip_html(html) == "Hello world Goodbye"
 
 
 def test_parse_month_day_year_rollover():

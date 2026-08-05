@@ -3,7 +3,7 @@ from pathlib import Path
 
 from src import state as st
 from src.models import Job
-from src.notify import CHUNK_LIMIT, build_digest
+from src.notify import CHUNK_LIMIT, build_digest, match_item
 
 NOW = dt.datetime(2026, 6, 11, 18, 0, tzinfo=dt.timezone.utc)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
@@ -87,3 +87,53 @@ def test_prune_on_last_seen(tmp_path: Path):
     st.touch(state, "fresh", ["s"], dt.date(2026, 6, 10))  # seen again recently
     assert st.prune(state, dt.date(2026, 6, 11), keep_days=120) == 1
     assert "fresh" in state["jobs"] and "old" not in state["jobs"]
+
+# --------------------------------------------------- apply_url + floor
+
+def test_apply_url_get_put_roundtrip():
+    state = st.empty_state()
+    assert st.apply_url_get(state, "jr:abc") is None
+    st.apply_url_put(state, "jr:abc", "https://employer.com/jobs/1")
+    assert st.apply_url_get(state, "jr:abc") == "https://employer.com/jobs/1"
+    # put creates a missing job entry and overwrites a cached url
+    st.apply_url_put(state, "jr:zzz", "https://e2.com")
+    st.apply_url_put(state, "jr:abc", "https://employer.com/jobs/2")
+    assert st.apply_url_get(state, "jr:abc") == "https://employer.com/jobs/2"
+    assert st.apply_url_get(state, "jr:zzz") == "https://e2.com"
+
+
+def test_record_source_failure_floor(tmp_path):
+    state = st.load_state(tmp_path / "seen.json")
+    assert st.record_source_failure(state, "s1", "x", dt.date(2026, 6, 11)) == 1
+    assert st.record_source_failure(state, "s1", "x", dt.date(2026, 6, 11),
+                                    floor=9) == 9
+    # a floor never lowers a count that already climbed past it
+    assert st.record_source_failure(state, "s1", "x", dt.date(2026, 6, 11),
+                                    floor=2) == 10
+    # default floor leaves a plain increment unchanged
+    assert st.record_source_failure(state, "s2", "x", dt.date(2026, 6, 11)) == 1
+
+
+def test_match_item_carries_employer_url_and_jobright_url():
+    job = Job(company="Acme", title="SWE Intern", url="https://acme.com/jobs/1",
+              source="s", jobright_id="aaaaaaaaaaaaaaaaaaaaaaaa")
+    item = match_item(job, ["always"], ["Fall 2026"])
+    assert item["url"] == "https://acme.com/jobs/1"
+    assert item["jobright_url"] == "https://jobright.ai/jobs/info/aaaaaaaaaaaaaaaaaaaaaaaa"
+    assert item["jobright_id"] == "aaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+def test_match_item_no_jobright_url_when_url_still_jobright():
+    jr_url = "https://jobright.ai/jobs/info/aaaaaaaaaaaaaaaaaaaaaaaa"
+    job = Job(company="Acme", title="SWE Intern", url=jr_url,
+              source="s", jobright_id="aaaaaaaaaaaaaaaaaaaaaaaa")
+    item = match_item(job, ["always"], ["Fall 2026"])
+    assert "jobright_url" not in item
+
+
+def test_match_item_no_jobright_keys_without_id():
+    job = Job(company="Acme", title="SWE Intern", url="https://x.com/1",
+              source="s")
+    item = match_item(job, ["always"], ["Fall 2026"])
+    assert "jobright_url" not in item
+    assert "jobright_id" not in item

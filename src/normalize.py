@@ -9,15 +9,21 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # ------------------------------------------------------------------- html
 
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style|noscript)\b[^>]*>.*?</\1>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
 def strip_html(text: str) -> str:
     """HTML (possibly entity-escaped, e.g. Greenhouse `content`) -> plain
-    text with collapsed whitespace."""
+    text with collapsed whitespace. <script>/<style>/<noscript> element
+    CONTENT is dropped (not just their tags) before the general tag strip,
+    so embedded JS/CSS -- e.g. a Next.js hydration payload -- never leaks
+    into the result."""
     text = html_mod.unescape(text)
     if re.search(r"&(?:#\d+|#x[0-9a-f]+|[a-z]+);", text, re.I):
         text = html_mod.unescape(text)      # double-escaped payloads
+    text = _SCRIPT_STYLE_RE.sub(" ", text)
     text = _TAG_RE.sub(" ", text)
     return _WS_RE.sub(" ", text).strip()
 
