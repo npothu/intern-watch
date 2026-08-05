@@ -113,7 +113,7 @@
   h2 .n { color: var(--ink-2); font-weight: 400; letter-spacing: 0; margin-left: 6px; }
   .rows { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
   .row {
-    display: grid; grid-template-columns: 22px minmax(0,1fr) auto;
+    display: grid; grid-template-columns: 40px minmax(0,1fr) auto;
     gap: 2px 12px; padding: 10px 12px; border-top: 1px solid var(--line);
     align-items: start;
   }
@@ -208,9 +208,10 @@
     border-width: 0 2px 2px 0; transform: rotate(42deg);
   }
   .tick input:disabled + span { opacity: .4; cursor: not-allowed; }
+  .tick.save span { border-color: color-mix(in srgb, var(--amber) 55%, var(--line-2)); }
   .tick.save input:checked + span { background: var(--amber); border-color: var(--amber); }
   .tick.save input:checked + span::after { border-color: var(--accent-ink); }
-  .ticks { display: flex; flex-direction: column; gap: 6px; }
+  .ticks { display: flex; flex-direction: row; gap: 6px; }
 
   /* JD paste panel */
   .jd { grid-column: 1 / -1; margin-top: 8px; }
@@ -256,7 +257,7 @@
 
   @media (max-width: 640px) {
     .wrap { padding: 18px 14px 80px; }
-    .row { grid-template-columns: 22px minmax(0,1fr); }
+    .row { grid-template-columns: 40px minmax(0,1fr); }
     .trow { grid-template-columns: minmax(0,1fr); }
     .row .acts, .trow .acts {
       grid-column: 1 / -1; grid-row: auto;
