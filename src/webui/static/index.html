@@ -113,7 +113,7 @@
   h2 .n { color: var(--ink-2); font-weight: 400; letter-spacing: 0; margin-left: 6px; }
   .rows { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
   .row {
-    display: grid; grid-template-columns: 22px minmax(0,1fr) auto;
+    display: grid; grid-template-columns: 40px minmax(0,1fr) auto;
     gap: 2px 12px; padding: 10px 12px; border-top: 1px solid var(--line);
     align-items: start;
   }
@@ -208,6 +208,10 @@
     border-width: 0 2px 2px 0; transform: rotate(42deg);
   }
   .tick input:disabled + span { opacity: .4; cursor: not-allowed; }
+  .tick.save span { border-color: color-mix(in srgb, var(--amber) 55%, var(--line-2)); }
+  .tick.save input:checked + span { background: var(--amber); border-color: var(--amber); }
+  .tick.save input:checked + span::after { border-color: var(--accent-ink); }
+  .ticks { display: flex; flex-direction: row; gap: 6px; }
 
   /* JD paste panel */
   .jd { grid-column: 1 / -1; margin-top: 8px; }
@@ -253,7 +257,7 @@
 
   @media (max-width: 640px) {
     .wrap { padding: 18px 14px 80px; }
-    .row { grid-template-columns: 22px minmax(0,1fr); }
+    .row { grid-template-columns: 40px minmax(0,1fr); }
     .trow { grid-template-columns: minmax(0,1fr); }
     .row .acts, .trow .acts {
       grid-column: 1 / -1; grid-row: auto;
@@ -292,6 +296,7 @@
         <option value="all">All</option>
         <option value="todo">To apply</option>
         <option value="applied">Applied</option>
+        <option value="saved">Saved</option>
         <option value="resume">Has resume</option>
         <option value="agent">Agent touched</option>
         <option value="stale">Likely closed</option>
@@ -406,6 +411,7 @@ function visible(m) {
   if (UI.term !== "All" && (m.term || "Unknown term") !== UI.term) return false;
   if (UI.status === "todo" && m.applied) return false;
   if (UI.status === "applied" && !m.applied) return false;
+  if (UI.status === "saved" && !m.saved) return false;
   if (UI.status === "resume" && !(m.resume || m.local_resume)) return false;
   if (UI.status === "agent" && !m.artifacts) return false;
   if (UI.status === "stale" && !likelyClosed(m)) return false;
@@ -447,9 +453,14 @@ function rowHtml(m) {
       ? `<button class="btn quiet" data-restore="${m.short}" title="restore to the matches list">${ICON.undo} restore</button>`
       : `<button class="btn quiet x" data-dismiss="${m.short}" title="hide — moves to the issue's Hidden section">${ICON.x}</button>`;
   return `<div class="row ${m.applied ? "applied" : ""}${isNew ? " new" : ""}" id="r-${m.short}">
-    <label class="tick" title="${canWrite ? "applied — writes through the dashboard issue" : "read-only (no GitHub token)"}">
-      <input type="checkbox" data-applied="${m.short}" ${m.applied ? "checked" : ""} ${canWrite ? "" : "disabled"}><span></span>
-    </label>
+    <div class="ticks">
+      <label class="tick" title="${canWrite ? "applied — writes through the dashboard issue" : "read-only (no GitHub token)"}">
+        <input type="checkbox" data-applied="${m.short}" ${m.applied ? "checked" : ""} ${canWrite ? "" : "disabled"}><span></span>
+      </label>
+      <label class="tick save" title="${canWrite ? "saved — bookmark for later, writes through the dashboard issue" : "read-only (no GitHub token)"}">
+        <input type="checkbox" data-saved="${m.short}" ${m.saved ? "checked" : ""} ${canWrite ? "" : "disabled"}><span></span>
+      </label>
+    </div>
     <div class="head">
       ${isNew ? '<span class="newdot" title="new since your last visit"></span>' : ""}<span class="company">${esc(m.company)}</span>${tags}${gone}
       — <a class="title" href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}${ICON.ext}</a>
@@ -466,6 +477,7 @@ function render() {
   $("#who").textContent = "— " + DATA.user;
   const active = ms.filter(m => !m.dismissed);
   const applied = active.filter(m => m.applied).length;
+  const saved = active.filter(m => m.saved).length;
   const resumes = active.filter(m => m.resume || m.local_resume).length;
   const hidden = ms.length - active.length;
   const stat = (n, label, f) =>
@@ -475,6 +487,7 @@ function render() {
     stat(applied, "applied", "applied") + " · " +
     stat(active.length - applied, "to go", "todo") + " · " +
     stat(resumes, "resumes", "resume") +
+    (saved ? " · " + stat(saved, "saved", "saved") : "") +
     (hidden ? " · " + stat(hidden, "hidden", "hidden") : "");
   const t = new Date(DATA.generated);
   $("#updated").textContent = "as of " +
@@ -669,6 +682,20 @@ async function setDismissed(short, dismissed) {
   }
 }
 
+async function setSaved(short, saved) {
+  const m = DATA.matches.find(m => m.short === short);
+  m.saved = saved;                // optimistic
+  render();
+  const res = await api("/api/saved", { short, saved });
+  if (res.error) {
+    m.saved = !saved;
+    render();
+    toast(res.error, true);
+  } else if (res.queued) {
+    toast("Row is off the issue — queued a state write, lands in ~1 min");
+  }
+}
+
 async function setStatus(short, status, note) {
   const rec = DATA.applications[short];
   const prev = rec.status;
@@ -812,6 +839,8 @@ document.addEventListener("click", e => {
 document.addEventListener("change", e => {
   if (e.target.dataset.applied)
     setApplied(e.target.dataset.applied, e.target.checked, e.target);
+  else if (e.target.dataset.saved)
+    setSaved(e.target.dataset.saved, e.target.checked);
   else if (e.target.dataset.setst)
     setStatus(e.target.dataset.setst, e.target.value);
 });
@@ -865,6 +894,11 @@ document.addEventListener("keydown", e => {
     setApplied(cursor, !box.checked, box);
   } else if (k === "h") {
     setDismissed(cursor, true);
+  } else if (k === "s") {
+    const box = $(`#r-${cursor} input[data-saved]`);
+    if (!box) return;
+    if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
+    setSaved(cursor, !box.checked);
   }
 });
 

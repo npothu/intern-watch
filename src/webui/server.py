@@ -98,6 +98,8 @@ class Hub:
         self.present: set[str] | None = None
         self.hidden: set[str] | None = None
         self.h_present: set[str] | None = None
+        self.saved: set[str] | None = None
+        self.s_present: set[str] | None = None
         self.local_resumes: dict[str, str] = {}  # short -> filename in out/
         self.ledger: dict = {}  # state/applications.json from origin/main
         # workflow-dispatched writes not yet visible in state; overlaid on
@@ -152,7 +154,7 @@ class Hub:
 
         number = state.get("_meta", {}).get("dashboard_issue", {}) \
                       .get(self.user)
-        checked = present = hidden = h_present = None
+        checked = present = hidden = h_present = saved = s_present = None
         issue_url = ""
         if number and self.token and self.repo:
             try:
@@ -163,6 +165,7 @@ class Hub:
                 body = issue.get("body") or ""
                 checked, present = dashboard.parse_checkboxes(body)
                 hidden, h_present = dashboard.parse_dismissed(body)
+                saved, s_present = dashboard.parse_saved(body)
             except httpx.HTTPError as exc:
                 warnings.append(f"couldn't read dashboard issue #{number} "
                                 f"({exc.__class__.__name__}) — applied ticks "
@@ -180,6 +183,7 @@ class Hub:
             self.issue_url = issue_url
             self.checked, self.present = checked, present
             self.hidden, self.h_present = hidden, h_present
+            self.saved, self.s_present = saved, s_present
             self.warnings = warnings
 
     # -- reads ----------------------------------------------------------
@@ -189,7 +193,8 @@ class Hub:
         with self.lock:
             matches = core.shape_matches(
                 st.matches_items(self.state, self.user),
-                self.checked, self.present, self.hidden, self.h_present)
+                self.checked, self.present, self.hidden, self.h_present,
+                self.saved, self.s_present)
             jobs = self.state.get("jobs", {})
             local = dict(self.local_resumes)
             book = {s: dict(r)
@@ -312,6 +317,12 @@ class Hub:
         return {"ok": True, "short": short, "dismissed": dismissed,
                 "queued": queued}
 
+    def set_saved(self, short: str, saved: bool) -> dict:
+        queued = self._write_box(core.flip_saved, short, saved,
+                                 "saved", "saved")
+        return {"ok": True, "short": short, "saved": saved,
+                "queued": queued}
+
     def set_status(self, short: str, status: str, note: str = "") -> dict:
         """Tracker status update — always workflow-mediated (statuses have
         no issue checkbox). The pending overlay carries it until the
@@ -428,6 +439,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.hub.set_dismissed(
                     str(body.get("short", "")),
                     bool(body.get("dismissed"))))
+            elif self.path == "/api/saved":
+                body = self._read_body()
+                self._json(self.hub.set_saved(str(body.get("short", "")),
+                                              bool(body.get("saved"))))
             elif self.path == "/api/status":
                 body = self._read_body()
                 self._json(self.hub.set_status(

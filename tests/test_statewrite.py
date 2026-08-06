@@ -31,6 +31,16 @@ def test_apply_write_applied_roundtrip():
     assert state["matches"]["u"][0]["applied"] is False
 
 
+def test_apply_write_saved_roundtrip():
+    state = st.empty_state()
+    state["matches"]["u"] = [_item("url:a")]
+    assert statewrite.apply_write(state, "u", _short("url:a"),
+                                  "saved", True)["saved"] is True
+    assert state["matches"]["u"][0]["saved"] is True
+    statewrite.apply_write(state, "u", _short("url:a"), "saved", False)
+    assert state["matches"]["u"][0]["saved"] is False
+
+
 def test_apply_write_dismiss_and_restore_mirror_issue_semantics():
     state = st.empty_state()
     state["matches"]["u"] = [_item("url:a", restored=True)]
@@ -67,6 +77,20 @@ def test_cli_writes_state_file(tmp_path, capsys):
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["matches"]["u"][0]["dismissed"] is True
     assert "Acme" in capsys.readouterr().out
+
+
+def test_cli_writes_saved_field(tmp_path, capsys):
+    path = tmp_path / "seen.json"
+    state = st.empty_state()
+    state["matches"]["u"] = [_item("url:a")]
+    st.save_state(state, path)
+
+    rc = statewrite.main(["--user", "u", "--short", _short("url:a"),
+                          "--field", "saved", "--value", "true",
+                          "--state", str(path)])
+    assert rc == 0
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["matches"]["u"][0]["saved"] is True
 
 
 def test_cli_unknown_short_exits_nonzero(tmp_path, capsys):

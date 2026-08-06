@@ -14,6 +14,7 @@ write.
 Semantics mirror the issue read-back exactly:
 - applied: plain boolean on the match (the ledger record follows via the
   normal sync in the workflow's repaint step).
+- saved: plain boolean bookmark on the match, no side effects.
 - dismissed true: hide (clears any `restored` marker).
 - dismissed false: restore AND set the `restored` marker, so the stale-row
   auto-hide never re-hides a deliberate restore.
@@ -52,6 +53,8 @@ def apply_write(state: dict, user: str, short: str, field: str,
 
     if field == "applied":
         item["applied"] = value
+    elif field == "saved":
+        item["saved"] = value
     elif value:  # dismissed = true
         item["dismissed"] = True
         item.pop("restored", None)
@@ -85,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--short", required=True,
                     help="12-hex dashboard short key of the match")
     ap.add_argument("--field", required=True,
-                    choices=("applied", "dismissed", "status"))
+                    choices=("applied", "saved", "dismissed", "status"))
     ap.add_argument("--value", required=True,
                     help="true/false, or a status name for --field status")
     ap.add_argument("--note", default="",

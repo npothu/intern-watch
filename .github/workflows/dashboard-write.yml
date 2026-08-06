@@ -1,5 +1,5 @@
-# One dashboard write (applied / hidden toggle, or a tracker status on the
-# applications ledger) committed straight into state.
+# One dashboard write (applied / saved / hidden toggle, or a tracker status
+# on the applications ledger) committed straight into state.
 #
 # The dashboard issue only renders the newest rows (byte-budgeted), so older
 # matches have no checkbox to write through -- and tracker statuses have no
@@ -26,7 +26,7 @@ on:
         description: "which field"
         required: true
         type: choice
-        options: [applied, dismissed, status]
+        options: [applied, saved, dismissed, status]
       value:
         description: "true/false, or a status name for field=status"
         required: true

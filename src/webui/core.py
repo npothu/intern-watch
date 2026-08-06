@@ -44,16 +44,22 @@ def flip_dismissed(body: str, short: str, dismissed: bool) -> str | None:
     return _flip(body, "iwd", short, dismissed)
 
 
+def flip_saved(body: str, short: str, saved: bool) -> str | None:
+    return _flip(body, "iws", short, saved)
+
+
 def shape_matches(matches: list[dict], checked: set[str] | None = None,
                   present: set[str] | None = None,
                   hidden: set[str] | None = None,
-                  h_present: set[str] | None = None) -> list[dict]:
+                  h_present: set[str] | None = None,
+                  saved: set[str] | None = None,
+                  s_present: set[str] | None = None) -> list[dict]:
     """Copies of match items with the 12-hex `short` key added and, for rows
-    currently rendered on the issue (`present`/`h_present`), the issue-side
-    applied and dismissed state overlaid -- the issue is fresher than
-    seen.json between cron runs. Same rendered-only rule as
-    `state.matches_set_applied`, so a truncated dashboard can't un-apply or
-    un-hide older matches here either."""
+    currently rendered on the issue (`present`/`h_present`/`s_present`), the
+    issue-side applied/dismissed/saved state overlaid -- the issue is fresher
+    than seen.json between cron runs. Same rendered-only rule as
+    `state.matches_set_applied`, so a truncated dashboard can't un-apply,
+    un-hide, or un-save older matches here either."""
     out = []
     for item in matches:
         it = dict(item)
@@ -63,6 +69,8 @@ def shape_matches(matches: list[dict], checked: set[str] | None = None,
             it["applied"] = short in (checked or set())
         if h_present is not None and short in h_present:
             it["dismissed"] = short in (hidden or set())
+        if s_present is not None and short in s_present:
+            it["saved"] = short in (saved or set())
         out.append(it)
     return out
 

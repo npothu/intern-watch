@@ -258,6 +258,17 @@ def matches_set_applied(state: dict, user: str, checked: set[str],
             item["applied"] = key in checked
 
 
+def matches_set_saved(state: dict, user: str, saved: set[str],
+                      rendered: set[str]) -> None:
+    """Sync save-box (bookmark) state read from the dashboard issue. Same
+    rendered-only rule as matches_set_applied; unlike `dismissed`, plain
+    boolean with no side effect on the row's position."""
+    for item in state["matches"].get(user, []):
+        key = item.get("key")
+        if key in rendered:
+            item["saved"] = key in saved
+
+
 def matches_set_dismissed(state: dict, user: str, hidden: set[str],
                           rendered: set[str]) -> None:
     """Sync hide-box state read from the dashboard issue (same rendered-only
