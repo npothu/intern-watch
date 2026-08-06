@@ -35,9 +35,10 @@ with no GitHub-issue plumbing. This is optional; it is off unless you set
 
 The client is thin: `src/store.py`'s `ConvexStore` POSTs to Convex's HTTP
 public API (`/api/query` and `/api/mutation`), so no Python package or OAuth
-is involved. The server side lives in `convex/` in this repo — three tables
-(`ticks`, `applications`, `matches`, each indexed by `(user, short)`) and six
-functions (`tracker.ts`), deployed with `convex deploy`. These files are
+is involved. The server side lives in `convex/` in this repo — four tables
+(`ticks`, `applications`, `matches`, `resumes`, each indexed by
+`(user, short)`) and ten functions (`tracker.ts`), deployed with
+`convex deploy`. These files are
 inert in CI; there is no Node/npm step in any workflow.
 
 Who needs what:
@@ -53,6 +54,13 @@ Who needs what:
   --dry-run` (prints what it would write), then without the flag to copy your
   current ticks, ledger, and match snapshot in. Safe to re-run (idempotent
   upserts).
+
+Built resumes follow the same seam: with `convex`, a tailored `.docx` is
+stored in Convex file storage (a `resumes` table keyed by `(user, short)`),
+so nothing gets committed and the workflow's `git add resumes/` step finds
+nothing new. On the default `github` backend the file is written under
+`resumes/` and the existing commit step picks it up exactly as before.
+Legacy committed resumes remain served from the repo on either backend.
 
 Both the cron and the workflow repaints (the `dashboard-write` / resume
 steps) read the driver from the repo **Actions variable** `STORE` (Settings →

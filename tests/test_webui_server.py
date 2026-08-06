@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from src import state as st
 from src.store import ApiError
 from src.webui.server import Handler, Hub
 from tests.fakestore import FakeStore
@@ -147,6 +148,82 @@ def test_handler_single_and_batch_cover_all_fields(tmp_path):
         {"ok", "short", "applied", "queued"}
     assert set(_post(hub, "/api/saved", {"short": a, "saved": True})) == \
         {"ok", "short", "saved", "queued"}
+
+
+# -- resume serving over the store seam -------------------------------------
+
+def _hub_with_resume(tmp_path, remote):
+    from src import dashboard as db
+    short = db.short_key("url:https://x.com/1")
+    state = st.empty_state()
+    state["matches"]["example"] = [{
+        "key": "url:https://x.com/1", "company": "Co", "title": "SWE Intern",
+        "location": "Atlanta, GA", "url": "https://x.com/1",
+        "term": "Fall 2026", "added": "2026-06-12", "applied": False,
+        "resume": f"resumes/example/{short}/Co.docx"}]
+    fs = _writable_store()
+    fs.put_resume("example", short, "Co.docx", b"docx")
+    if remote:
+        fs.remote_resumes.add(short)
+    hub = _hub(tmp_path, store=fs)
+    hub.state = state
+    return hub, short
+
+
+def test_snapshot_attaches_remote_resume_url(tmp_path):
+    """A hosted (Convex) store serves the resume URL; the snapshot links it."""
+    hub, short = _hub_with_resume(tmp_path, remote=True)
+    m = hub.snapshot()["matches"][0]
+    assert m["resume_url"] == f"https://store.example/files/{short}"
+    assert "local_resume" not in m
+
+
+def test_snapshot_keeps_repo_path_for_github_store(tmp_path):
+    """A GitHub store returns a repo-relative path, so the snapshot keeps the
+    match's `resume` rel for the /files/repo route -- byte-identical to the
+    pre-seam flow (no resume_url key)."""
+    hub, short = _hub_with_resume(tmp_path, remote=False)
+    m = hub.snapshot()["matches"][0]
+    assert "resume_url" not in m
+    assert m["resume"] == f"resumes/example/{short}/Co.docx"
+
+
+def test_serve_file_repo_redirects_to_store_url(tmp_path):
+    """/files/repo/<rel> on a store-served resume 302s to the deployment URL
+    (no committed blob exists to git-show)."""
+    hub, short = _hub_with_resume(tmp_path, remote=True)
+    h = object.__new__(Handler)
+    h.hub = hub
+    h.headers = {}
+    h.rfile = io.BytesIO(b"")
+    h.wfile = io.BytesIO()
+    h.path = f"/files/repo/resumes/example/{short}/Co.docx"
+    out: dict = {}
+    h.send_response = lambda code=200: out.__setitem__("code", code)
+    h.send_header = lambda k, v: out.setdefault("headers", {}) \
+        .__setitem__(k, v)
+    h.end_headers = lambda: None
+    h.do_GET()
+    assert out["code"] == 302
+    assert out["headers"]["Location"] == f"https://store.example/files/{short}"
+
+
+def test_serve_file_repo_github_store_still_git_shows(tmp_path):
+    """A GitHub/legacy store serves no remote URL, so /files/repo keeps its
+    git-show serv-- tmp has no origin/main, so it fails closed to a 400."""
+    hub, short = _hub_with_resume(tmp_path, remote=False)
+    h = object.__new__(Handler)
+    h.hub = hub
+    h.headers = {}
+    h.rfile = io.BytesIO(b"")
+    h.wfile = io.BytesIO()
+    h.path = f"/files/repo/resumes/example/{short}/Co.docx"
+    h.send_response = lambda *a, **k: None
+    h.send_header = lambda *a, **k: None
+    h.end_headers = lambda: None
+    h.do_GET()
+    # the git-show path raised ApiError -> caught by do_GET as a 400
+    assert json.loads(h.wfile.getvalue())["error"] == "file not on origin/main"
 
 
 def test_handler_batch_invalid_short_errors(tmp_path):

@@ -194,3 +194,78 @@ export const getMatches = query({
     return rows.map((r) => r.item);
   },
 });
+
+// -- resume storage (built .docx artifacts) --------------------------------
+
+// Hands out a Convex file-storage upload URL. The driver POSTs the raw .docx
+// bytes to it (Content-Type the DOCX mime), reads the { storageId } from the
+// response, then calls attachResume. Gated by the secret like every endpoint:
+// anyone without TRACKER_SECRET can't mint storage space here.
+export const generateResumeUploadUrl = mutation({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { secret }) => {
+    checkSecret(secret);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+// Records a built resume's storage id on its (user, short) row, replacing any
+// earlier build: the old storage object is deleted so a rebuild never leaks
+// an orphaned file, and the row stays a single tuple per (user, short).
+export const attachResume = mutation({
+  args: {
+    user: v.string(),
+    short: v.string(),
+    filename: v.string(),
+    storageId: v.id("_storage"),
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, short, filename, storageId, secret }) => {
+    checkSecret(secret);
+    const existing = await ctx.db
+      .query("resumes")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (existing) {
+      await ctx.storage.delete(existing.storageId);
+      await ctx.db.patch(existing._id, {
+        filename,
+        storageId,
+        updatedAt: Date.now(),
+      });
+    } else {
+      await ctx.db.insert("resumes", {
+        user,
+        short,
+        filename,
+        storageId,
+        updatedAt: Date.now(),
+      });
+    }
+  },
+});
+
+// Serving URLs for a user's built resumes, one query over the by_user index
+// (never one HTTP round-trip per row). Only rows whose storage URL resolves
+// are returned. Reads are gated too - the URLs expose resumes the caller
+// must be authorized to see.
+export const getResumeUrls = query({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    const rows = await ctx.db
+      .query("resumes")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .collect();
+    const out: { short: string; url: string; filename: string }[] = [];
+    for (const row of rows) {
+      const url = await ctx.storage.getUrl(row.storageId);
+      if (url) {
+        out.push({ short: row.short, url, filename: row.filename });
+      }
+    }
+    return out;
+  },
+});

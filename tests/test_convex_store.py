@@ -404,6 +404,7 @@ def test_every_read_query_carries_the_secret(monkeypatch, tmp_path):
         "tracker:getTicks": _success([]),
         "tracker:getLedger": _success([]),
         "tracker:getMatches": _success([]),
+        "tracker:getResumeUrls": _success([]),
         "mail:getActions": _success({"actions": [], "health": None}),
     }
 
@@ -418,6 +419,102 @@ def test_every_read_query_carries_the_secret(monkeypatch, tmp_path):
     assert s.get_ledger("example") == {}
     assert s.get_matches("example") == []
     assert s.get_actions("example") == {"actions": [], "health": None}
+    assert s.get_resume_urls("example") == {}
+
+
+# -- resume storage --------------------------------------------------------
+
+def test_put_resume_uploads_and_attaches(monkeypatch, tmp_path):
+    """put_resume mints an upload URL, POSTs the DOCX bytes with the DOCX
+    content-type, then attaches the storage id to the (user, short) row."""
+    calls = []
+    upload_url = "https://storage.example.com/upload/xyz"
+
+    def handler(request):
+        url = str(request.url)
+        if url.startswith("https://test.convex.cloud"):
+            body = json.loads(request.content)
+            if body["path"] == "tracker:generateResumeUploadUrl":
+                assert body["args"] == {"user": "example", "short": "ab" * 6,
+                                        "secret": "secret"}
+                return _success(upload_url)
+            if body["path"] == "tracker:attachResume":
+                assert body["args"] == {
+                    "user": "example", "short": "ab" * 6,
+                    "filename": "Jane_Doe_Acme.docx",
+                    "storageId": "st000abc", "secret": "secret"}
+                calls.append("attach")
+                return _success(None)
+            raise AssertionError(f"unexpected convex path {body['path']}")
+        if url == upload_url:
+            assert request.headers["Content-Type"] == store.ConvexStore._DOCX_MIME
+            assert request.content == b"docx-bytes"
+            calls.append("upload")
+            return httpx.Response(200, json={"storageId": "st000abc"})
+        raise AssertionError(f"unexpected upload url {url}")
+
+    _mock_client(monkeypatch, handler)
+    ref = _make_store(monkeypatch, tmp_path).put_resume(
+        "example", "ab" * 6, "Jane_Doe_Acme.docx", b"docx-bytes")
+    # the bytes land before the row is attached
+    assert calls == ["upload", "attach"]
+    assert ref == "st000abc"
+
+
+def test_put_resume_raises_when_upload_is_degraded(monkeypatch, tmp_path):
+    def handler(request):
+        url = str(request.url)
+        if url.startswith("https://test.convex.cloud"):
+            body = json.loads(request.content)
+            if body["path"] == "tracker:generateResumeUploadUrl":
+                return _success("https://storage.example.com/upload")
+            raise AssertionError(f"must not attach: {body['path']}")
+        return httpx.Response(500)  # upload fails
+
+    _mock_client(monkeypatch, handler)
+    with pytest.raises(store.ApiError):
+        _make_store(monkeypatch, tmp_path).put_resume(
+            "example", "ab" * 6, "Jane_Doe_Acme.docx", b"docx-bytes")
+
+
+def test_get_resume_urls_returns_serving_urls(monkeypatch, tmp_path):
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "tracker:getResumeUrls"
+        assert body["args"] == {"user": "example", "secret": "secret"}
+        return _success([
+            {"short": "ab" * 6,
+             "url": "https://test.convex.cloud/api/storage/abc",
+             "filename": "Jane_Doe_Acme.docx"},
+            {"short": "cd" * 6,
+             "url": "https://test.convex.cloud/api/storage/def",
+             "filename": "Jane_Doe_Beta.docx"},
+        ])
+
+    _mock_client(monkeypatch, handler)
+    assert _make_store(monkeypatch, tmp_path).get_resume_urls("example") == {
+        "ab" * 6: "https://test.convex.cloud/api/storage/abc",
+        "cd" * 6: "https://test.convex.cloud/api/storage/def",
+    }
+
+
+def test_get_resume_urls_empty_when_absent(monkeypatch, tmp_path):
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "tracker:getResumeUrls"
+        return _success([])
+
+    _mock_client(monkeypatch, handler)
+    assert _make_store(monkeypatch, tmp_path).get_resume_urls("example") == {}
+
+
+def test_get_resume_urls_empty_on_api_error(monkeypatch, tmp_path):
+    def handler(request):
+        return httpx.Response(200, json={"status": "error",
+                                          "errorMessage": "boom"})
+
+    _mock_client(monkeypatch, handler)
+    assert _make_store(monkeypatch, tmp_path).get_resume_urls("example") == {}
 
 
 # -- constructor + factory -------------------------------------------------
@@ -596,6 +693,8 @@ def test_hub_with_convex_store_refresh_overlays_ticks(monkeypatch, tmp_path):
         if body["path"] == "tracker:getTicks":
             return _success(convex_rows)
         if body["path"] == "tracker:getLedger":
+            return _success([])
+        if body["path"] == "tracker:getResumeUrls":
             return _success([])
         raise AssertionError(f"unexpected convex call {body['path']}")
 

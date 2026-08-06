@@ -216,9 +216,17 @@ class Hub:
                           "writable": self.writable},
                 "repo": self.repo,
             }
+        # Store-served resumes (ConvexStore), one batched call. A GitHub
+        # store returns {} -- those rows keep the /files/repo route below.
+        # A local build always wins the button.
+        resume_urls = self.store.get_resume_urls(self.user)
         for item in matches:
             if item["short"] in local:
                 item["local_resume"] = local[item["short"]]
+            if item.get("resume") and "local_resume" not in item:
+                _url = resume_urls.get(item["short"])
+                if _url:
+                    item["resume_url"] = _url
             rec = book.get(item["short"])
             if rec:  # tracker status from the permanent ledger
                 item["status"] = rec.get("status")
@@ -260,6 +268,21 @@ class Hub:
                 if dashboard.short_key(item.get("key", "")) == short:
                     return dict(item)
         return None
+
+    def store_resume_href(self, rel: str) -> str | None:
+        """A store-served serving URL for the committed resume path `rel`
+        (ConvexStore), or None when the store serves repo-relative paths
+        (GitHub) or the row has none -- the caller then keeps the git-show
+        serving that `/files/repo` always had."""
+        with self.lock:
+            short = None
+            for item in st.matches_items(self.state, self.user):
+                if item.get("resume") == rel:
+                    short = dashboard.short_key(item["key"])
+                    break
+        if short is None:
+            return None
+        return self.store.get_resume_urls(self.user).get(short)
 
     # -- writes ---------------------------------------------------------
 
@@ -507,6 +530,15 @@ class Handler(BaseHTTPRequestHandler):
             blob = rel[len("repo/"):]
             if not _REPO_FILE_RE.fullmatch(blob) or ".." in blob:
                 raise ApiError("no such file")
+            href = self.hub.store_resume_href(blob)
+            if href:
+                # A store-served resume (convex) has no committed blob; the
+                # store resolves a serving URL, so redirect the browser to it.
+                # GitHub/legacy files keep the git-show serving below.
+                self.send_response(302)
+                self.send_header("Location", href)
+                self.end_headers()
+                return
             try:
                 data = _git(self.hub.root, "show", f"origin/main:{blob}")
             except subprocess.CalledProcessError as exc:
