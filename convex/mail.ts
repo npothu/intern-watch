@@ -9,6 +9,8 @@ import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { classifyReply, decideTransition, scoreCandidates, stripHtml } from "./classify";
+import { applyStatus } from "./ledger";
 
 // Gmail push -> mail-sync backend.
 //
@@ -152,10 +154,15 @@ export const resolveAction = mutation({
       state: "resolved",
       resolution: { short, status, at },
     });
-    // TODO(Phase 3): write through to the applications ledger for this
-    // (user, short) via recordStatus so a resolved action lands in the
-    // permanent ledger. Phase 1 keeps the change scoped to the inboxActions
-    // row only.
+    // Write through to the applications ledger via the shared helper, so a
+    // resolved action is indistinguishable from a hand-set status (snapshot
+    // backfill included). The note keeps the email evidence + deep link.
+    await applyStatus(ctx.db, {
+      user,
+      short,
+      status,
+      note: `from email: "${row.evidence}" - ${gmailLink(row.accountEmail, row.gmailMessageId)}`,
+    });
   },
 });
 
@@ -191,6 +198,33 @@ export const listMessageIds = internalQuery({
       .withIndex("by_user", (q) => q.eq("user", user))
       .collect();
     return rows.map((r) => r.gmailMessageId);
+  },
+});
+
+// The user's tracked applications shaped for the candidate scorer: display
+// fields from the snapshot plus the live status. `sync` runs the scorer in
+// the action; recordOutcome re-reads the chosen row transactionally.
+export const listApplications = internalQuery({
+  args: { user: v.string() },
+  handler: async (ctx, { user }) => {
+    const rows = await ctx.db
+      .query("applications")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .collect();
+    return rows.map((r) => {
+      const snap = (r.snapshot ?? {}) as {
+        company?: string;
+        title?: string;
+        url?: string;
+      };
+      return {
+        short: r.short,
+        company: snap.company ?? "",
+        title: snap.title ?? "",
+        url: snap.url ?? "",
+        status: r.status,
+      };
+    });
   },
 });
 
@@ -288,10 +322,64 @@ export const stampWatchExpired = internalMutation({
   },
 });
 
-// Record a processed Gmail message. This is the idempotency barrier: a user +
+// The Gmail deep link stored in ledger notes and used by the webui rows.
+function gmailLink(accountEmail: string, gmailMessageId: string): string {
+  return (
+    "https://mail.google.com/mail/?authuser=" +
+    encodeURIComponent(accountEmail) +
+    "#all/" +
+    encodeURIComponent(gmailMessageId)
+  );
+}
+
+// Auto-apply bar: exactly one candidate decisively ahead of the runner-up.
+// The webui preselects the top candidate with the SAME rule, so what the
+// backend would have auto-applied is what the human sees preselected.
+function decisiveCandidate(
+  cands: Array<{ short: string; score: number }>,
+): string | null {
+  if (cands.length === 0 || cands[0].score < 3) return null;
+  if (cands.length > 1 && cands[1].score * 2 > cands[0].score) return null;
+  return cands[0].short;
+}
+
+// RFC 2822 Date header -> ISO string (webui rows slice(0, 10) it). Falls back
+// to "now" when the header is missing or unparseable.
+function receivedAtIso(dateHeader: string): string {
+  const t = Date.parse(dateHeader);
+  return Number.isFinite(t) ? new Date(t).toISOString() : new Date().toISOString();
+}
+
+const CLASSIFICATION = v.object({
+  signal: v.string(),
+  evidence: v.string(),
+  source: v.string(), // "regex" | "llm"
+});
+
+const CANDIDATE = v.object({
+  short: v.string(),
+  company: v.string(),
+  title: v.string(),
+  score: v.number(),
+});
+
+// Record a processed Gmail message and dispatch its outcome. This is the
+// idempotency barrier AND the transactional decision point: a user +
 // gmailMessageId that already has a row (outcome auto | action | ignored) is
 // never processed twice, no matter how Pub/Sub redelivers or how many syncs
-// race. `sync` pre-checks listMessageIds only to avoid re-fetching from Gmail.
+// race, and the auto-vs-queue decision re-reads the application's CURRENT
+// status inside the mutation so racing syncs can't double-advance it.
+//
+// Outcomes:
+//  - no classification -> "ignored" row only.
+//  - decisive candidate + regex source + forward transition -> "auto": the
+//    shared ledger helper writes the status with an evidence + deep-link note.
+//  - decisive but the transition says "skip" (already at that status) ->
+//    "ignored" (signal kept on the row for debugging).
+//  - everything else (ambiguous, LLM-sourced, backward/terminal transition)
+//    -> "action": a pending inboxActions row for human resolution; a pending
+//    action on the same thread is UPDATED, not duplicated, so an email chain
+//    yields one queue entry.
 export const recordOutcome = internalMutation({
   args: {
     user: v.string(),
@@ -303,9 +391,14 @@ export const recordOutcome = internalMutation({
       date: v.string(),
       messageId: v.string(),
     }),
-    body: v.string(),
+    accountEmail: v.string(),
+    classification: v.optional(CLASSIFICATION),
+    candidates: v.optional(v.array(CANDIDATE)),
   },
-  handler: async (ctx, { user, gmailMessageId, threadId }) => {
+  handler: async (
+    ctx,
+    { user, gmailMessageId, threadId, headers, accountEmail, classification, candidates },
+  ) => {
     const existing = await ctx.db
       .query("mailMessages")
       .withIndex("by_user_message", (q) =>
@@ -314,25 +407,105 @@ export const recordOutcome = internalMutation({
       .first();
     if (existing) return;
 
-    // TODO(Phase 3): classifier + dispatch. Replace this "ignored" branch with
-    // the classify-and-route logic:
-    //   1. classify the recruiter signal from headers.from/headers.subject and
-    //      the decoded body (TypeScript port of src/* classifyReply).
-    //   2. if a recruiter signal, match against this user's applications
-    //      (local short/status + the mail-sync heuristics in src/mail_sync)
-    //      via threadId / message-id correlation.
-    //   3. on a match, either auto-update the application status (outcome
-    //      "auto") or enqueue an inboxAction (outcome "action"), using the
-    //      account email + receivedAt so the dashboard rows populate.
-    // The args already carry everything Phase 3 needs (headers + body) - only
-    // this branch changes.
-    await ctx.db.insert("mailMessages", {
-      user,
+    const record = async (outcome: string, signal?: string, short?: string) => {
+      await ctx.db.insert("mailMessages", {
+        user,
+        gmailMessageId,
+        threadId,
+        processedAt: Date.now(),
+        outcome,
+        signal,
+        short,
+      });
+    };
+
+    if (!classification) {
+      await record("ignored");
+      return;
+    }
+    const { signal, evidence, source } = classification;
+    const cands = candidates ?? [];
+
+    // Auto path: regex-sourced only (LLM verdicts always queue), decisively
+    // matched, and a forward transition against the CURRENT status.
+    const decisive = source === "regex" ? decisiveCandidate(cands) : null;
+    if (decisive) {
+      const app = await ctx.db
+        .query("applications")
+        .withIndex("by_user_short", (q) =>
+          q.eq("user", user).eq("short", decisive),
+        )
+        .first();
+      const decision = decideTransition(app?.status ?? null, signal);
+      if (decision === "apply") {
+        await applyStatus(ctx.db, {
+          user,
+          short: decisive,
+          status: signal,
+          note: `auto from email: "${evidence}" - ${gmailLink(accountEmail, gmailMessageId)}`,
+        });
+        await record("auto", signal, decisive);
+        return;
+      }
+      if (decision === "skip") {
+        // Already at this status - nothing to change, nothing to ask.
+        await record("ignored", signal, decisive);
+        return;
+      }
+      // "queue": backward or from-terminal transitions need a human.
+    }
+
+    // Action path: one pending queue entry per thread - a follow-up email in
+    // the same thread refreshes the entry instead of duplicating it.
+    const pending = await ctx.db
+      .query("inboxActions")
+      .withIndex("by_user_state", (q) =>
+        q.eq("user", user).eq("state", "pending"),
+      )
+      .collect();
+    const sameThread =
+      threadId === "" ? undefined : pending.find((a) => a.threadId === threadId);
+    const fields = {
       gmailMessageId,
-      threadId,
-      processedAt: Date.now(),
-      outcome: "ignored",
-    });
+      accountEmail,
+      from: headers.from,
+      subject: headers.subject,
+      receivedAt: receivedAtIso(headers.date),
+      signal,
+      evidence,
+      source,
+      candidates: cands,
+    };
+    if (sameThread) {
+      await ctx.db.patch(sameThread._id, fields);
+    } else {
+      await ctx.db.insert("inboxActions", {
+        user,
+        threadId,
+        state: "pending",
+        createdAt: new Date().toISOString(),
+        ...fields,
+      });
+    }
+    await record("action", signal);
+  },
+});
+
+// Per-account daily LLM budget. Returns whether one more call is allowed
+// (and consumes it). The counter lives on the account row and resets when
+// the (UTC) day changes.
+const LLM_DAILY_CAP = 20;
+
+export const bumpLlmCap = internalMutation({
+  args: { rowId: v.id("mailAccounts") },
+  handler: async (ctx, { rowId }) => {
+    const row = await ctx.db.get(rowId);
+    if (!row) return false;
+    const today = new Date().toISOString().slice(0, 10);
+    const used = row.llmCapDate === today ? (row.llmCallsToday ?? 0) : 0;
+    if (used >= LLM_DAILY_CAP) return false;
+    await ctx.db.patch(rowId, { llmCallsToday: used + 1, llmCapDate: today });
+    return true;
   },
 });
 
@@ -388,7 +561,10 @@ function getHeader(msg: any, name: string): string {
 
 // Best-effort body extraction from a message payload: recursively walks parts
 // preferring a text/plain part, falling back to the first text/html part.
-function extractBody(payload: any): string | null {
+// The html flag matters downstream: HTML bodies go through stripHtml before
+// classification, but plain-text bodies must NOT (stripHtml collapses
+// newlines, and the classifier's `.{0,40}` deliberately does not cross them).
+function extractBody(payload: any): { text: string; html: boolean } | null {
   if (!payload) return null;
   let html: string | null = null;
   const queue: any[] = [payload];
@@ -399,7 +575,7 @@ function extractBody(payload: any): string | null {
     const data = part?.body?.data;
     if (typeof data === "string" && data.length > 0 && part.mimeType === "text/plain") {
       const text = base64urlDecode(data);
-      if (text.trim()) return text;
+      if (text.trim()) return { text, html: false };
     } else if (
       typeof data === "string" &&
       part.mimeType === "text/html" &&
@@ -408,7 +584,89 @@ function extractBody(payload: any): string | null {
       html = base64urlDecode(data);
     }
   }
-  return html;
+  return html === null ? null : { text: html, html: true };
+}
+
+// '"Acme Recruiting" <no-reply@acme.com>' -> { name, addr } (mirrors the
+// webui's parser so the scorer and the UI agree on the sender identity).
+function fromParts(from: string): { name: string; addr: string } {
+  const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(from || "");
+  return m
+    ? { name: m[1].trim(), addr: m[2].trim() }
+    : { name: "", addr: (from || "").trim() };
+}
+
+// Cheap pre-filter for the LLM fallback: only recruiting-ish mail is worth a
+// paid call. Anything that gets past classifyReply's negatives AND mentions
+// application/interview/recruiting vocabulary qualifies.
+const RECRUITING_HINT =
+  /\bapplic|interview|recruit|assessment|candidat|position|role|offer|hiring|talent\b/i;
+
+function looksRecruiting(headers: { from: string; subject: string }, body: string): boolean {
+  return RECRUITING_HINT.test(
+    `${headers.subject}\n${headers.from}\n${body.slice(0, 500)}`,
+  );
+}
+
+// Queue-only Gemini fallback for mail the regexes can't read. Mirrors the
+// watcher's Gemini call shape (src/llm.py _call_gemini): JSON response mime,
+// temperature 0, x-goog-api-key header. Gated by looksRecruiting and the
+// per-account daily cap; every failure path returns null (the regex verdict
+// already ran, LLM trouble must never block a sync).
+async function llmClassify(
+  ctx: ActionCtx,
+  account: Doc<"mailAccounts"> & { _id: Id<"mailAccounts"> },
+  headers: { from: string; subject: string },
+  body: string,
+): Promise<{ signal: string; evidence: string; source: string } | null> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  const allowed = await ctx.runMutation(internal.mail.bumpLlmCap, {
+    rowId: account._id,
+  });
+  if (!allowed) return null;
+  const prompt =
+    "You classify recruiter emails about a job application. " +
+    'Reply with JSON only: {"signal": <one of "oa","phone_screen","interview","rejected","offer" or null>, ' +
+    '"evidence": <short verbatim quote from the email>}. ' +
+    "signal must be null unless the email clearly advances or closes THIS applicant's application " +
+    "(job ads, newsletters, application-received confirmations are null).\n\n" +
+    `From: ${headers.from}\nSubject: ${headers.subject}\n\n${body.slice(0, 4000)}`;
+  try {
+    const res = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json",
+            maxOutputTokens: 512,
+          },
+        }),
+      },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    const parsed = JSON.parse(text) as { signal?: unknown; evidence?: unknown };
+    const signal = typeof parsed.signal === "string" ? parsed.signal : "";
+    if (!["oa", "phone_screen", "interview", "rejected", "offer"].includes(signal)) {
+      return null;
+    }
+    const evidence =
+      typeof parsed.evidence === "string" && parsed.evidence
+        ? parsed.evidence
+        : headers.subject;
+    return { signal, evidence, source: "llm" };
+  } catch (err) {
+    console.warn("gemini fallback failed", err);
+    return null;
+  }
 }
 
 // Refresh the OAuth access token for an account, persisting it via an internal
@@ -688,13 +946,42 @@ export const sync = internalAction({
           date: getHeader(msg, "Date"),
           messageId: getHeader(msg, "Message-ID"),
         };
-        const body = extractBody(msg?.payload) ?? "";
+        // HTML-only mail gets tag-stripped BEFORE classification; plain text
+        // keeps its newlines (the classifier depends on them).
+        const extracted = extractBody(msg?.payload);
+        const bodyText = extracted
+          ? extracted.html
+            ? stripHtml(extracted.text)
+            : extracted.text
+          : "";
+
+        // Classify here in the action (regex first, Gemini fallback for
+        // recruiting-ish mail the regexes can't read) and score candidates;
+        // recordOutcome makes the final auto/queue/ignore call transactionally.
+        let classification = ((): { signal: string; evidence: string; source: string } | null => {
+          const hit = classifyReply(headers.subject, bodyText);
+          return hit ? { ...hit, source: "regex" } : null;
+        })();
+        if (!classification && looksRecruiting(headers, bodyText)) {
+          classification = await llmClassify(ctx, account, headers, bodyText);
+        }
+        let candidates: Array<{ short: string; company: string; title: string; score: number }> = [];
+        if (classification) {
+          const apps = await ctx.runQuery(internal.mail.listApplications, { user });
+          const f = fromParts(headers.from);
+          candidates = scoreCandidates(
+            { fromAddr: f.addr, fromName: f.name, subject: headers.subject, body: bodyText },
+            apps,
+          );
+        }
         await ctx.runMutation(internal.mail.recordOutcome, {
           user,
           gmailMessageId: id,
           threadId: msg?.threadId ?? "",
           headers,
-          body,
+          accountEmail: account.email,
+          classification: classification ?? undefined,
+          candidates,
         });
       }
 

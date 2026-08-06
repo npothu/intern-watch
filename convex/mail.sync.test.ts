@@ -218,7 +218,7 @@ test("recordOutcome second call with the same gmailMessageId is a no-op", async 
     gmailMessageId: "gm1",
     threadId: "th-1",
     headers: { from: "r@acme.com", subject: "SWE Intern", date: "2026-08-05T00:00:00Z", messageId: "msg-1" },
-    body: "recruiter here, apply",
+    accountEmail: "a@example.com",
   };
   await t.mutation(mail.recordOutcome, args);
   await t.mutation(mail.recordOutcome, args);
