@@ -373,12 +373,13 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
                    name: str, dry_run: bool) -> dict[str, str]:
     """Auto-build a tailored .docx per accepted job for commit/email modes.
 
-    Returns {dedup_key -> repo-relative POSIX .docx path} for jobs that built.
-    Off unless `resume_build.enabled` and a mode in {commit, email}. On
-    --dry-run nothing is built (no LLM cost / no files): we only log the count
-    that would build. `max_per_run` caps the spend; the rest defer to a later
-    run when they're re-seen. Each build is isolated so a failure never drops
-    the match or blocks the remaining jobs/users."""
+    Returns {dedup_key -> driver-native resume reference} for jobs that built
+    (GitHubStore: the repo-relative `resumes/...` path; ConvexStore: the file
+    storage id). Off unless `resume_build.enabled` and a mode in {commit,
+    email}. On --dry-run nothing is built (no LLM cost / no files): we only
+    log the count that would build. `max_per_run` caps the spend; the rest
+    defer to a later run when they're re-seen. Each build is isolated so a
+    failure never drops the match or blocks the remaining jobs/users."""
     cfg = resume_build_cfg(user_cfg)
     if not cfg["enabled"] or not (set(cfg["modes"]) & {"commit", "email"}):
         return {}
@@ -389,7 +390,11 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         log.info("user %s: dry run, would build %d resume(s)", name, n)
         return {}
 
-    out_dir = ROOT / "resumes" / name
+    store = make_store(ROOT, user_cfg)
+    # Build into a gitignored scratch dir; the STORE owns where the .docx
+    # finally lands (GitHub: resumes/<user>/, committed as ever; Convex: file
+    # storage, so the watch commit step finds nothing new under resumes/).
+    out_dir = ROOT / "out" / "autobuild" / name
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: dict[str, str] = {}
     cap = int(cfg["max_per_run"])
@@ -407,7 +412,9 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
                         "kept without a resume", name, job.dedup_key, exc)
             continue
         if result is not None:
-            paths[job.dedup_key] = result.out_path.relative_to(ROOT).as_posix()
+            paths[job.dedup_key] = store.put_resume(
+                name, dashboard.short_key(job.dedup_key),
+                result.out_path.name, result.out_path.read_bytes())
     return paths
 
 
@@ -569,7 +576,8 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
         # store's cron run doesn't silently stop updating the dashboard.
         dashboard.sync_user(state, name, terms_order, now, repo, token,
                             ticks=ticks,
-                            interactive=isinstance(store, GitHubStore))
+                            interactive=isinstance(store, GitHubStore),
+                            store=store)
         # applied ticks just read back from the issue become permanent
         # ledger records (seen.json prunes at 120 days; the ledger never does)
         ledger.sync_file(state, name, ledger.ledger_path(ROOT), now.date())

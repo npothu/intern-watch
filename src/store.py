@@ -99,6 +99,25 @@ class TrackerStore(Protocol):
         driver)."""
         ...
 
+    def put_resume(self, user: str, short: str, filename: str,
+                   data: bytes) -> str:
+        """Store a built .docx and return the driver-native reference to it
+        (what callers record on the match item as its `resume` value).
+        GitHubStore: writes the file under `resumes/<user>/<short>/` (the
+        commit step keeps committing the directory) and returns the
+        repo-relative posix path, exactly as the pre-seam flow expected.
+        ConvexStore: uploads the bytes to Convex file storage and returns the
+        storage id."""
+        ...
+
+    def get_resume_urls(self, user: str) -> dict[str, str]:
+        """A {short: serving URL} map of the user's STORE-HOSTED (http/https)
+        built resumes. GitHubStore returns {} - its resumes are repo-relative
+        paths already on the match items, which surfaces rebuild into their
+        repo-blob (dashboard) or /files/repo (webui) link as always. A
+        Convex deployment's serving URL per short comes back in one batched query."""
+        ...
+
     @property
     def writable(self) -> bool:
         """Whether a write can reach the store (issue + creds present for
@@ -321,6 +340,27 @@ class GitHubStore:
             raise ApiError("the dashboard-write workflow isn't on main "
                            "yet — merge the PR that adds it, then retry")
         resp.raise_for_status()
+
+    # -- resume storage -----------------------------------------------------
+
+    def put_resume(self, user: str, short: str, filename: str,
+                   data: bytes) -> str:
+        """Write the built .docx to resumes/<user>/<short>/<filename> and
+        return the repo-relative posix path. The workflow's existing commit
+        step (`[ -d resumes ] && git add resumes/`) picks it up unchanged,
+        so this is byte-identical to the pre-seam placement: same file
+        locations, same commit expectation, same dashboard link."""
+        out = (self.root / "resumes" / user / short / filename)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+        return out.relative_to(self.root).as_posix()
+
+    def get_resume_urls(self, user: str) -> dict[str, str]:
+        """No remote-serving: the repo-relative `resumes/...` path is already
+        on each match item, so surfaces link it as the repo-blob (dashboard)
+        or /files/repo (webui) they have always used. Nothing is fetched -- the
+        commit step keeps serving resumes from the repo."""
+        return {}
 
     # -- match snapshot (not served by this driver) ------------------------
 
@@ -568,6 +608,53 @@ class ConvexStore:
                    {"user": user, "email": email,
                     "refreshToken": refresh_token, "secret": self.secret},
                    module="mail")
+
+    # -- resume storage ----------------------------------------------------
+
+    # The DOCX Open Packaging mime the Convex file-storage upload requires.
+    _DOCX_MIME = ("application/vnd.openxmlformats-officedocument"
+                  ".wordprocessingml.document")
+
+    def put_resume(self, user: str, short: str, filename: str,
+                   data: bytes) -> str:
+        """Upload the built .docx to Convex file storage and return the
+        storage id (the reference recorded on the match item). Flow: mint an
+        upload URL -> POST the bytes -> attach the storage id to the (user,
+        short) row (replace-on-upsert, old object deleted server-side)."""
+        upload_url = self._post(
+            "mutation", "generateResumeUploadUrl",
+            {"user": user, "short": short, "secret": self.secret})
+        if not isinstance(upload_url, str) or not upload_url:
+            raise ApiError("generateResumeUploadUrl returned no upload URL")
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.post(upload_url, content=data,
+                                   headers={"Content-Type": self._DOCX_MIME})
+                resp.raise_for_status()
+                storage_id = resp.json().get("storageId")
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            raise ApiError(f"convex resume upload failed: {exc}") from exc
+        if not storage_id:
+            raise ApiError("convex resume upload returned no storageId")
+        self._post("mutation", "attachResume",
+                   {"user": user, "short": short, "filename": filename,
+                    "storageId": storage_id, "secret": self.secret})
+        return storage_id
+
+    def get_resume_urls(self, user: str) -> dict[str, str]:
+        """The deployment's serving URLs for the user's built resumes, one
+        batched query (never one round-trip per row). Surfaces link these
+        URLs directly; nothing is served from a committed blob. Empty on a
+        failed read."""
+        try:
+            rows = self._post("query", "getResumeUrls",
+                              {"user": user, "secret": self.secret})
+        except ApiError:
+            return {}
+        if not rows:
+            return {}
+        return {row["short"]: row["url"] for row in rows
+                if row.get("url")}
 
 
 def make_store(root: Path, user_cfg: dict | None = None) -> TrackerStore:

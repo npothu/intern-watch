@@ -32,6 +32,10 @@ class FakeStore:
         self.actions: dict | None = None
         self.resolve_calls: list[tuple[str, str, str, str, bool]] = []
         self.resolve_error: Exception | None = None
+        self.resumes: dict[str, dict[str, tuple[str, bytes]]] = {}
+        # shorts whose resume get_resume_urls serves as a remote URL (a
+        # hosted store) rather than the default GitHub repo-relative path.
+        self.remote_resumes: set[str] = set()
 
     @property
     def writable(self) -> bool:
@@ -85,3 +89,20 @@ class FakeStore:
         self.resolve_calls.append((user, action_id, short, status, dismiss))
         if self.resolve_error is not None:
             raise self.resolve_error
+
+    def put_resume(self, user: str, short: str, filename: str,
+                   data: bytes) -> str:
+        """Record the resume, returning the default GitHub-shape
+        repo-relative path (the same reference the repo-committed flow uses)."""
+        self.resumes.setdefault(user, {})[short] = (filename, data)
+        return f"resumes/{user}/{short}/{filename}"
+
+    def get_resume_urls(self, user: str) -> dict[str, str]:
+        """Only the STORE-HOSTED (http/https) subset, matching the real
+        drivers' contract: GitHubStore returns {}, a hosted store returns a
+        serving URL per short."""
+        return {
+            short: f"https://store.example/files/{short}"  # hosted store
+            for short in self.resumes.get(user, {})
+            if short in self.remote_resumes
+        }

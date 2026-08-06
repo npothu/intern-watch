@@ -71,7 +71,10 @@ def test_enabled_sets_resume_path_on_match(monkeypatch, tmp_path):
     assert calls == [f"jr:{'a' * 24}"]
     items = st.matches_items(state, "t")
     assert len(items) == 1
-    assert items[0]["resume"] == f"resumes/t/{db.short_key(items[0]['key'])}.docx"
+    short = db.short_key(items[0]["key"])
+    # the store keys the .docx by (user, short, filename); GitHubStore writes
+    # it to resumes/t/<short>/<filename>.docx and returns that repo-relative path
+    assert items[0]["resume"] == f"resumes/t/{short}/{short}.docx"
     # outbox (email path) carries the same key
     out = st.outbox_items(state, "t")
     assert out and out[0].get("resume") == items[0]["resume"]

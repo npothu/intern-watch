@@ -3,7 +3,7 @@ import { v } from "convex/values";
 
 // Convex backend for the optional STORE=convex TrackerStore driver.
 //
-// Three tables mirror the three kinds of "human state" the seam stores:
+// Four tables mirror the "human state" the seam stores:
 //  - ticks: one row per (user, short) toggle. A row's presence is what makes
 //    an untick meaningful (no dashboard-window truncation in a DB), so every
 //    short that ever carried a toggle keeps a row even after it's unticked.
@@ -13,9 +13,16 @@ import { v } from "convex/values";
 //    record shape without re-reading the matches table.
 //  - matches: the full-snapshot match list; pushMatches upserts by short and
 //    deletes rows absent from the pushed set.
+//  - resumes: a built and tailored .docx per (user, short), stored in Convex
+//    file storage. `storageId` is the system file id; attachResume replaces
+//    an existing row on rebuild (deleting the old storage object) so the
+//    table never leaks orphaned files. Nothing is ever committed to the repo
+//    on a convex instance - getResumeUrls serves storage links instead.
 //
-// All three share (user, short) as the identity key and index the same two
-// ways: by_user for full lists, by_user_short for point lookups/upserts.
+// These four seam tables all share (user, short) as the identity key and
+// index the same two ways: by_user for full lists, by_user_short for point
+// lookups/upserts. The mail-sync feature's tables (mailAccounts,
+// mailMessages, inboxActions) follow below in their own section.
 export default defineSchema({
   ticks: defineTable({
     user: v.string(),
@@ -55,7 +62,7 @@ export default defineSchema({
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),
 
-  // -- Gmail mail-sync ------------------------------------------------------
+// -- Gmail mail-sync ------------------------------------------------------
   //
   // Three tables backing the mail-sync feature (see convex/mail.ts). The
   // drive is push-based: Gmail sends a Pub/Sub notification, the /gmail/push
@@ -136,4 +143,19 @@ export default defineSchema({
   })
     .index("by_user_state", ["user", "state"])
     .index("by_user_message", ["user", "gmailMessageId"]),
+
+  // Built and tailored .docx per (user, short), stored in Convex file
+  // storage. `storageId` is the system file id; attachResume replaces an
+  // existing row on rebuild (deleting the old storage object) so the table
+  // never leaks orphaned files. Nothing is ever committed to the repo on a
+  // convex instance - getResumeUrls serves storage links instead.
+  resumes: defineTable({
+    user: v.string(),
+    short: v.string(),
+    filename: v.string(),
+    storageId: v.id("_storage"),
+    updatedAt: v.number(),
+  })
+    .index("by_user_short", ["user", "short"])
+    .index("by_user", ["user"]),
 });

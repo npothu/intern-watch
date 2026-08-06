@@ -324,6 +324,39 @@ def test_protocol_conformance_github_and_convex(monkeypatch, tmp_path):
         hasattr(store.TrackerStore, "resolve_action")
 
 
+# -- resume storage ---------------------------------------------------------
+
+def test_github_store_put_resume_byte_identical_placement(tmp_path):
+    """put_resume writes resumes/<user>/<short>/<filename> and returns the
+    repo-relative posix path -- the exact spot the workflow's `git add
+    resumes/` commit step picks up, byte-identical to the pre-seam flow."""
+    gs = store.GitHubStore(tmp_path, {"name": "example"})
+    ref = gs.put_resume("example", "a1b2c3d4e5f6", "Jane_Doe_Acme.docx",
+                        b"\x50\x4b docx-bytes")
+    assert ref == "resumes/example/a1b2c3d4e5f6/Jane_Doe_Acme.docx"
+    out = tmp_path / "resumes" / "example" / "a1b2c3d4e5f6" / "Jane_Doe_Acme.docx"
+    assert out.read_bytes() == b"\x50\x4b docx-bytes"
+
+
+def test_github_store_get_resume_urls_always_empty(tmp_path):
+    """GitHubStore hosts nothing itself -- resumes are repo-relative paths
+    already on the match items -- so get_resume_urls is always {}, with no
+    git/state read at all (no state/seen.json here, and it still returns
+    cleanly)."""
+    gs = store.GitHubStore(tmp_path, {"name": "example"})
+    assert gs.get_resume_urls("example") == {}
+
+    seen = tmp_path / "state" / "seen.json"
+    seen.parent.mkdir(parents=True)
+    state = st.empty_state()
+    state["matches"]["example"] = [
+        {"key": "url:https://x.com/1",
+         "resume": "resumes/example/a1b2c3d4e5f6/Jane_Doe_Acme.docx"},
+    ]
+    st.save_state(state, seen)
+    assert gs.get_resume_urls("example") == {}
+
+
 # -- factory ---------------------------------------------------------------
 
 def test_make_store_defaults_to_github_and_rejects_unknown(monkeypatch,

@@ -28,7 +28,7 @@ from .normalize import canonical_url
 from .notify import _group_items
 
 if TYPE_CHECKING:  # annotation-only; .store imports this module at runtime
-    from .store import TicksView
+    from .store import TicksView, TrackerStore
 
 log = logging.getLogger(__name__)
 
@@ -115,16 +115,25 @@ def _url(url: str) -> str:
 
 
 def _row(item: dict, repo: str = "", branch: str = "main",
-         interactive: bool = True) -> str:
+         interactive: bool = True, resume_urls: dict[str, str] | None = None) -> str:
     short = short_key(item["key"])
     tag = f"**{_md(item['tag'])}** " if item.get("tag") else ""
     salary = f" · {_md(item['salary'])}" if item.get("salary") else ""
     added = f" · seen {item['added']}" if item.get("added") else ""
     # commit-mode resumes land in-repo; link to the blob so the user can grab
-    # the .docx straight from the dashboard. No `resume` key => no link.
+    # the .docx straight from the dashboard. When the store serves a remote
+    # resume URL (ConvexStore) that wins; no `resume` key => no link. The
+    # `resume_urls` map is the store-resolved {short: link} for rows a hosted
+    # store serves - GitHub rows link exactly as before, byte for byte.
     resume = ""
-    if repo and item.get("resume"):
-        resume = f" · [📄 resume](/{repo}/blob/{branch}/{item['resume']})"
+    url = resume_urls.get(short) if resume_urls else None
+    # Only a repo-relative `resumes/...` path (GitHubStore) can back a
+    # repo-blob link -- a Convex storage id would render a dead link if the
+    # URL map above came back empty, so it's guarded out here too.
+    if url is None and repo and (item.get("resume") or "").startswith("resumes/"):
+        url = f"/{repo}/blob/{branch}/{item['resume']}"
+    if url:
+        resume = f" · [📄 resume]({url})"
     if not interactive:
         # Read-only digest row: a plain line with NO checkbox and NO
         # iw:/iwd:/iws: markers, but the same displayed suffix parts
@@ -174,7 +183,8 @@ def _hidden_row(item: dict, interactive: bool = True) -> str:
 
 def build_body(matches: list[dict], terms_order: list[str],
                now: dt.datetime, repo: str = "", branch: str = "main",
-               interactive: bool = True) -> str:
+               interactive: bool = True,
+               resume_urls: dict[str, str] | None = None) -> str:
     """Markdown body: header stats, then active matches grouped by term
     (newest first), then dismissed matches in a collapsed Hidden section.
     Check a box = applied; tick a hide box = dismissed; everything else is
@@ -230,7 +240,7 @@ def build_body(matches: list[dict], terms_order: list[str],
             group = sorted(group, key=lambda i: (i.get("added", ""),
                                                  i["company"].casefold()),
                            reverse=True)
-            parts.extend(_row(item, repo, branch, interactive)
+            parts.extend(_row(item, repo, branch, interactive, resume_urls)
                          for item in group)
         if overflow:
             parts.append(f"\n*…and {len(overflow)} older match(es) not shown "
@@ -363,7 +373,8 @@ def dedup_existing_matches(state: dict, user: str) -> int:
 def sync_user(state: dict, user: str, terms_order: list[str],
               now: dt.datetime, repo: str, token: str,
               ticks: "TicksView | None" = None,
-              interactive: bool = True) -> None:
+              interactive: bool = True,
+              store: "TrackerStore | None" = None) -> None:
     """Read applied/hide checkboxes back into state, auto-hide stale rows,
     then rewrite (or create) the user's dashboard issue. Raises httpx errors
     to the caller.
@@ -378,10 +389,21 @@ def sync_user(state: dict, user: str, terms_order: list[str],
     `interactive=False` (a store with no GitHub-issue plumbing, e.g.
     STORE=convex) still reads ticks back and syncs state, but writes a
     read-only digest body with no checkboxes; when there is no repo/token to
-    write to, the issue write is skipped entirely."""
+    write to, the issue write is skipped entirely.
+
+    `store` (when supplied) resolves each built row's resume to a link the
+    digest can use directly. A driver that serves remote URLs (ConvexStore)
+    returns one and the row links it; a GitHub driver returns the
+    repo-relative path and the row keeps its byte-for-byte repo-blob
+    construction below."""
     matches = st.matches_items(state, user)
     if not matches:
         return
+    # Store-served resume links ({short: url}), one batched call. GitHubStore
+    # returns {} -- its resumes are repo-relative paths the blob construction
+    # already renders; only a store that hosts URLs (ConvexStore) returns
+    # entries here, and they override.
+    resume_urls = store.get_resume_urls(user) if store is not None else {}
     issue_numbers = state["_meta"].setdefault("dashboard_issue", {})
     number = issue_numbers.get(user)
     headers = {"Authorization": f"Bearer {token}",
@@ -442,7 +464,8 @@ def sync_user(state: dict, user: str, terms_order: list[str],
 
         branch = os.environ.get("GITHUB_REF_NAME") or "main"
         body = build_body(st.matches_items(state, user), terms_order, now,
-                          repo, branch, interactive=interactive)
+                          repo, branch, interactive=interactive,
+                          resume_urls=resume_urls)
         if not (repo and token):
             # A store with no issue plumbing (STORE=convex) has no dashboard
             # issue to write -- the read-back + hygiene above is the point.
@@ -514,7 +537,8 @@ def main(argv: list[str] | None = None) -> int:
     store = make_store(root, users.get(args.user) or {"name": args.user})
     ticks = store.get_ticks(args.user)
     sync_user(state, args.user, terms_order, now, repo, token,
-              ticks=ticks, interactive=isinstance(store, GitHubStore))
+              ticks=ticks, interactive=isinstance(store, GitHubStore),
+              store=store)
     ledger.sync_file(state, args.user, ledger.ledger_path(root), now.date())
     st.save_state(state, state_path)
     return 0

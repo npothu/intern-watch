@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .. import dashboard, state as st
 from ..models import Job
+from ..store import make_store
 from .build import ROOT, build_for_job, resume_build_cfg
 
 
@@ -93,7 +94,11 @@ def main(argv: list[str] | None = None) -> int:
         _gh_output(built=0, failed=0)
         return 0
 
-    out_dir = root / "resumes" / args.user
+    store = make_store(root, users.get(args.user) or {"name": args.user})
+    # Build into a gitignored scratch dir; the STORE owns where the .docx
+    # finally lands (GitHub: resumes/<user>/, committed by the workflow as
+    # ever; Convex: file storage, so the commit step finds nothing new).
+    out_dir = root / "out" / "batch" / args.user
     out_dir.mkdir(parents=True, exist_ok=True)
     built: list[str] = []
     failed: list[tuple[str, str]] = []
@@ -119,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
                            "(site may block scraping — use /resume with the JD "
                            "pasted)"))
             continue
-        item["resume"] = result.out_path.relative_to(root).as_posix()
+        item["resume"] = store.put_resume(
+            args.user, short, result.out_path.name, result.out_path.read_bytes())
         built.append(f"{item['company']} — {item['title']}")
         print(f"BUILT {short} {item['company']}")
 

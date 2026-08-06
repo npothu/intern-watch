@@ -439,7 +439,7 @@ function visible(m) {
   if (UI.status === "todo" && m.applied) return false;
   if (UI.status === "applied" && !m.applied) return false;
   if (UI.status === "saved" && !m.saved) return false;
-  if (UI.status === "resume" && !(m.resume || m.local_resume)) return false;
+  if (UI.status === "resume" && !(m.resume || m.resume_url || m.local_resume)) return false;
   if (UI.status === "agent" && !m.artifacts) return false;
   if (UI.status === "stale" && !likelyClosed(m)) return false;
   if (UI.q) {
@@ -454,7 +454,9 @@ function resumeAction(m) {
     return `<a class="btn built" href="/files/out/${encodeURIComponent(m.local_resume)}">${ICON.doc} resume</a>`
       + (reports.has(m.short)
          ? ` <button class="btn quiet" data-report="${m.short}">report</button>` : "");
-  if (m.resume)
+  if (m.resume_url)
+    return `<a class="btn built" href="${m.resume_url}" target="_blank" rel="noopener">${ICON.doc} resume</a>`;
+  if (m.resume && m.resume.startsWith("resumes/"))
     return `<a class="btn built" href="/files/repo/${encodeURI(m.resume)}">${ICON.doc} resume</a>`;
   const b = busy.has(m.short);
   return `<button class="btn" data-build="${m.short}" ${b ? "disabled" : ""}>` +
@@ -519,7 +521,7 @@ function statsHtml() {
   const active = ms.filter(m => !m.dismissed);
   const applied = active.filter(m => m.applied).length;
   const saved = active.filter(m => m.saved).length;
-  const resumes = active.filter(m => m.resume || m.local_resume).length;
+  const resumes = active.filter(m => m.resume || m.resume_url || m.local_resume).length;
   const hidden = ms.length - active.length;
   const stat = (n, label, f) =>
     `<span class="seg" data-stat="${f}"><b>${n}</b> ${label}</span>`;
@@ -791,7 +793,7 @@ function trowHtml([short, rec]) {
   const note = lastNote(rec);
   const opts = Object.entries(STATUSES).map(([v, label]) =>
     `<option value="${v}" ${v === rec.status ? "selected" : ""}>${label}</option>`).join("");
-  const resume = rec.resume
+  const resume = rec.resume && rec.resume.startsWith("resumes/")
     ? `<a class="btn quiet" title="tailored resume" href="/files/repo/${encodeURI(rec.resume)}">${ICON.doc}</a>` : "";
   return `<div class="trow" id="t-${short}">
     <select class="st s-${esc(rec.status)}${rec.pending ? " pending" : ""}"

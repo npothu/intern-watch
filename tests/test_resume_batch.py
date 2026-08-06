@@ -108,8 +108,12 @@ def test_main_builds_selected_and_records_paths(tmp_path, monkeypatch):
 
     state = st.load_state(state_path)
     by_key = {i["key"]: i for i in st.matches_items(state, "example")}
-    assert by_key[matches[0]["key"]]["resume"] == "resumes/example/Co1.docx"
-    assert by_key[matches[2]["key"]]["resume"] == "resumes/example/Co3.docx"
+    # the store keys the .docx by (user, short, filename); the fake build
+    # writes <company>.docx, so GitHubStore places it at resumes/example/<short>/Co1.docx
+    assert by_key[matches[0]["key"]]["resume"] == \
+        f"resumes/example/{s1}/Co1.docx"
+    assert by_key[matches[2]["key"]]["resume"] == \
+        f"resumes/example/{s3}/Co3.docx"
     assert "resume" not in by_key[matches[1]["key"]]   # not selected
     assert "Built 2 resume(s)" in summary.read_text(encoding="utf-8")
 

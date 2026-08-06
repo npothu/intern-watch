@@ -81,6 +81,90 @@ def test_row_shows_visible_resume_command():
     assert f"<!--iw:{short}-->" in row
 
 
+def test_row_resume_links_store_url_when_resume_urls_given():
+    # A hosted (Convex) store's remote resume URL wins over the repo blob.
+    item = _item(1, resume="resumes/example/abc/Co1.docx")
+    short = db.short_key(item["key"])
+    row = db._row(item, repo="owner/intern-watch",
+                  resume_urls={short: "https://test.convex.cloud/api/storage/x"})
+    assert "https://test.convex.cloud/api/storage/x" in row
+    assert "blob/" not in row
+
+
+def test_row_resume_no_blob_link_for_non_repo_path():
+    # A Convex storage id (not a `resumes/...` repo path) must never render a
+    # repo-blob link, even with no resume_urls entry to override it -- that
+    # would be a dead link since it was never committed to the repo.
+    item = _item(1, resume="kg2abc123storageid")
+    row = db._row(item, repo="owner/intern-watch")
+    assert "blob/" not in row
+    assert "[📄 resume]" not in row
+
+
+def test_row_resume_keeps_repo_blob_without_store_url():
+    # A GitHub store returns a repo-relative path, so sync_user passes NO
+    # entry for it (only http(s) results enter resume_urls); the row then
+    # falls back to the byte-for-byte repo-blob construction.
+    item = _item(1, resume="resumes/example/abc/Co1.docx")
+    row = db._row(item, repo="owner/intern-watch",
+                  resume_urls={db.short_key(item["key"]) + "x": "https://x"})
+    assert "· [📄 resume](/owner/intern-watch/blob/main/" in row
+    assert "resumes/example/abc/Co1.docx" in row
+    # the store-serving entry (different short) was never linked as the resume
+    assert "[📄 resume](https://x)" not in row
+
+
+def test_sync_user_links_store_served_resume(monkeypatch):
+    """A supplied store resolving a remote resume URL makes the digest link
+    it; the repo-blob form is byte-absent (ConvexStore path through the
+    seam)."""
+    class _Store:
+        repo = ""
+        token = ""
+        issue_number = None
+
+        def get_ticks(self, user):
+            return store.TicksView()
+
+        def get_ledger(self, user):
+            return {}
+
+        def push_matches(self, user, matches):
+            pass
+
+        def get_matches(self, user):
+            return None
+
+        def get_resume_urls(self, user):
+            return {db.short_key("url:https://x.com/1"):
+                    "https://test.convex.cloud/api/storage/abc"}
+
+    state = st.empty_state()
+    st.matches_add(state, "example", _item(1,
+                                           resume="resumes/example/abc/x.docx"))
+    state["_meta"]["dashboard_issue"] = {"example": 7}
+    patched = []
+
+    def handler(request):
+        assert request.method == "PATCH"
+        patched.append(json.loads(request.content))
+        return httpx.Response(200, json={"number": 7})
+
+    real = httpx.Client
+
+    def _mk(**kw):
+        kw["transport"] = httpx.MockTransport(handler)
+        return real(**kw)
+
+    monkeypatch.setattr(db.httpx, "Client", _mk)
+    db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok",
+                 ticks=store.TicksView(), interactive=False, store=_Store())
+    assert len(patched) == 1
+    body = patched[0]["body"]
+    assert "https://test.convex.cloud/api/storage/abc" in body
+    assert "blob/" not in body
+
+
 def test_truncation_note_past_max_rows():
     matches = [_item(i) for i in range(db.MAX_ROWS + 5)]
     body = db.build_body(matches, TERMS, NOW)
@@ -438,6 +522,9 @@ def test_sync_dashboard_convex_repaints_digest(monkeypatch):
         def push_matches(self, user, matches):
             pass
 
+        def get_resume_urls(self, user):
+            return {}
+
     _mock_client(monkeypatch, handler)                 # dashboard.httpx
     monkeypatch.setattr(main, "make_store",
                         lambda root, cfg=None: _Convex())
@@ -505,6 +592,9 @@ def test_sync_dashboard_github_repaints_interactive(monkeypatch):
 
         def push_matches(self, user, matches):
             pass
+
+        def get_resume_urls(self, user):
+            return {}
 
     _mock_client(monkeypatch, handler)
     # isinstance(store, GitHubStore) drives interactive=True in _sync_dashboard.
