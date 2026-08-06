@@ -10,8 +10,9 @@ callers talk to a `TrackerStore` and never care whether the driver is GitHub
 
 `GitHubStore` wraps the existing logic wholesale -- same API calls, same parse
 functions, same workflow dispatch, same user-visible error strings -- so
-switching the store on is behavior-neutral. A `convex` driver arrives in a
-follow-up; `STORE` env selects the driver, defaulting to github.
+switching the store on is behavior-neutral. `ConvexStore` serves the same
+state through a Convex deployment's HTTP API; `STORE` env selects the
+driver, defaulting to github.
 """
 
 from __future__ import annotations
@@ -86,6 +87,21 @@ class TrackerStore(Protocol):
 
     def get_matches(self, user: str) -> list[dict] | None: ...
 
+    @property
+    def writable(self) -> bool:
+        """Whether a write can reach the store (issue + creds present for
+        GitHub; always True for a hosted driver). The webui gates its
+        toggle paths on this."""
+        ...
+
+    @property
+    def read_warning(self) -> str | None:
+        """Human warning to surface when get_ticks can't read the store, set
+        by every get_ticks call: None on success (or when silence is the
+        right outcome, e.g. no dashboard issue at all). The webui appends it
+        to the `/api/state` warnings when get_ticks returned None."""
+        ...
+
 
 def _git(root: Path, *args: str) -> bytes:
     proc = subprocess.run(["git", "-C", str(root), *args],
@@ -136,6 +152,14 @@ class GitHubStore:
         # Which exception class the last issue GET died on; the webui uses it
         # to reproduce its "couldn't read dashboard issue" warning verbatim.
         self.error_name: str | None = None
+        # Human read-back warning (None on success or when silence is right),
+        # set by every get_ticks call; the webui surfaces it in /api/state.
+        self.read_warning: str | None = None
+
+    @property
+    def writable(self) -> bool:
+        """A write reaches GitHub only with creds + a resolved issue."""
+        return bool(self.token and self.repo and self.issue_number)
 
     def _resolve_issue_number(self) -> int | None:
         """The user's dashboard issue number from committed state, with the
@@ -164,6 +188,13 @@ class GitHubStore:
         """The issue's tick state, or None when it can't be read at all
         (token/repo/issue missing, or the GET failed)."""
         if not (self.repo and self.token and self.issue_number):
+            # A known issue with no way to read it needs the legacy "no GitHub
+            # token" warning; no issue at all means silence is correct (the
+            # webui appended nothing in that case).
+            self.read_warning = (
+                "no GitHub token (set GITHUB_TOKEN or log in with "
+                "`gh auth login`) — applied toggles are read-only this "
+                "session" if self.issue_number else None)
             return None
         try:
             with httpx.Client(headers=self._headers(),
@@ -171,8 +202,13 @@ class GitHubStore:
                 issue = self._issue_get(client, self.issue_number)
         except httpx.HTTPError as exc:
             self.error_name = exc.__class__.__name__
+            self.read_warning = (
+                f"couldn't read dashboard issue #{self.issue_number} "
+                f"({self.error_name}) — applied ticks made on GitHub may "
+                "not show")
             return None
         self.error_name = None
+        self.read_warning = None
         self.issue_url = issue.get("html_url", "")
         body = issue.get("body") or ""
         checked, present = dashboard.parse_checkboxes(body)
@@ -287,11 +323,190 @@ class GitHubStore:
         return None
 
 
+class ConvexStore:
+    """TrackerStore driver over a Convex deployment's HTTP API (no pip
+    package: the deployment itself holds the schema + functions in
+    `convex/`, and this driver just POSTs JSON to /api/query and
+    /api/mutation). Select with STORE=convex.
+
+    Config comes from env: CONVEX_URL (the deployment origin) and
+    CONVEX_SECRET, which must equal the deployment's TRACKER_SECRET env var
+    (every mutation checks it). get_ticks returns None on transport/API
+    failure (recording `error_name`), so callers degrade exactly as they do
+    for the GitHub driver; the mutation endpoints raise ApiError instead.
+
+    There is no dashboard issue in this model, so the issue plumbing fields
+    the webui reads are all empty: repo/token/issue_number are unset, which
+    keeps the issue-specific webui paths (read-back overlay, tick
+    write-through) off. get_ticks still honors the rendered-only rule:
+    because there is no render window in a DB, every short that has a tick
+    row counts as *present* -- a row's existence is what makes an untick
+    meaningful."""
+
+    CHUNK = 200  # push_matches batching; Convex actions have payload limits
+
+    def __init__(self, root: Path, user_cfg: dict | None = None):
+        self.root = root
+        self.user = (user_cfg or {}).get("name", "")
+        url = os.environ.get("CONVEX_URL", "")
+        secret = os.environ.get("CONVEX_SECRET", "")
+        if not url or not secret:
+            raise ApiError(
+                "STORE=convex needs CONVEX_URL and CONVEX_SECRET env vars "
+                "(CONVEX_SECRET must match the deployment's TRACKER_SECRET) "
+                "-- see README \"Database backend\"")
+        self.url = url.rstrip("/")
+        self.secret = secret
+        # Issue plumbing the webui reads; empty keeps the issue paths off.
+        self.repo = ""
+        self.token = ""
+        self.issue_number: int | None = None
+        self.issue_url = ""
+        # Which exception the last get_ticks call died on (like GitHubStore).
+        self.error_name: str | None = None
+        # Human read-back warning, set by every get_ticks call (None on
+        # success); the webui surfaces it in /api/state when ticks are absent.
+        self.read_warning: str | None = None
+
+    @property
+    def writable(self) -> bool:
+        """The deployment serves every write directly; always writable."""
+        return True
+
+    def _post(self, kind: str, fn: str, args: dict) -> dict | list | None:
+        """POST one Convex HTTP endpoint and return the decoded `value`, or
+        raise ApiError on transport failure or a non-success status body."""
+        payload = {"path": f"tracker:{fn}", "args": args, "format": "json"}
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(f"{self.url}/api/{kind}", json=payload)
+        except httpx.HTTPError as exc:
+            raise ApiError(f"convex {kind} {fn} request failed: {exc}") from exc
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ApiError(f"convex {kind} {fn} returned non-JSON") from exc
+        if data.get("status") != "success":
+            raise ApiError(f"convex {kind} {fn} error: "
+                           f"{data.get('errorMessage', 'unknown')}")
+        return data.get("value")
+
+    # -- read-back ---------------------------------------------------------
+
+    def get_ticks(self, user: str) -> TicksView | None:
+        """The user's tick state, or None when the read failed (like
+        GitHubStore; recorded on `error_name`)."""
+        try:
+            rows = self._post("query", "getTicks", {"user": user})
+        except ApiError as exc:
+            self.error_name = exc.__class__.__name__
+            # Fold the root cause into a human warning rather than the bare
+            # 'ApiError' class name, which says nothing useful on its own.
+            self.read_warning = (
+                f"couldn't reach the Convex store ({exc}) -- ticks and "
+                "statuses may be stale")
+            return None
+        self.error_name = None
+        self.read_warning = None
+        rows = rows or []
+        shorts = {r["short"] for r in rows}
+        checked = {r["short"] for r in rows if r.get("applied")}
+        hidden = {r["short"] for r in rows if r.get("dismissed")}
+        saved = {r["short"] for r in rows if r.get("saved")}
+        # No render window: every row-bearing short is present for all three
+        # kinds, so an un-toggle left a row behind and is honored on read-back.
+        return TicksView(checked, shorts, hidden, shorts, saved, shorts,
+                         issue_open=True)
+
+    # -- ledger ------------------------------------------------------------
+
+    def get_ledger(self, user: str) -> dict:
+        """The user's ledger book, shaped like src/ledger.py records so the
+        webui's tracker tab renders it: the display `snapshot` fields merged
+        in, plus status / history / applied. History entries carry the date
+        (`on`) the webui sorts and displays on."""
+        rows = self._post("query", "getLedger", {"user": user}) or []
+        book: dict = {}
+        for row in rows:
+            rec = dict(row.get("snapshot") or {})
+            rec["status"] = row["status"]
+            if row.get("note"):
+                rec["note"] = row["note"]
+            rec["history"] = [
+                {"on": e["at"][:10], "status": e["status"],
+                 **({"note": e["note"]} if e.get("note") else {})}
+                for e in row.get("history", [])]
+            # `applied` = the date the record was created (Convex has no
+            # separate applied field); a migration-copied snapshot may carry
+            # the original apply date, which wins over the insertion date.
+            rec.setdefault("applied", (row.get("createdAt") or "")[:10])
+            book[row["short"]] = rec
+        return book
+
+    # -- writes ------------------------------------------------------------
+
+    def set_ticks(self, user: str, writes: list[TickWrite]) -> list[str]:
+        """Persist every toggle in one mutation; Convex commits instantly so
+        nothing is ever workflow-queued (the returned short list stays
+        empty). Raises ApiError on an API error status."""
+        if not writes:
+            return []
+        payload = [{"short": w.short, "field": w.field, "value": w.value}
+                   for w in writes]
+        self._post("mutation", "setTicks",
+                   {"user": user, "writes": payload, "secret": self.secret})
+        return []
+
+    def record_status(self, user: str, short: str, status: str,
+                      note: str = "", snapshot: dict | None = None) -> None:
+        """Record a tracker status on the application, creating the record
+        when absent. Validates the status name first (same ApiError text as
+        GitHubStore). `snapshot` (the display fields) is stored on the
+        record so get_ledger can rebuild the webui's record shape; it is
+        only set when provided, mirroring the Convex mutation."""
+        if status not in ledger.STATUSES:
+            raise ApiError(f"unknown status {status!r} (have: "
+                           f"{', '.join(ledger.STATUSES)})")
+        args: dict = {"user": user, "short": short, "status": status,
+                      "note": note, "secret": self.secret}
+        if snapshot is not None:
+            args["snapshot"] = snapshot
+        self._post("mutation", "recordStatus", args)
+
+    def push_matches(self, user: str, matches: list[dict]) -> None:
+        """Publish the full match snapshot, augmented with each item's short
+        key (the Convex upsert key). Each chunk is a pure upsert; the
+        full-snapshot prune (rows absent from the WHOLE pushed set) runs once
+        afterward as a separate `pruneMatches` call -- never per chunk, or a
+        >200 snapshot would delete every earlier chunk's rows."""
+        items = [{**m, "short": dashboard.short_key(m["key"])}
+                 for m in matches if m.get("key")]
+        for i in range(0, len(items), self.CHUNK):
+            self._post("mutation", "pushMatches",
+                       {"user": user, "items": items[i:i + self.CHUNK],
+                        "secret": self.secret})
+        self._post("mutation", "pruneMatches",
+                   {"user": user,
+                    "keep": [it["short"] for it in items],
+                    "secret": self.secret})
+
+    def get_matches(self, user: str) -> list[dict] | None:
+        """The pushed match snapshot, item payloads only (storage fields
+        stripped). None when the read fails, like GitHubStore."""
+        try:
+            items = self._post("query", "getMatches", {"user": user})
+        except ApiError:
+            return None
+        return items or []
+
+
 def make_store(root: Path, user_cfg: dict | None = None) -> TrackerStore:
     """Pick the TrackerStore driver from the STORE env var (default
-    `github`). A `convex` driver arrives in a follow-up."""
+    `github`). `convex` serves human state through a Convex deployment's
+    HTTP API; anything else is a configuration error."""
     name = os.environ.get("STORE", "github")
     if name == "github":
         return GitHubStore(root, user_cfg)
-    raise ValueError(f"unknown STORE={name!r} (have: github; convex "
-                     f"arrives in a follow-up)")
+    if name == "convex":
+        return ConvexStore(root, user_cfg)
+    raise ValueError(f"unknown STORE={name!r} (have: github, convex)")

@@ -24,6 +24,50 @@ No servers, no database — state is a JSON file committed back to the repo.
 Sources live in `sources.yaml` — adding one is config, not code (pick an
 existing adapter, or add a new one under `src/adapters/`).
 
+## Database backend (optional)
+
+Human state — the applied/saved/dismissed ticks, the applications ledger, and
+the current match snapshot — is stored in the GitHub issue plus committed
+`state/` files by default. You can instead serve it from a **Convex**
+deployment so the watcher and the local webui read and write one hosted store
+with no GitHub-issue plumbing. This is optional; it is off unless you set
+`STORE=convex`.
+
+The client is thin: `src/store.py`'s `ConvexStore` POSTs to Convex's HTTP
+public API (`/api/query` and `/api/mutation`), so no Python package or OAuth
+is involved. The server side lives in `convex/` in this repo — three tables
+(`ticks`, `applications`, `matches`, each indexed by `(user, short)`) and six
+functions (`tracker.ts`), deployed with `convex deploy`. These files are
+inert in CI; there is no Node/npm step in any workflow.
+
+Who needs what:
+
+- **The watcher cron** picks the driver from `STORE`; with `convex` it reads
+  and writes state through the API instead of the issue + `dashboard-write`
+  workflow, and paints a read-only digest issue body (no checkboxes, since
+  ticks are no longer read from it).
+- **The local webui** (`python -m src.webui`) already talks to the store via
+  the same seam; with `STORE=convex` tick and status writes go to the
+  deployment instead of the issue/workflow.
+- **Backfill existing state** with `python scripts/migrate_tracker_to_convex.py
+  --dry-run` (prints what it would write), then without the flag to copy your
+  current ticks, ledger, and match snapshot in. Safe to re-run (idempotent
+  upserts).
+
+Setting it up:
+
+1. `npx convex dev` (or `npx convex deploy`) in this repo to create the
+   deployment and push `convex/`.
+2. Set a `TRACKER_SECRET` env var on the deployment (required — every
+   mutation checks it against `TRACKER_SECRET`).
+3. Set `STORE=convex`, `CONVEX_URL`, and `CONVEX_SECRET` (the secret, equal
+   to `TRACKER_SECRET`) on the matching `env:` block of the workflow that
+   runs you, plus `.env` for the local webui. See `.env.example`.
+
+With `convex`, the dashboard issue still gets painted each run (a read-only
+digest) so you keep the GitHub-native view, but it is no longer the source of
+truth — edits there are overwritten.
+
 ## Setup
 
 1. **Create the repo.** Push this directory to a (private is fine) GitHub repo.

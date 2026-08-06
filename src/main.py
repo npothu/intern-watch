@@ -32,7 +32,7 @@ from .normalize import canonical_url, extract_jobright_id, norm_company
 from .notify import (build_digest, build_email, build_health_email,
                      match_item, primary_term, send_discord, send_email)
 from .resume.build import build_for_job, resume_build_cfg
-from .store import make_store
+from .store import GitHubStore, make_store
 
 log = logging.getLogger("intern-watch")
 
@@ -561,11 +561,25 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
     try:
         store = make_store(ROOT, user_cfg or {"name": name})
         ticks = store.get_ticks(name)
+        # interactive only when the store has a GitHub-issue dashboard: a
+        # convex store writes a read-only digest (or, with no plumbing,
+        # syncs state without touching any issue).
         dashboard.sync_user(state, name, terms_order, now, store.repo,
-                            store.token, ticks=ticks)
+                            store.token, ticks=ticks,
+                            interactive=isinstance(store, GitHubStore))
         # applied ticks just read back from the issue become permanent
         # ledger records (seen.json prunes at 120 days; the ledger never does)
         ledger.sync_file(state, name, ledger.ledger_path(ROOT), now.date())
+        if not isinstance(store, GitHubStore):
+            # Git-versioned backup of the permanent record: the store owns
+            # human state, so mirror its (authoritative) ledger book into
+            # state/applications.json for history and backup.
+            book = store.get_ledger(name)
+            if book:
+                lpath = ledger.ledger_path(ROOT)
+                saved = ledger.load_ledger(lpath)
+                saved[name] = book
+                ledger.save_ledger(saved, lpath)
         store.push_matches(name, st.matches_items(state, name))
     except Exception:  # noqa: BLE001 - dashboard trouble never blocks delivery
         log.exception("user %s: dashboard update failed", name)

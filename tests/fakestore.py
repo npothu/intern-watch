@@ -22,10 +22,15 @@ class FakeStore:
         self.issue_number: int | None = None
         self.issue_url = ""
         self.error_name: str | None = None
+        self.read_warning: str | None = None
         self.ticks: dict[str, TicksView | None] = {}
         self.ledger: dict[str, dict] = {}
         self.matches: dict[str, list[dict] | None] = {}
         self.statuses: list[tuple[str, str, str, str]] = []
+
+    @property
+    def writable(self) -> bool:
+        return bool(self.token and self.repo and self.issue_number)
 
     def get_ticks(self, user: str) -> TicksView | None:
         return self.ticks.get(user)

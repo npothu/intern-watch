@@ -75,6 +75,8 @@ def test_get_ticks_parses_a_real_dashboard_body(monkeypatch, tmp_path):
     assert ticks.saved == {d} and ticks.s_present == {a, b, d}
     assert gs.issue_url == issue["html_url"]
     assert gs.error_name is None
+    assert gs.read_warning is None  # success clears it
+    assert gs.writable is True
 
 
 def test_get_ticks_closed_issue_parses_but_flags_not_open(monkeypatch,
@@ -156,6 +158,46 @@ def test_get_ticks_none_without_token_or_issue(tmp_path):
     assert gs.get_ticks("example") is None  # no repo/token detected
     gs2 = store.GitHubStore(tmp_path, {"name": "example"})
     assert gs2.get_ticks("example") is None  # no issue number at all
+
+
+def test_get_ticks_read_warning_no_token_but_issue_known(tmp_path):
+    """A known issue with no creds to read it keeps the legacy webui warning
+    string byte-for-byte."""
+    gs = store.GitHubStore(tmp_path, {"name": "example"})
+    gs.issue_number = 7
+    assert gs.get_ticks("example") is None
+    assert gs.read_warning == (
+        "no GitHub token (set GITHUB_TOKEN or log in with `gh auth "
+        "login`) — applied toggles are read-only this session")
+
+
+def test_get_ticks_read_warning_none_with_no_issue(tmp_path):
+    """No issue number at all -> silence (the legacy webui appended nothing)."""
+    gs = store.GitHubStore(tmp_path, {"name": "example"})
+    assert gs.get_ticks("example") is None
+    assert gs.read_warning is None
+
+
+def test_get_ticks_read_warning_http_failure(monkeypatch, tmp_path):
+    """HTTP failure reproduces the legacy 'couldn't read dashboard issue'
+    warning verbatim, incl. the exception class name."""
+    def handler(request):
+        return httpx.Response(500)
+
+    _mock_client(monkeypatch, handler)
+    gs = _make_store(monkeypatch, tmp_path)
+    assert gs.get_ticks("example") is None
+    assert gs.error_name == "HTTPStatusError"
+    assert gs.read_warning == (
+        "couldn't read dashboard issue #7 (HTTPStatusError) — applied "
+        "ticks made on GitHub may not show")
+
+
+def test_github_store_writable(monkeypatch, tmp_path):
+    gs = _make_store(monkeypatch, tmp_path)
+    assert gs.writable is True
+    gs.issue_number = None
+    assert gs.writable is False
 
 
 # -- set_ticks ------------------------------------------------------------

@@ -1,0 +1,11 @@
+{
+  "name": "intern-watch-convex",
+  "private": true,
+  "description": "Convex backend (schema + query/mutation functions) for the optional STORE=convex TrackerStore driver.",
+  "devDependencies": {
+    "convex": "^1.24"
+  },
+  "scripts": {
+    "deploy": "convex deploy"
+  }
+}
