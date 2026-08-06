@@ -864,6 +864,10 @@ def main(argv: list[str] | None = None) -> int:
     # One-time: seed the canonical-url index from prior deliveries so an ATS
     # re-arrival of an already-emailed jobright job is joined and suppressed.
     st.seed_url_index(state)
+    # One-time: migrate the index to canonical_url's ats: token dialect (and
+    # backfill jr: apply_urls). Must run before the ingest-registration loop
+    # below, so it never writes new-dialect tokens next to unmigrated ones.
+    st.migrate_url_index(state)
 
     if args.explain:
         users = load_users(ROOT / "users")

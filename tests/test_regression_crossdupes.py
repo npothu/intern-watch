@@ -24,8 +24,9 @@ class _StubResolver:
         return self.mapping.get(jr_id)
 
 
-def _job(key, url, term=None, locs=None, jr=None, source="ats-boards"):
-    j = Job(company="C", title="SWE Intern", url=url, source=source,
+def _job(key, url, term=None, locs=None, jr=None, source="ats-boards",
+         company="C", title="SWE Intern"):
+    j = Job(company=company, title=title, url=url, source=source,
             jobright_id=jr, terms=[term] if term else [],
             locations=locs or [])
     j.dedup_key = key
@@ -180,3 +181,65 @@ def test_seeded_state_suppresses_ats_rearrival():
     kept = _run(state, [ats], _StubResolver({}))
     assert kept == []
     assert st.was_notified(state, "url:new", "u")
+
+
+def test_boeing_workday_three_forms_one_requisition():
+    # One Boeing requisition arriving as three Workday URL forms (exposed
+    # EXTERNAL_CAREERS / en-US details / INTERN career-site) from different
+    # feeds. The trailing _JR<reqid> slug collapses all three to
+    # ats:wd:boeing:JR2026520976, so only the first arrival is delivered.
+    base = ("Boeing-Summer-2027-Internship-Program--Paid----"
+            "Data-Analytics-Intern_JR2026520976")
+    jobs = [
+        _job("url:wd-external",
+             "https://boeing.wd1.myworkdayjobs.com/EXTERNAL_CAREERS/job/"
+             "USA---Everett-WA/" + base,
+             term="Summer 2027", locs=["Everett, WA"], company="Boeing",
+             title="Data Analytics Intern (Summer 2027)"),
+        _job("url:wd-details",
+             "https://boeing.wd1.myworkdayjobs.com/en-US/EXTERNAL_CAREERS/"
+             "details/" + base + "-1",
+             term="Summer 2027", locs=["Everett, WA"], company="Boeing",
+             title="Data Analytics Intern (Summer 2027)"),
+        _job("url:wd-intern",
+             "https://boeing.wd1.myworkdayjobs.com/INTERN/job/"
+             "USA---Everett-WA/" + base,
+             term="Summer 2027", locs=["Everett, WA"], company="Boeing",
+             title="Data Analytics Intern (Summer 2027)"),
+    ]
+    kept = _run(st.empty_state(), jobs, _StubResolver({}))
+    assert kept == ["url:wd-external"], kept   # ats:wd:boeing:JR2026520976
+
+
+def test_amazon_apply_vs_en_jobs_same_reqid():
+    # Amazon serves the same req at both /en/jobs/<digits>/ and the bare
+    # /jobs/<digits>/apply form; both normalize to ats:amazon:10412530.
+    jobs = [
+        _job("url:amz-en",
+             "https://www.amazon.jobs/en/jobs/10412530/"
+             "software-development-engineer-internship-2026",
+             term="Summer 2027", locs=["Seattle, WA"], company="Amazon",
+             title="Software Development Engineer Internship"),
+        _job("url:amz-apply", "https://amazon.jobs/jobs/10412530/apply",
+             term="Summer 2027", locs=["Seattle, WA"], company="Amazon",
+             title="Software Development Engineer Internship"),
+    ]
+    kept = _run(st.empty_state(), jobs, _StubResolver({}))
+    assert kept == ["url:amz-en"], kept   # ats:amazon:10412530
+
+
+def test_workable_apply_suffix_doubling():
+    # The trailing /apply suffix on a Workable posting must not mint a second
+    # identity; both forms collapse to ats:workable:altom-transport:1E3C4A9408.
+    jobs = [
+        _job("url:wk",
+             "https://apply.workable.com/altom-transport/j/1E3C4A9408",
+             term="Summer 2027", locs=["Atlanta, GA"], company="Altom Transport",
+             title="Software Engineer Intern"),
+        _job("url:wk-apply",
+             "https://apply.workable.com/altom-transport/j/1E3C4A9408/apply",
+             term="Summer 2027", locs=["Atlanta, GA"], company="Altom Transport",
+             title="Software Engineer Intern"),
+    ]
+    kept = _run(st.empty_state(), jobs, _StubResolver({}))
+    assert kept == ["url:wk"], kept

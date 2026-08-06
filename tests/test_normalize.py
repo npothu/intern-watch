@@ -162,3 +162,78 @@ def test_normalize_url_unchanged_by_canon_refactor(url, expected):
     # Guards the _sorted_kept_query extraction: normalize_url must be byte-
     # identical to its pre-refactor behavior.
     assert normalize_url(url) == expected
+
+
+def test_canonical_url_workday_reqid():
+    assert canonical_url(
+        "https://aep.wd1.myworkdayjobs.com/en-US/AEPCareers/job/"
+        "Ft-Wayne-IN/GIS-Technician-Associate_R17615") \
+        == "ats:wd:aep:R17615"
+
+
+def test_canonical_url_workday_cross_form_join():
+    # Same Boeing requisition across career sites, /job/ vs /details/ forms,
+    # with and without the locale prefix - all one token.
+    tokens = {canonical_url(u) for u in [
+        "https://boeing.wd1.myworkdayjobs.com/EXTERNAL_CAREERS/job/"
+        "USA---Everett-WA/Industrial-Engineer-Intern_JR2026520976",
+        "https://boeing.wd1.myworkdayjobs.com/en-US/EXTERNAL_CAREERS/details/"
+        "Industrial-Engineer-Intern_JR2026520976",
+        "https://boeing.wd1.myworkdayjobs.com/INTERN/job/"
+        "USA---Everett-WA/Industrial-Engineer-Intern_JR2026520976",
+    ]}
+    assert tokens == {"ats:wd:boeing:JR2026520976"}
+
+
+@pytest.mark.parametrize("url", [
+    "https://apply.workable.com/altom-transport/j/1E3C4A9408",
+    "https://apply.workable.com/altom-transport/j/1E3C4A9408/apply",
+])
+def test_canonical_url_workable(url):
+    assert canonical_url(url) == "ats:workable:altom-transport:1E3C4A9408"
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.amazon.jobs/en/jobs/10412530/some-slug",
+    "https://amazon.jobs/jobs/10412530/apply",
+    "https://amazon.jobs/en-GB/jobs/10412530/another-slug-here",
+])
+def test_canonical_url_amazon(url):
+    # Bare /en/ locale survives _LOCALE_SEG_RE; en-GB is stripped by it. The
+    # trailing slug /apply handling differs but the id joins them.
+    assert canonical_url(url) == "ats:amazon:10412530"
+
+
+def test_canonical_url_ashby_embedded_joins_host_twin():
+    a = canonical_url("https://skydio.com/careers?ashby_jid="
+                      "12345678-1234-1234-1234-123456789abc")
+    b = canonical_url("https://jobs.ashbyhq.com/skydio/"
+                      "12345678-1234-1234-1234-123456789abc")
+    assert a == b == "ats:ashby:12345678-1234-1234-1234-123456789abc"
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.akunacapital.com/careers/job/8021481",
+    "https://company.myworkdaysite.com/recruiting/jobs/Location/Title_R12345",
+    "https://randy.com/careers?ref=abc",
+])
+def test_canonical_url_fallback_idempotent(url):
+    once = canonical_url(url)
+    assert once is not None
+    assert canonical_url(once) == once
+
+
+def test_canonical_url_ats_token_refeed_is_none():
+    # ats: tokens are not re-canonicalizable: urlsplit sees scheme "ats" and
+    # the non-http guard rejects it. Migration must skip ats: inputs.
+    assert canonical_url("ats:wd:acme:R12345") is None
+
+
+def test_canonical_url_myworkdaysite_is_fallback_string():
+    # *.myworkdaysite.com is not a myworkdayjobs.com host, so no ats:wd token
+    # (the tenant would be wrong there) - falls back to the hardened string.
+    got = canonical_url("https://company.myworkdaysite.com/recruiting/jobs/"
+                        "Location/Title_R12345")
+    assert got.startswith("https://")
+    assert not got.startswith("ats:")
+    assert canonical_url(got) == got

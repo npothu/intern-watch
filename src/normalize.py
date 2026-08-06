@@ -153,6 +153,15 @@ _LEVER_HOSTS = {"jobs.lever.co", "jobs.eu.lever.co"}
 _LEVER_PATH_RE = re.compile(
     r"^/([^/]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.I)
+# Workday reqids ride on the job slug: .../Title_R17615 or
+# .../Title_JR2026520976. The group captures the reqid after the underscore;
+# repost counters (_JR2026520976-1) are dropped by requiring the match to end
+# on the digit run, so reposts of one requisition share a token.
+_WD_REQID_RE = re.compile(r"_(R[-\w]*\d{3,}|JR[-\w]*\d{3,})", re.I)
+_WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
+# Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
+# so this pattern carries its own optional two-letter locale segment.
+_AMAZON_RE = re.compile(r"^(?:/[a-z]{2})?/jobs/(\d+)(?:/.*)?$", re.I)
 
 
 def canonical_url(url: str) -> str | None:
@@ -194,6 +203,33 @@ def canonical_url(url: str) -> str | None:
         m = _UUID_RE.search(path)
         if m:
             return f"ats:ashby:{m.group(0).lower()}"
+
+    # Workday careers sites (tenant.wdN.myworkdayjobs.com). The reqid is the
+    # suffix after the final underscore of the job slug, which collapses the
+    # .../details/<slug> and .../job/<location>/<slug> forms plus any career
+    # site segment (INTERN, EXTERNAL_CAREERS). Hosts like *.myworkdaysite.com
+    # must fall through to the fallback: there the tenant is not the first
+    # host label, and a wrong tenant would merge two different companies.
+    if host.endswith(".myworkdayjobs.com"):
+        m = _WD_REQID_RE.search(path.rsplit("/", 1)[-1])
+        if m:
+            tenant = host.split(".", 1)[0]
+            return f"ats:wd:{tenant}:{m.group(1).upper()}"
+    if host == "apply.workable.com":
+        m = _WORKABLE_PATH_RE.match(path)
+        if m:
+            return f"ats:workable:{m.group(1).lower()}:{m.group(2).upper()}"
+    if host == "amazon.jobs":
+        m = _AMAZON_RE.match(path)
+        if m:
+            return f"ats:amazon:{m.group(1)}"
+    # Ashby embedded postings: ashby_jid=<uuid> on any host, same token shape
+    # as the jobs.ashbyhq.com rule so the two join.
+    for k, v in parse_qsl(parts.query, keep_blank_values=True):
+        if k.lower() == "ashby_jid":
+            m = _UUID_RE.search(v)
+            if m:
+                return f"ats:ashby:{m.group(0).lower()}"
 
     query = _sorted_kept_query(path, parts.query)
     return urlunsplit(("https", host, path, query, ""))

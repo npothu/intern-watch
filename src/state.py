@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 
 PRUNE_AFTER_DAYS = 120
 HEALTH_ALERT_AFTER = 9  # consecutive failed runs (~18h at 2h cadence) before users hear about it
+CANON_VERSION = 2  # bump whenever canonical_url's output changes
 
 
 def empty_state() -> dict:
@@ -150,6 +151,90 @@ def seed_url_index(state: dict) -> int:
     meta["url_index_seeded"] = True
     log.info("seeded url_index from %d delivered match url(s)", n)
     return n
+
+
+def migrate_url_index(state: dict) -> int:
+    """Re-key url_index (and jobs[key]['canon']) after a canonical_url rule
+    change. A url-string canon is itself a valid url, so re-feeding it through
+    canonical_url yields its new identity. Entries already carrying an ats:
+    token are left alone. Idempotent via _meta['url_index_version'].
+
+    Order: group old entries by their new token, resolve each group's
+    collisions (delivered-first: lowest first_seen, then a non-jr: key, then
+    lexicographically smallest key; a pruned key with no job entry sorts
+    last), write the new index, refresh each survivor's canon back-reference
+    and clear stale ones, backfill jr: apply_urls into the index (first-wins),
+    then set the version flag.
+
+    Returns the number of changed entries: re-keyed + merged-away + backfilled.
+    A second call returns 0 (the version flag is already current).
+    """
+    meta = state.setdefault("_meta", {})
+    if meta.get("url_index_version", 1) >= CANON_VERSION:
+        return 0
+    idx = state.get("url_index", {})
+    before = len(idx)
+
+    def group_for(canon: str) -> str:
+        if canon.startswith("ats:"):
+            return canon
+        return canonical_url(canon) or canon
+
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for canon, key in idx.items():
+        groups.setdefault(group_for(canon), []).append((canon, key))
+
+    def job_rank(key: str) -> tuple:
+        # Delivered-first wins: lowest first_seen, then prefer a non-jr: key,
+        # then the lexicographically smallest key. A key with no job entry
+        # (pruned from jobs) sorts last, after any key that still has one.
+        entry = state["jobs"].get(key)
+        if entry is None:
+            return (1, "", "", key)
+        return (0, entry.get("first_seen") or "", int(key.startswith("jr:")),
+                key)
+
+    new_index: dict[str, str] = {}
+    re_keyed = 0
+    merged = 0
+    for token, members in groups.items():
+        new_index[token] = min((k for _, k in members), key=job_rank)
+        for canon, _ in members:
+            if canon != token:
+                re_keyed += 1
+        merged += len(members) - 1
+    state["url_index"] = new_index
+
+    # Back-reference refresh: every surviving (token, key) sets the job's
+    # canon, then clear the canon from any job that no longer owns a token in
+    # the new index (multiple tokens can point at one key; a canon is stale
+    # only if it is not a key, or maps to a different key, in the new index).
+    for token, key in new_index.items():
+        if key in state["jobs"]:
+            state["jobs"][key]["canon"] = token
+    for key, entry in state["jobs"].items():
+        canon = entry.get("canon")
+        if canon is not None and new_index.get(canon) != key:
+            del entry["canon"]
+
+    # Backfill: jr: jobs with an apply_url but no index entry gain one.
+    # url_index_put is first-wins so a canon already owned by an earlier
+    # delivered key is left alone (the owner is not displaced); only puts
+    # that create a new index entry count as backfilled.
+    backfilled = 0
+    for key, entry in state["jobs"].items():
+        if key.startswith("jr:") and entry.get("apply_url"):
+            canon = canonical_url(entry["apply_url"])
+            if canon and canon not in state["url_index"]:
+                url_index_put(state, canon, key)
+                backfilled += 1
+
+    meta["url_index_version"] = CANON_VERSION
+    log.info("migrated url_index to canonical v%d: %d entries before, %d "
+             "after (%d merged, %d re-keyed, %d backfilled)",
+             CANON_VERSION, before, len(state["url_index"]), merged,
+             re_keyed, backfilled)
+    return re_keyed + merged + backfilled
 
 
 # "pending" = this user still owes a decision/notification for the job
