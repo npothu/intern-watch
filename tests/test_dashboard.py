@@ -6,7 +6,7 @@ import json
 import httpx
 import yaml
 
-from src import dashboard as db, state as st, store
+from src import dashboard as db, main, state as st, store
 
 NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
@@ -371,3 +371,153 @@ def test_main_convex_store_repaints_digest(tmp_path, monkeypatch):
     assert "- [ ]" not in patched[0]["body"]
     assert "- [x]" not in patched[0]["body"]
     assert "Read-only digest" in patched[0]["body"]
+
+
+# ------------- _sync_dashboard (watcher cron; store repo/token may be unset)
+
+def _dashboard_state(matches, issue=7):
+    """State shaped for _sync_dashboard: matches + a pinned dashboard issue."""
+    state = st.empty_state()
+    for m in matches:
+        st.matches_add(state, "example", m)
+    if issue:
+        state["_meta"]["dashboard_issue"] = {"example": issue}
+    return state
+
+
+def _stub_store_ledger(monkeypatch):
+    """_sync_dashboard mirrors the store's ledger book into state; stub the
+    ledger module so no real state/applications.json is touched."""
+    class _Ledger:
+        @staticmethod
+        def sync_file(*a, **k):
+            return None
+
+        @staticmethod
+        def ledger_path(*a, **k):
+            return None
+
+        @staticmethod
+        def load_ledger(*a, **k):
+            return {}
+
+        @staticmethod
+        def save_ledger(*a, **k):
+            return None
+
+    monkeypatch.setattr(main, "ledger", _Ledger)
+
+
+def test_sync_dashboard_convex_repaints_digest(monkeypatch):
+    """STORE=convex (non-GitHub store, repo/token empty) + Actions env:
+    _sync_dashboard still repaints a read-only digest via the env repo/token;
+    no issue GET happens because ticks come from the store."""
+    matches = [_item(1), _item(2, applied=True)]
+    state = _dashboard_state(matches)
+    short = db.short_key(matches[1]["key"])
+    ticks = store.TicksView(checked={short}, present={short})
+    urls, patched = [], []
+
+    def handler(request):
+        urls.append(str(request.url))
+        if request.method == "PATCH":
+            patched.append(json.loads(request.content))
+            return httpx.Response(200, json={"number": 7})
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    class _Convex:
+        repo = ""
+        token = ""
+
+        def get_ticks(self, user):
+            return ticks
+
+        def get_ledger(self, user):
+            return {}
+
+        def push_matches(self, user, matches):
+            pass
+
+    _mock_client(monkeypatch, handler)                 # dashboard.httpx
+    monkeypatch.setattr(main, "make_store",
+                        lambda root, cfg=None: _Convex())
+    _stub_store_ledger(monkeypatch)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    main._sync_dashboard("example", state, False, NOW, TERMS)
+
+    # the digest was repainted to the env-provided (not the store's empty) repo.
+    assert any("/repos/owner/intern-watch/issues/7" in u for u in urls)
+    assert patched
+    assert "<!--iw:" not in patched[0]["body"]
+    for marker in ("<!--iws:", "<!--iwd:", "<!--iwb:"):
+        assert marker not in patched[0]["body"]
+    assert "- [ ]" not in patched[0]["body"]
+    assert "- [x]" not in patched[0]["body"]
+    assert "Read-only digest" in patched[0]["body"]
+
+
+def test_sync_dashboard_convex_env_unset_skips(monkeypatch):
+    """STORE=convex but no GITHUB_REPOSITORY/GITHUB_TOKEN: _sync_dashboard
+    returns before touching the store or the issue - a clean skip."""
+    state = _dashboard_state([_item(1)])
+
+    def handler(request):
+        raise AssertionError(f"no request expected, got {request.method}")
+
+    _mock_client(monkeypatch, handler)
+
+    def _never(root, cfg=None):
+        raise AssertionError("make_store must not be called")
+
+    monkeypatch.setattr(main, "make_store", _never)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    main._sync_dashboard("example", state, False, NOW, TERMS)
+    # no exception and no client interaction means it skipped cleanly.
+
+
+def test_sync_dashboard_github_repaints_interactive(monkeypatch):
+    """GitHub driver (interactive store) + Actions env: the repaint still
+    carries the iw: markers + checkboxes; env repo/token reach sync_user."""
+    matches = [_item(1), _item(2, applied=True)]
+    state = _dashboard_state(matches)
+    urls, patched = [], []
+
+    def handler(request):
+        urls.append(str(request.url))
+        if request.method == "PATCH":
+            patched.append(json.loads(request.content))
+            return httpx.Response(200, json={"number": 7})
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    class _GitHub:
+        repo = "owner/intern-watch"
+        token = "tok"
+
+        def get_ticks(self, user):
+            return store.TicksView()
+
+        def get_ledger(self, user):
+            return {}
+
+        def push_matches(self, user, matches):
+            pass
+
+    _mock_client(monkeypatch, handler)
+    # isinstance(store, GitHubStore) drives interactive=True in _sync_dashboard.
+    monkeypatch.setattr(main, "GitHubStore", _GitHub)
+    monkeypatch.setattr(main, "make_store",
+                        lambda root, cfg=None: _GitHub())
+    _stub_store_ledger(monkeypatch)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    main._sync_dashboard("example", state, False, NOW, TERMS)
+
+    assert any("/repos/owner/intern-watch/issues/7" in u for u in urls)
+    assert patched
+    assert "<!--iw:" in patched[0]["body"]
+    assert "- [ ]" in patched[0]["body"]

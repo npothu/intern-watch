@@ -561,11 +561,13 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
     try:
         store = make_store(ROOT, user_cfg or {"name": name})
         ticks = store.get_ticks(name)
-        # interactive only when the store has a GitHub-issue dashboard: a
-        # convex store writes a read-only digest (or, with no plumbing,
-        # syncs state without touching any issue).
-        dashboard.sync_user(state, name, terms_order, now, store.repo,
-                            store.token, ticks=ticks,
+        # interactive only when the store has a GitHub-issue dashboard (then
+        # its repo/token match the Actions env); otherwise -- e.g. a convex
+        # store with repo="" token="" -- the issue is still repainted as a
+        # read-only digest using the Actions-provided repo/token, so a remote
+        # store's cron run doesn't silently stop updating the dashboard.
+        dashboard.sync_user(state, name, terms_order, now, repo, token,
+                            ticks=ticks,
                             interactive=isinstance(store, GitHubStore))
         # applied ticks just read back from the issue become permanent
         # ledger records (seen.json prunes at 120 days; the ledger never does)
