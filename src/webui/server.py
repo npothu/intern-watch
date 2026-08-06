@@ -7,9 +7,11 @@ since the last cron run live only there.
 
 Write model: the ONLY write path is the dashboard issue's applied checkboxes
 -- the same PATCH a human tick performs; the watcher persists them into
-seen.json on its next run. The server binds to localhost by default, never
-mutates the working tree, and never pushes. Resume builds run the normal
-local pipeline (src.resume) into the gitignored out/ directory.
+seen.json on its next run. Both reads and writes go through the TrackerStore
+seam (src.store), which today delegates to the same GitHub mechanism. The
+server binds to localhost by default, never mutates the working tree, and
+never pushes. Resume builds run the normal local pipeline (src.resume) into
+the gitignored out/ directory.
 """
 
 from __future__ import annotations
@@ -18,23 +20,20 @@ import datetime as dt
 import json
 import logging
 import mimetypes
-import os
 import re
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import httpx
-
-from .. import dashboard, ledger, state as st
+from .. import dashboard, state as st
 from ..models import Job
 from ..resume.build import build_for_job
+from ..store import (ApiError, TickWrite, TrackerStore, _git, make_store)
 from . import core
 
 log = logging.getLogger(__name__)
 
-API = "https://api.github.com"
 STATIC = Path(__file__).resolve().parent / "static"
 
 _DOCX_MIME = ("application/vnd.openxmlformats-officedocument"
@@ -44,51 +43,25 @@ _DOCX_MIME = ("application/vnd.openxmlformats-officedocument"
 _REPO_FILE_RE = re.compile(r"^resumes/[A-Za-z0-9._\- /]+\.docx$")
 
 
-class ApiError(Exception):
-    """User-visible request failure (rendered as JSON with its message)."""
-
-
-def _git(root: Path, *args: str) -> bytes:
-    proc = subprocess.run(["git", "-C", str(root), *args],
-                          capture_output=True, check=True)
-    return proc.stdout
-
-
-def detect_repo(root: Path) -> str:
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if repo:
-        return repo
-    try:
-        url = _git(root, "remote", "get-url", "origin").decode().strip()
-    except (OSError, subprocess.CalledProcessError):
-        return ""
-    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", url)
-    return m.group(1) if m else ""
-
-
-def detect_token() -> str:
-    tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if tok:
-        return tok
-    try:  # the user is authenticated through the gh CLI locally
-        proc = subprocess.run(["gh", "auth", "token"], capture_output=True,
-                              text=True, check=True)
-        return proc.stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return ""
-
-
 class Hub:
-    """All mutable server state + the git/GitHub plumbing around it."""
+    """All mutable server state + the git/GitHub plumbing around it.
+
+    The store (GitHubStore by default) owns the issue/ledger access; the Hub
+    keeps the git fetch/show reads, the snapshot shaping, and the pending
+    overlay that makes queued writes visible before the workflow commit
+    lands on main.
+    """
 
     def __init__(self, root: Path, user: str, terms_order: list[str], *,
-                 fetch: bool = True):
+                 fetch: bool = True,
+                 store: TrackerStore | None = None):
         self.root = root
         self.user = user
         self.terms_order = terms_order
         self.fetch = fetch
-        self.repo = detect_repo(root)
-        self.token = detect_token()
+        self.store = store or make_store(root, {"name": user})
+        self.repo = self.store.repo
+        self.token = self.store.token
         self.lock = threading.Lock()
         self.state: dict = st.empty_state()
         self.fetched_main = False
@@ -101,23 +74,11 @@ class Hub:
         self.saved: set[str] | None = None
         self.s_present: set[str] | None = None
         self.local_resumes: dict[str, str] = {}  # short -> filename in out/
-        self.ledger: dict = {}  # state/applications.json from origin/main
+        self.ledger: dict = {}  # this user's book from state/applications.json
         # workflow-dispatched writes not yet visible in state; overlaid on
         # snapshots until the dashboard-write commit lands on main
         self.pending: dict[str, dict] = {}
         self.warnings: list[str] = []
-
-    # -- GitHub issue plumbing ------------------------------------------
-
-    def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {self.token}",
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "intern-watch webui (local)"}
-
-    def _issue_get(self, client: httpx.Client, number: int) -> dict:
-        resp = client.get(f"{API}/repos/{self.repo}/issues/{number}")
-        resp.raise_for_status()
-        return resp.json()
 
     @property
     def writable(self) -> bool:
@@ -144,32 +105,29 @@ class Hub:
             fetched_main = False
             warnings.append("couldn't read state from origin/main — showing "
                             "the local checkout's copy")
-        try:  # ledger appears with the first applied tick; absence is normal
-            book = json.loads(
-                _git(self.root, "show",
-                     "origin/main:state/applications.json"))
-        except (OSError, subprocess.CalledProcessError, ValueError):
-            book = ledger.load_ledger(
-                self.root / "state" / "applications.json")
+        # ledger appears with the first applied tick; absence is normal
+        book = self.store.get_ledger(self.user)
 
         number = state.get("_meta", {}).get("dashboard_issue", {}) \
                       .get(self.user)
         checked = present = hidden = h_present = saved = s_present = None
         issue_url = ""
+        self.store.issue_number = number
         if number and self.token and self.repo:
-            try:
-                with httpx.Client(headers=self._headers(),
-                                  timeout=30.0) as client:
-                    issue = self._issue_get(client, number)
-                issue_url = issue.get("html_url", "")
-                body = issue.get("body") or ""
-                checked, present = dashboard.parse_checkboxes(body)
-                hidden, h_present = dashboard.parse_dismissed(body)
-                saved, s_present = dashboard.parse_saved(body)
-            except httpx.HTTPError as exc:
+            ticks = self.store.get_ticks(self.user)
+            if ticks is None:
+                exc_name = self.store.error_name or "HTTPError"
                 warnings.append(f"couldn't read dashboard issue #{number} "
-                                f"({exc.__class__.__name__}) — applied ticks "
-                                "made on GitHub may not show")
+                                f"({exc_name}) — applied ticks made on "
+                                "GitHub may not show")
+            else:
+                issue_url = self.store.issue_url
+                checked, present = ticks.checked, ticks.present
+                hidden, h_present = ticks.hidden, ticks.h_present
+                saved, s_present = ticks.saved, ticks.s_present
+                # deliberately ignore ticks.issue_open: the webui has always
+                # overlaid ticks from closed issues (view-only read-back),
+                # unlike the cron which must not repaint a closed dashboard
         elif number:
             warnings.append("no GitHub token (set GITHUB_TOKEN or log in "
                             "with `gh auth login`) — applied toggles are "
@@ -197,8 +155,7 @@ class Hub:
                 self.saved, self.s_present)
             jobs = self.state.get("jobs", {})
             local = dict(self.local_resumes)
-            book = {s: dict(r)
-                    for s, r in self.ledger.get(self.user, {}).items()}
+            book = {s: dict(r) for s, r in self.ledger.items()}
             payload = {
                 "applications": book,
                 "user": self.user,
@@ -258,68 +215,40 @@ class Hub:
 
     # -- writes ---------------------------------------------------------
 
-    def _dispatch_write(self, client: httpx.Client, short: str, field: str,
-                        value: str, note: str = "") -> None:
-        """Queue a dashboard-write workflow run: Actions edits the match /
-        ledger record in state directly and repaints the issue. Used for
-        rows outside the issue's rendered window (no checkbox to PATCH) and
-        for tracker statuses (no issue representation at all)."""
-        inputs = {"user": self.user, "short": short,
-                  "field": field, "value": value}
-        if note:
-            inputs["note"] = note
-        resp = client.post(
-            f"{API}/repos/{self.repo}/actions/workflows/"
-            "dashboard-write.yml/dispatches",
-            json={"ref": "main", "inputs": inputs})
-        if resp.status_code == 404:
-            raise ApiError("the dashboard-write workflow isn't on main "
-                           "yet — merge the PR that adds it, then retry")
-        resp.raise_for_status()
-
-    def _write_box(self, flip, short: str, on: bool, cache_attr: str,
-                   field: str) -> bool:
-        """Set one per-row toggle. Rendered rows get the instant checkbox
-        PATCH; unrendered rows fall back to a workflow-dispatched state
-        write. Returns True when the write was queued (not yet on main)."""
+    def _set_tick(self, short: str, field: str, on: bool,
+                  cache_attr: str) -> bool:
+        """Set one per-row toggle through the store. Rendered rows get the
+        instant checkbox PATCH; unrendered rows fall back to a
+        workflow-dispatched state write, surfaced through the pending
+        overlay until the commit lands. Returns True when queued."""
         if not self.writable:
             raise ApiError("this state persists through the dashboard "
                            "issue and no GitHub token/issue is available — "
                            "run `gh auth login` and refresh")
         with self.lock:  # serialize read-modify-write PATCHes
-            with httpx.Client(headers=self._headers(),
-                              timeout=30.0) as client:
-                issue = self._issue_get(client, self.issue_number)
-                body = flip(issue.get("body") or "", short, on)
-                if body is None:
-                    self._dispatch_write(client, short, field,
-                                         "true" if on else "false")
-                    self.pending.setdefault(short, {})[field] = on
-                    return True
-                resp = client.patch(
-                    f"{API}/repos/{self.repo}/issues/{self.issue_number}",
-                    json={"body": body})
-                resp.raise_for_status()
-            cache: set[str] | None = getattr(self, cache_attr)
-            if cache is not None:
-                (cache.add if on else cache.discard)(short)
-        return False
+            queued_shorts = self.store.set_ticks(
+                self.user, [TickWrite(short, field, on)])
+            queued = short in queued_shorts
+            if queued:
+                self.pending.setdefault(short, {})[field] = on
+            else:
+                cache: set[str] | None = getattr(self, cache_attr)
+                if cache is not None:
+                    (cache.add if on else cache.discard)(short)
+        return queued
 
     def set_applied(self, short: str, applied: bool) -> dict:
-        queued = self._write_box(core.flip_applied, short, applied,
-                                 "checked", "applied")
+        queued = self._set_tick(short, "applied", applied, "checked")
         return {"ok": True, "short": short, "applied": applied,
                 "queued": queued}
 
     def set_dismissed(self, short: str, dismissed: bool) -> dict:
-        queued = self._write_box(core.flip_dismissed, short, dismissed,
-                                 "hidden", "dismissed")
+        queued = self._set_tick(short, "dismissed", dismissed, "hidden")
         return {"ok": True, "short": short, "dismissed": dismissed,
                 "queued": queued}
 
     def set_saved(self, short: str, saved: bool) -> dict:
-        queued = self._write_box(core.flip_saved, short, saved,
-                                 "saved", "saved")
+        queued = self._set_tick(short, "saved", saved, "saved")
         return {"ok": True, "short": short, "saved": saved,
                 "queued": queued}
 
@@ -327,17 +256,8 @@ class Hub:
         """Tracker status update — always workflow-mediated (statuses have
         no issue checkbox). The pending overlay carries it until the
         dashboard-write commit lands on main."""
-        if status not in ledger.STATUSES:
-            raise ApiError(f"unknown status {status!r} (have: "
-                           f"{', '.join(ledger.STATUSES)})")
-        if not (self.token and self.repo):
-            raise ApiError("status updates dispatch a workflow and no "
-                           "GitHub token is available — run `gh auth "
-                           "login` and refresh")
         with self.lock:
-            with httpx.Client(headers=self._headers(),
-                              timeout=30.0) as client:
-                self._dispatch_write(client, short, "status", status, note)
+            self.store.record_status(self.user, short, status, note)
             # a status implies an application: overlay both
             self.pending.setdefault(short, {}).update(
                 {"status": status, "applied": True})

@@ -18,6 +18,7 @@ import hashlib
 import logging
 import os
 import re
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -25,6 +26,9 @@ from . import content_dedup
 from . import state as st
 from .normalize import canonical_url
 from .notify import _group_items
+
+if TYPE_CHECKING:  # annotation-only; .store imports this module at runtime
+    from .store import TicksView
 
 log = logging.getLogger(__name__)
 
@@ -319,10 +323,18 @@ def dedup_existing_matches(state: dict, user: str) -> int:
 
 
 def sync_user(state: dict, user: str, terms_order: list[str],
-              now: dt.datetime, repo: str, token: str) -> None:
+              now: dt.datetime, repo: str, token: str,
+              ticks: "TicksView | None" = None) -> None:
     """Read applied/hide checkboxes back into state, auto-hide stale rows,
     then rewrite (or create) the user's dashboard issue. Raises httpx errors
-    to the caller."""
+    to the caller.
+
+    `ticks` is the store-produced read-back (src.store); when None the issue
+    is fetched and parsed here instead -- the legacy path (dashboard-write /
+    resume-batch runs) that also owns the closed-issue skip and the
+    recreate-on-gone behavior. A store read-back can't discover a gone or
+    recreated issue, but it CAN see a closed one (HTTP 200 with `state:
+    closed`), so the same skip applies before any read-back or repaint."""
     matches = st.matches_items(state, user)
     if not matches:
         return
@@ -334,7 +346,7 @@ def sync_user(state: dict, user: str, terms_order: list[str],
     title = f"📋 intern-watch matches — {user}"
 
     with httpx.Client(headers=headers, timeout=30.0) as client:
-        if number:
+        if number and ticks is None:
             resp = client.get(f"{API}/repos/{repo}/issues/{number}")
             if resp.status_code in (404, 410):
                 log.warning("dashboard issue #%d gone -- creating a new one",
@@ -348,23 +360,36 @@ def sync_user(state: dict, user: str, terms_order: list[str],
                              "skipping update (reopen it to resume)",
                              user, number)
                     return
+                # module-level import would cycle (dashboard <-> store via
+                # webui.core); this legacy construction is the only place
+                # sync_user needs the concrete type
+                from .store import TicksView
                 body = issue.get("body") or ""
-                by_short = {short_key(m["key"]): m["key"] for m in matches}
-                checked, present = parse_checkboxes(body)
-                st.matches_set_applied(
-                    state, user,
-                    {by_short[s] for s in checked if s in by_short},
-                    {by_short[s] for s in present if s in by_short})
-                hidden, h_present = parse_dismissed(body)
-                st.matches_set_dismissed(
-                    state, user,
-                    {by_short[s] for s in hidden if s in by_short},
-                    {by_short[s] for s in h_present if s in by_short})
-                saved, s_present = parse_saved(body)
-                st.matches_set_saved(
-                    state, user,
-                    {by_short[s] for s in saved if s in by_short},
-                    {by_short[s] for s in s_present if s in by_short})
+                ticks = TicksView(*parse_checkboxes(body),
+                                  *parse_dismissed(body),
+                                  *parse_saved(body))
+        if ticks is not None and not ticks.issue_open:
+            log.info("user %s: dashboard issue #%d is closed -- "
+                     "skipping update (reopen it to resume)",
+                     user, number)
+            return
+        if ticks is not None:
+            by_short = {short_key(m["key"]): m["key"] for m in matches}
+            checked, present = ticks.checked, ticks.present
+            st.matches_set_applied(
+                state, user,
+                {by_short[s] for s in checked if s in by_short},
+                {by_short[s] for s in present if s in by_short})
+            hidden, h_present = ticks.hidden, ticks.h_present
+            st.matches_set_dismissed(
+                state, user,
+                {by_short[s] for s in hidden if s in by_short},
+                {by_short[s] for s in h_present if s in by_short})
+            saved, s_present = ticks.saved, ticks.s_present
+            st.matches_set_saved(
+                state, user,
+                {by_short[s] for s in saved if s in by_short},
+                {by_short[s] for s in s_present if s in by_short})
 
         # after read-back (so a manual restore this cycle wins first), sweep
         # long-gone postings and existing cross-source duplicates into Hidden
