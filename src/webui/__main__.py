@@ -13,28 +13,15 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import webbrowser
 from pathlib import Path
 
+from ..envfile import load_dotenv
 from ..filters import load_users
 from .server import Hub, make_server
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _load_dotenv(path: Path) -> None:
-    """Minimal KEY=VALUE loader (no dependency): the resume LLM rewrite wants
-    GEMINI_API_KEY, which lives in .env locally. Existing env vars win."""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        os.environ.setdefault(key.strip(), val.strip().strip("'\""))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,7 +39,9 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
-    _load_dotenv(ROOT / ".env")
+    # Local-only: pick up STORE/CONVEX_* and GEMINI_API_KEY from the gitignored
+    # .env before the store/hub is built. No-op in Actions (no .env file).
+    load_dotenv()
 
     users = {u["name"]: u for u in load_users(ROOT / "users")}
     if not users:

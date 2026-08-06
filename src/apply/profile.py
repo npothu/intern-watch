@@ -9,30 +9,16 @@ are read from environment variables named by the `cloud:` / `inbox:` blocks.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field
 
+# Re-export the shared .env loader so existing callers of
+# `from .profile import load_dotenv` keep working unchanged.
+from ..envfile import load_dotenv
+
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def load_dotenv(path: Path | None = None) -> None:
-    """Minimal .env loader (no dependency): set KEY=VALUE lines into os.environ
-    for keys not already present. Lets `python -m src.apply` pick up secrets
-    (BROWSERBASE_API_KEY, ...) without exporting them by hand. .env is gitignored."""
-    path = path or (ROOT / ".env")
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key, val = key.strip(), val.strip().strip('"').strip("'")
-        os.environ.setdefault(key, val)
-
 
 # EEO questions are optional everywhere; default to the legally-safe non-answer.
 DECLINE = "Decline to self-identify"
