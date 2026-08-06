@@ -10,5 +10,7 @@ out/
 # auto-apply: persisted browser logins (contain auth cookies) + run artifacts
 state/apply_sessions/
 state/apply_artifacts/
+# jobright auth cookies
+state/jobright_session.json
 # auto-apply: ATS login credentials (contain passwords). *.example.yaml is OK.
 users/*_logins.yaml

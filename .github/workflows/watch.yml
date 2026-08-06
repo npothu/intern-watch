@@ -37,6 +37,14 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Restore jobright session
+        uses: actions/cache@v4
+        with:
+          path: state/jobright_session.json
+          key: jobright-session-${{ github.run_id }}
+          restore-keys: |
+            jobright-session-
+
       - name: Run intern-watch
         run: python -m src.main ${{ inputs.send_now == true && '--send-now' || '' }}
         env:
@@ -48,6 +56,8 @@ jobs:
           # notify.email.smtp_*_env / notify.discord_webhook_env
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          JOBRIGHT_EMAIL: ${{ secrets.JOBRIGHT_EMAIL }}
+          JOBRIGHT_PASSWORD: ${{ secrets.JOBRIGHT_PASSWORD }}
 
       # Committing state also keeps the repo active, which prevents GitHub
       # from disabling the scheduled workflow after 60 days of inactivity.

@@ -149,6 +149,28 @@ def test_tier4_disabled_when_allow_scrape_false():
     assert client.calls == []
 
 
+def test_tier4_js_heavy_body_rejected_by_guard():
+    # A body that is mostly tracker/hydration JS (no JD markers) must be
+    # rejected even though it clears MIN_JD_CHARS -- an honest miss beats
+    # returning JavaScript as a "job description".
+    js_like = ("function(s,a,e,v,n,t,z){window.saq=n;document.write(v);"
+              "var x=null,{});") * 30
+    html = "<html><body>" + js_like + "</body></html>"
+    client = FakeClient({"https://acme.test/job": FakeResp(text=html)})
+    assert jd_source._generic_scrape(client, "https://acme.test/job") is None
+
+
+def test_tier4_real_jd_prose_passes_guard():
+    jd_text = ("We are looking for a Software Engineer Intern. "
+              "Responsibilities include building distributed systems. "
+              "Qualifications: experience with C++ or Python. "
+              "Bachelor's degree required. " * 5)
+    html = "<html><body><p>" + jd_text + "</p></body></html>"
+    client = FakeClient({"https://acme.test/job": FakeResp(text=html)})
+    got = jd_source.acquire_jd(_job(), client=client)
+    assert got and "Responsibilities" in got
+
+
 def test_tier4_blocked_page_is_a_miss():
     # A 200 anti-bot challenge body (Tesla-style) must not become a "JD" even
     # though it clears MIN_JD_CHARS -- building from "Access Denied" is worse
@@ -157,6 +179,66 @@ def test_tier4_blocked_page_is_a_miss():
             "to access this server.</p>" + ("filler " * 60) + "</body></html>")
     client = FakeClient({"https://acme.test/job": FakeResp(text=body)})
     assert jd_source.acquire_jd(_job(), client=client) is None
+
+
+# ---- employer url vs jobright url tier order ---------------------------
+
+def test_employer_url_scrapes_before_jobright_page(monkeypatch):
+    # url is a real employer link (extract_jobright_id -> None): the scrape
+    # must win and the jobright page must never even be called.
+    def fail_jobright(client, jid):
+        pytest.fail("jobright page fetched before employer scrape")
+
+    monkeypatch.setattr(jd_source, "fetch_description", fail_jobright)
+    html = "<html><body>" + "<p>Employer site content. </p>" * 40 + "</body></html>"
+    client = FakeClient({"https://acme.test/job": FakeResp(text=html)})
+    job = _job(jobright_id="d" * 24)
+    got = jd_source.acquire_jd(job, client=client)
+    assert got and "Employer site content." in got
+    assert client.calls == ["https://acme.test/job"]
+
+
+def test_employer_url_js_junk_falls_back_to_jobright_page(monkeypatch):
+    # employer page's generic scrape is mostly JS debris (leaked hydration
+    # payload, no JD markers) -> guard rejects it -> falls back to the
+    # jobright composed JD, same as an HTTP-blocked scrape would.
+    monkeypatch.setattr(jd_source, "fetch_description",
+                        lambda client, jid: "Jobright JD fallback text. " * 20)
+    js_like = ("function(s,a,e,v,n,t,z){window.saq=n;document.write(v);"
+              "var x=null,{});") * 30
+    html = "<html><body>" + js_like + "</body></html>"
+    client = FakeClient({"https://acme.test/job": FakeResp(text=html)})
+    job = _job(jobright_id="9" * 24)
+    got = jd_source.acquire_jd(job, client=client)
+    assert got and got.startswith("Jobright JD fallback text.")
+    assert client.calls == ["https://acme.test/job"]
+
+
+def test_jobright_url_still_tries_jobright_page_first(monkeypatch):
+    # url IS a jobright link: existing order holds -- jobright page first,
+    # generic scrape of that same url is not attempted once it hits.
+    monkeypatch.setattr(jd_source, "fetch_description",
+                        lambda client, jid: "Jobright JD. " * 30)
+    client = FakeClient({})
+    job = _job(url="https://jobright.ai/jobs/info/" + "e" * 24,
+               jobright_id="e" * 24)
+    got = jd_source.acquire_jd(job, client=client)
+    assert got and got.startswith("Jobright JD.")
+    assert client.calls == []
+
+
+def test_employer_url_blocked_scrape_falls_back_to_jobright_page(monkeypatch):
+    # employer site serves an anti-bot challenge (a miss) -> falls back to
+    # the jobright page, which succeeds.
+    monkeypatch.setattr(jd_source, "fetch_description",
+                        lambda client, jid: "Jobright fallback JD. " * 20)
+    body = ("<html><body><h1>Access Denied</h1><p>You don't have permission "
+            "to access this server.</p>" + ("filler " * 60) + "</body></html>")
+    client = FakeClient({"https://acme.test/job": FakeResp(text=body)})
+    job = _job(jobright_id="f" * 24)
+    got = jd_source.acquire_jd(job, client=client)
+    assert got and got.startswith("Jobright fallback JD.")
+    assert client.calls == ["https://acme.test/job"]
 
 
 # ---- fail-open: every tier raises -> None ------------------------------

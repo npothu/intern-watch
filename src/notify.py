@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 
 from .models import Job
+from .normalize import extract_jobright_id
 
 log = logging.getLogger(__name__)
 
@@ -110,11 +111,15 @@ def match_item(job: Job, reasons: list[str], terms_order: list[str]) -> dict:
 
     `resume` (relative POSIX .docx path) is filled in by the caller after a
     successful auto-build; `jobright_id`/`jd_url` let an on-demand rebuild
-    reacquire the JD long after the source row rotated out. All three are
-    optional and ignored by existing readers (email/dashboard) when absent."""
+    reacquire the JD long after the source row rotated out; `jobright_url`
+    points back at the jobright info page once the url is an employer link.
+    All are optional and ignored by existing readers (email/dashboard) when
+    absent."""
     item = outbox_item(job, reasons, terms_order)
     if job.jobright_id:
         item["jobright_id"] = job.jobright_id
+        if extract_jobright_id(job.url) is None:
+            item["jobright_url"] = f"https://jobright.ai/jobs/info/{job.jobright_id}"
     if job.jd_url:
         item["jd_url"] = job.jd_url
     return item

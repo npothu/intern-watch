@@ -1376,7 +1376,9 @@ def test_wait_for_form_stable_returns_when_count_settles():
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             page.set_content(html)
-            _wait_for_form_stable(page, settle_ms=400, max_ms=6000, poll_ms=150)
+            # settle_ms must exceed the 500ms injection delay above, or the
+            # count can read as settled before the late fields ever arrive.
+            _wait_for_form_stable(page, settle_ms=1000, max_ms=6000, poll_ms=150)
             refs = {f["ref"] for f in _extract_fields(page)}
             # The late-injected fields are present after the stability wait.
             assert "#late0" in refs and "#late19" in refs
