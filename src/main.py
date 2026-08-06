@@ -24,6 +24,7 @@ from . import dashboard
 from . import ledger
 from . import state as st
 from .adapters import make_adapter
+from .envfile import load_dotenv
 from .dedupe import dedupe
 from .filters import UserFilter, Verdict, load_users
 from .llm import api_key_env_for, classify
@@ -874,6 +875,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="with --explain, trace only this user")
     parser.add_argument("--state-file", default=str(ROOT / "state" / "seen.json"))
     args = parser.parse_args(argv)
+
+    # Local-only: pull STORE/CONVEX_* and GEMINI_API_KEY out of the gitignored
+    # .env before the store / user configs are loaded. No-op in Actions (no
+    # .env file), where the real secrets are exported env vars.
+    load_dotenv()
 
     try:  # Windows consoles default to cp1252, which can't print the digest emoji
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
