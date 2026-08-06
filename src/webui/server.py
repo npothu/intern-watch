@@ -88,7 +88,9 @@ class Hub:
 
     @property
     def writable(self) -> bool:
-        return bool(self.token and self.repo and self.issue_number)
+        """Defer to the store driver: GitHub needs issue + creds, Convex is
+        always writable."""
+        return bool(self.store.writable)
 
     # -- refresh --------------------------------------------------------
 
@@ -119,25 +121,21 @@ class Hub:
         checked = present = hidden = h_present = saved = s_present = None
         issue_url = ""
         self.store.issue_number = number
-        if number and self.token and self.repo:
-            ticks = self.store.get_ticks(self.user)
-            if ticks is None:
-                exc_name = self.store.error_name or "HTTPError"
-                warnings.append(f"couldn't read dashboard issue #{number} "
-                                f"({exc_name}) — applied ticks made on "
-                                "GitHub may not show")
-            else:
-                issue_url = self.store.issue_url
-                checked, present = ticks.checked, ticks.present
-                hidden, h_present = ticks.hidden, ticks.h_present
-                saved, s_present = ticks.saved, ticks.s_present
-                # deliberately ignore ticks.issue_open: the webui has always
-                # overlaid ticks from closed issues (view-only read-back),
-                # unlike the cron which must not repaint a closed dashboard
-        elif number:
-            warnings.append("no GitHub token (set GITHUB_TOKEN or log in "
-                            "with `gh auth login`) — applied toggles are "
-                            "read-only this session")
+        # Always read through the store driver: each driver reproduces its own
+        # per-case read_warning (GitHub: no-token vs HTTP-failure; Convex: its
+        # reachability message), so the Hub no longer branches on issue/token.
+        ticks = self.store.get_ticks(self.user)
+        if ticks is None:
+            if self.store.read_warning:
+                warnings.append(self.store.read_warning)
+        else:
+            issue_url = self.store.issue_url
+            checked, present = ticks.checked, ticks.present
+            hidden, h_present = ticks.hidden, ticks.h_present
+            saved, s_present = ticks.saved, ticks.s_present
+            # deliberately ignore ticks.issue_open: the webui has always
+            # overlaid ticks from closed issues (view-only read-back),
+            # unlike the cron which must not repaint a closed dashboard
 
         with self.lock:
             self.state = state

@@ -114,9 +114,9 @@ def _url(url: str) -> str:
     return url.replace("(", "%28").replace(")", "%29")
 
 
-def _row(item: dict, repo: str = "", branch: str = "main") -> str:
+def _row(item: dict, repo: str = "", branch: str = "main",
+         interactive: bool = True) -> str:
     short = short_key(item["key"])
-    box = "x" if item.get("applied") else " "
     tag = f"**{_md(item['tag'])}** " if item.get("tag") else ""
     salary = f" · {_md(item['salary'])}" if item.get("salary") else ""
     added = f" · seen {item['added']}" if item.get("added") else ""
@@ -125,6 +125,16 @@ def _row(item: dict, repo: str = "", branch: str = "main") -> str:
     resume = ""
     if repo and item.get("resume"):
         resume = f" · [📄 resume](/{repo}/blob/{branch}/{item['resume']})"
+    if not interactive:
+        # Read-only digest row: a plain line with NO checkbox and NO
+        # iw:/iwd:/iws: markers, but the same displayed suffix parts
+        # (tag, salary, added, resume) as the interactive row so the two
+        # render identically apart from the controls. There is no short key
+        # to act on, so the `/resume` build command is dropped too.
+        return (f"- {tag}{_md(item['company'])} — "
+                f"[{_md(item['title'])}]({_url(item['url'])}) "
+                f"({_md(item['location'])}){salary}{added}{resume}")
+    box = "x" if item.get("applied") else " "
     # Visible build command: the short key lives in the HTML comment (hidden by
     # GitHub's renderer), so surface the exact comment to copy-paste. For sites
     # we can't scrape, paste the JD on the lines below the /resume comment.
@@ -150,20 +160,30 @@ def _row(item: dict, repo: str = "", branch: str = "main") -> str:
     return f"{main}\n{sub}\n{save}\n{hide}"
 
 
-def _hidden_row(item: dict) -> str:
-    """One-liner inside the Hidden section: box ticked; untick to restore."""
+def _hidden_row(item: dict, interactive: bool = True) -> str:
+    """One-liner inside the Hidden section. Interactive: box ticked, untick
+    to restore. Read-only digest: a plain line (no checkbox, no marker)."""
     short = short_key(item["key"])
+    if not interactive:
+        return (f"- {_md(item['company'])} — "
+                f"[{_md(item['title'])}]({_url(item['url'])})")
     return (f"- [x] {_md(item['company'])} — "
             f"[{_md(item['title'])}]({_url(item['url'])}) "
             f"<!--iwd:{short}-->")
 
 
 def build_body(matches: list[dict], terms_order: list[str],
-               now: dt.datetime, repo: str = "", branch: str = "main") -> str:
+               now: dt.datetime, repo: str = "", branch: str = "main",
+               interactive: bool = True) -> str:
     """Markdown body: header stats, then active matches grouped by term
     (newest first), then dismissed matches in a collapsed Hidden section.
     Check a box = applied; tick a hide box = dismissed; everything else is
-    regenerated each run."""
+    regenerated each run.
+
+    With `interactive=False` the body is a read-only digest: rows carry no
+    checkboxes and no markers, and the header note says the tracker is
+    managed by the store (edited in the local webui) rather than by ticking
+    this issue. Used when the TrackerStore has no GitHub-issue plumbing."""
     active = sorted((i for i in matches if not i.get("dismissed")),
                     key=lambda i: i.get("added", ""), reverse=True)
     dismissed = sorted((i for i in matches if i.get("dismissed")),
@@ -174,38 +194,56 @@ def build_body(matches: list[dict], terms_order: list[str],
     def render(n: int, d_n: int) -> str:
         shown, overflow = active[:n], active[n:]
         d_shown, d_overflow = dismissed[:d_n], dismissed[d_n:]
+        if interactive:
+            intro = [
+                "Maintained automatically by intern-watch. **Tick a row's "
+                "checkbox once you've applied** — it is read back into state "
+                "on the next run. Tick **⭐ saved** to bookmark a row for "
+                "later. Tick **🚫 hide** to move a row to the Hidden "
+                "section. Any other edit to this issue gets overwritten.",
+                "",
+                "To get tailored resumes: tick the **📄 build resume** box "
+                "under each job you want, then tick the trigger below. "
+                "Already-built rows are skipped; the trigger resets itself "
+                "when the build finishes.",
+                "",
+                "- [ ] **Build selected resumes** <!--iw:build-->",
+            ]
+        else:
+            intro = [
+                "Maintained automatically by intern-watch. **Read-only "
+                "digest**: the tracker state lives in the store now and is "
+                "edited in the local webui (`python -m src.webui`); ticks "
+                "made here are not read back. Any edit to this issue gets "
+                "overwritten.",
+                "",
+            ]
         parts = [
             f"**{len(active)} matches · {applied} applied · {saved} saved · "
             f"{len(dismissed)} hidden** — updated "
             f"{now.strftime('%b %d, %I:%M %p UTC').lstrip('0')}",
             "",
-            "Maintained automatically by intern-watch. **Tick a row's "
-            "checkbox once you've applied** — it is read back into state on "
-            "the next run. Tick **⭐ saved** to bookmark a row for later. "
-            "Tick **🚫 hide** to move a row to the Hidden section. Any "
-            "other edit to this issue gets overwritten.",
-            "",
-            "To get tailored resumes: tick the **📄 build resume** box under "
-            "each job you want, then tick the trigger below. Already-built "
-            "rows are skipped; the trigger resets itself when the build "
-            "finishes.",
-            "",
-            "- [ ] **Build selected resumes** <!--iw:build-->",
+            *intro,
         ]
         for term, group in _group_items(shown, terms_order):
             parts.append(f"\n### {term}\n")
             group = sorted(group, key=lambda i: (i.get("added", ""),
                                                  i["company"].casefold()),
                            reverse=True)
-            parts.extend(_row(item, repo, branch) for item in group)
+            parts.extend(_row(item, repo, branch, interactive)
+                         for item in group)
         if overflow:
             parts.append(f"\n*…and {len(overflow)} older match(es) not shown "
                          "(their applied state is kept in state/seen.json).*")
         if d_shown:
             parts.append("\n<details>")
-            parts.append(f"<summary>🗂 Hidden ({len(dismissed)}) — untick to "
-                         "restore</summary>\n")
-            parts.extend(_hidden_row(item) for item in d_shown)
+            if interactive:
+                parts.append(f"<summary>🗂 Hidden ({len(dismissed)}) — untick "
+                             "to restore</summary>\n")
+            else:
+                parts.append(f"<summary>🗂 Hidden ({len(dismissed)})"
+                             "</summary>\n")
+            parts.extend(_hidden_row(item, interactive) for item in d_shown)
             if d_overflow:
                 parts.append(f"\n*…and {len(d_overflow)} more hidden "
                              "match(es) (kept in state/seen.json).*")
@@ -324,7 +362,8 @@ def dedup_existing_matches(state: dict, user: str) -> int:
 
 def sync_user(state: dict, user: str, terms_order: list[str],
               now: dt.datetime, repo: str, token: str,
-              ticks: "TicksView | None" = None) -> None:
+              ticks: "TicksView | None" = None,
+              interactive: bool = True) -> None:
     """Read applied/hide checkboxes back into state, auto-hide stale rows,
     then rewrite (or create) the user's dashboard issue. Raises httpx errors
     to the caller.
@@ -334,7 +373,12 @@ def sync_user(state: dict, user: str, terms_order: list[str],
     resume-batch runs) that also owns the closed-issue skip and the
     recreate-on-gone behavior. A store read-back can't discover a gone or
     recreated issue, but it CAN see a closed one (HTTP 200 with `state:
-    closed`), so the same skip applies before any read-back or repaint."""
+    closed`), so the same skip applies before any read-back or repaint.
+
+    `interactive=False` (a store with no GitHub-issue plumbing, e.g.
+    STORE=convex) still reads ticks back and syncs state, but writes a
+    read-only digest body with no checkboxes; when there is no repo/token to
+    write to, the issue write is skipped entirely."""
     matches = st.matches_items(state, user)
     if not matches:
         return
@@ -346,7 +390,7 @@ def sync_user(state: dict, user: str, terms_order: list[str],
     title = f"📋 intern-watch matches — {user}"
 
     with httpx.Client(headers=headers, timeout=30.0) as client:
-        if number and ticks is None:
+        if number and repo and token and ticks is None:
             resp = client.get(f"{API}/repos/{repo}/issues/{number}")
             if resp.status_code in (404, 410):
                 log.warning("dashboard issue #%d gone -- creating a new one",
@@ -398,7 +442,13 @@ def sync_user(state: dict, user: str, terms_order: list[str],
 
         branch = os.environ.get("GITHUB_REF_NAME") or "main"
         body = build_body(st.matches_items(state, user), terms_order, now,
-                          repo, branch)
+                          repo, branch, interactive=interactive)
+        if not (repo and token):
+            # A store with no issue plumbing (STORE=convex) has no dashboard
+            # issue to write -- the read-back + hygiene above is the point.
+            log.info("user %s: no issue plumbing (repo/token unset) -- "
+                     "state synced, no dashboard issue written", user)
+            return
         if number:
             resp = client.patch(f"{API}/repos/{repo}/issues/{number}",
                                 json={"title": title, "body": body})
