@@ -58,6 +58,12 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           JOBRIGHT_EMAIL: ${{ secrets.JOBRIGHT_EMAIL }}
           JOBRIGHT_PASSWORD: ${{ secrets.JOBRIGHT_PASSWORD }}
+          # TrackerStore driver -- repo Actions variable, defaults to the
+          # zero-infra GitHub driver; set the STORE variable to `convex`
+          # (plus the two secrets) after running the tracker migration
+          STORE: ${{ vars.STORE || 'github' }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_SECRET: ${{ secrets.CONVEX_SECRET }}
 
       # Committing state also keeps the repo active, which prevents GitHub
       # from disabling the scheduled workflow after 60 days of inactivity.

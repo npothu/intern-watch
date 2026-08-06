@@ -4,8 +4,9 @@ import datetime as dt
 import json
 
 import httpx
+import yaml
 
-from src import dashboard as db, state as st
+from src import dashboard as db, state as st, store
 
 NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
@@ -105,6 +106,17 @@ def _mock_client(monkeypatch, handler):
         return real(**kwargs)
 
     monkeypatch.setattr(db.httpx, "Client", factory)
+
+
+def _mock_store_client(monkeypatch, handler):
+    """Patch src.store's httpx too: the TrackerStore drivers open their own."""
+    real = httpx.Client
+
+    def factory(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real(**kwargs)
+
+    monkeypatch.setattr(store.httpx, "Client", factory)
 
 
 def test_sync_creates_then_updates_issue(monkeypatch):
@@ -264,3 +276,98 @@ def test_dedup_existing_catches_jobright_url_row_via_content():
     assert not by_key["url:boards"].get("dismissed")
     assert by_key["jr:cf"]["dismissed"] is True
     assert by_key["url:jobboards"]["dismissed"] is True
+
+
+# --------------------------------------------- dashboard.main CLI (store-aware)
+
+def _setup_root(tmp_path, matches, issue=7):
+    """A repo-shaped root: users/example.yaml + state/seen.json with the
+    dashboard issue number pinned (GitHubStore resolves it from state)."""
+    (tmp_path / "users").mkdir()
+    (tmp_path / "users" / "example.yaml").write_text(
+        yaml.safe_dump({"name": "example", "terms_wanted": TERMS}),
+        encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    state = st.empty_state()
+    for m in matches:
+        st.matches_add(state, "example", m)
+    if issue:
+        state["_meta"]["dashboard_issue"] = {"example": issue}
+    st.save_state(state, tmp_path / "state" / "seen.json")
+    state_path = tmp_path / "state" / "seen.json"
+    return state, state_path
+
+
+def test_main_github_store_repaints_interactive(tmp_path, monkeypatch):
+    """STORE unset -> GitHubStore ticks with interactive=True: the PATCHed
+    body still carries the iw: markers + checkboxes."""
+    matches = [_item(1), _item(2, applied=True)]
+    _setup_root(tmp_path, matches)
+    ticks_body = db.build_body(matches, TERMS, NOW)
+    patched, gets = [], []
+
+    def handler(request):
+        if request.method == "GET":
+            gets.append(str(request.url))
+            return httpx.Response(200, json={"state": "open",
+                                             "body": ticks_body})
+        if request.method == "PATCH":
+            patched.append(json.loads(request.content))
+            return httpx.Response(200, json={"number": 7})
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    _mock_client(monkeypatch, handler)        # dashboard.httpx (sync_user)
+    _mock_store_client(monkeypatch, handler)  # store.httpx (get_ticks)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.delenv("STORE", raising=False)
+
+    assert db.main(["--user", "example", "--root", str(tmp_path)]) == 0
+    # the store read the issue back, and the repaint is still interactive.
+    assert gets
+    assert patched
+    assert "<!--iw:" in patched[0]["body"]
+    assert "- [ ]" in patched[0]["body"]
+
+
+def test_main_convex_store_repaints_digest(tmp_path, monkeypatch):
+    """STORE=convex -> read-back from the store and a read-only digest: no
+    GitHub issue GET beyond the sync_user PATCH, and the PATCHed body has no
+    markers or checkboxes anywhere."""
+    matches = [_item(1), _item(2, applied=True)]
+    _setup_root(tmp_path, matches)
+    short = db.short_key(matches[1]["key"])
+    patched, convex_posts, gets = [], [], []
+
+    def handler(request):
+        if request.method == "POST" and "convex.cloud" in str(request.url):
+            convex_posts.append(json.loads(request.content))
+            return httpx.Response(200, json={"status": "success", "value": [
+                {"short": short, "applied": True}]})
+        if request.method == "GET":
+            gets.append(str(request.url))
+            return httpx.Response(404)
+        if request.method == "PATCH":
+            patched.append(json.loads(request.content))
+            return httpx.Response(200, json={"number": 7})
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    _mock_client(monkeypatch, handler)        # dashboard.httpx (sync_user)
+    _mock_store_client(monkeypatch, handler)  # store.httpx (convex AND github)
+    monkeypatch.setenv("STORE", "convex")
+    monkeypatch.setenv("CONVEX_URL", "https://test.convex.cloud")
+    monkeypatch.setenv("CONVEX_SECRET", "secret")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    assert db.main(["--user", "example", "--root", str(tmp_path)]) == 0
+    # ticks came from the Convex store; the only GitHub request is the PATCH.
+    assert convex_posts
+    assert gets == []
+    assert patched
+    assert "<!--iw:" not in patched[0]["body"]
+    for marker in ("<!--iws:", "<!--iwd:", "<!--iwb:"):
+        assert marker not in patched[0]["body"]
+    assert "- [ ]" not in patched[0]["body"]
+    assert "- [x]" not in patched[0]["body"]
+    assert "Read-only digest" in patched[0]["body"]
