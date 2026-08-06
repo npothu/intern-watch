@@ -32,6 +32,7 @@ from .normalize import canonical_url, extract_jobright_id, norm_company
 from .notify import (build_digest, build_email, build_health_email,
                      match_item, primary_term, send_discord, send_email)
 from .resume.build import build_for_job, resume_build_cfg
+from .store import make_store
 
 log = logging.getLogger("intern-watch")
 
@@ -534,13 +535,19 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     if not accepted and not notify_cfg.get("email"):
         log.info("user %s: no new matches", name)
     if user_cfg.get("dashboard"):
-        _sync_dashboard(name, state, dry_run, now, terms_order)
+        _sync_dashboard(name, state, dry_run, now, terms_order, user_cfg)
 
 
 def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
-                    terms_order: list[str]) -> None:
+                    terms_order: list[str],
+                    user_cfg: dict | None = None) -> None:
     """Update the user's dashboard issue (needs the Actions-provided repo +
-    token; quietly skipped on plain local runs)."""
+    token; quietly skipped on plain local runs).
+
+    The read-back ticks come from the TrackerStore (same GitHub mechanism);
+    when the store can't produce them, sync_user falls back to fetching the
+    issue itself, which is how it lost/gone and closed-issue handling still
+    works."""
     if dry_run:
         log.info("user %s: dry run, dashboard issue not updated (%d matches "
                  "in state)", name, len(st.matches_items(state, name)))
@@ -552,10 +559,14 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                  "skipping dashboard update", name)
         return
     try:
-        dashboard.sync_user(state, name, terms_order, now, repo, token)
+        store = make_store(ROOT, user_cfg or {"name": name})
+        ticks = store.get_ticks(name)
+        dashboard.sync_user(state, name, terms_order, now, store.repo,
+                            store.token, ticks=ticks)
         # applied ticks just read back from the issue become permanent
         # ledger records (seen.json prunes at 120 days; the ledger never does)
         ledger.sync_file(state, name, ledger.ledger_path(ROOT), now.date())
+        store.push_matches(name, st.matches_items(state, name))
     except Exception:  # noqa: BLE001 - dashboard trouble never blocks delivery
         log.exception("user %s: dashboard update failed", name)
 
