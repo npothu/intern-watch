@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -212,7 +212,7 @@
   .acts .built { color: var(--accent); }
   .ext { width: 12px; height: 12px; vertical-align: -1px; margin-left: 3px; color: var(--ink-2); }
 
-  /* checkbox — input stays in the accessibility tree, box is the visual */
+  /* checkbox â€” input stays in the accessibility tree, box is the visual */
   .tick { margin-top: 2px; position: relative; }
   .tick input {
     position: absolute; inset: 0; width: 16px; height: 16px;
@@ -292,6 +292,46 @@
     .toolbar { gap: 6px; }
     input[type=search] { min-width: 0; }
   }
+
+  /* triage dock — fixed bottom-center, acts on cursor row */
+  #triage-dock {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; gap: 6px; align-items: center;
+    max-width: calc(100vw - 24px); width: max-content;
+    border: 1px solid var(--line-2); border-radius: 8px;
+    background: var(--surface); padding: 7px 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.08);
+    z-index: 9;
+  }
+  #triage-dock[hidden] { display: none !important; }
+  #triage-dock .db {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 500 12.5px/1 Switzer, sans-serif; white-space: nowrap;
+    border: 1px solid var(--line-2); background: var(--bg); color: var(--ink);
+    border-radius: 5px; padding: 6px 10px; cursor: pointer;
+  }
+  #triage-dock .db:hover { border-color: var(--ink-2); }
+  #triage-dock .db:disabled { opacity: .55; cursor: default; }
+  #triage-dock .db.applied { color: var(--accent); }
+  #triage-dock .db.save { color: var(--amber); }
+  #triage-dock .db.hide { color: var(--red); }
+  #triage-dock .db svg { width: 14px; height: 14px; }
+  #triage-dock kbd {
+    font: 500 10.5px var(--mono); border: 1px solid var(--line-2);
+    border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px;
+    color: var(--ink-2); background: var(--surface);
+  }
+  #triage-dock .db.built { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  body.docked #list { padding-bottom: 72px; }
+  body.docked .wrap { padding-bottom: 140px; }
+  @media (max-width: 640px) {
+    body.docked .wrap { padding-bottom: 130px; }
+  }
+  @media (max-width: 700px) {
+    #triage-dock { gap: 4px; padding: 6px 6px; bottom: 10px; }
+    #triage-dock .db { padding: 6px 8px; }
+    #triage-dock .db .label { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -314,7 +354,7 @@
   <div id="view-matches">
     <div class="statline" id="stats"></div>
     <div class="toolbar">
-      <input type="search" id="q" placeholder="Search company, title, location…" autocomplete="off">
+      <input type="search" id="q" placeholder="Search company, title, locationâ€¦" autocomplete="off">
       <select id="status">
         <option value="all">All</option>
         <option value="todo">To apply</option>
@@ -334,7 +374,7 @@
     <div class="funnelbar" id="funnelbar"></div>
     <div class="statline" id="funnel"></div>
     <div class="toolbar">
-      <input type="search" id="tq" placeholder="Search applications…" autocomplete="off">
+      <input type="search" id="tq" placeholder="Search applicationsâ€¦" autocomplete="off">
     </div>
     <div class="chips" id="tchips"></div>
     <main id="tlist"></main>
@@ -351,6 +391,13 @@
   <div class="dlg-body" id="dlg-body"></div>
 </dialog>
 <div id="toasts"></div>
+<div id="triage-dock" hidden role="toolbar" aria-label="Triage">
+  <button class="db applied" data-dock="applied"><kbd>x</kbd> <span class="label">applied</span></button>
+  <button class="db save" data-dock="save"><kbd>s</kbd> <span class="label">save</span></button>
+  <button class="db hide" data-dock="hide"><kbd>h</kbd> <span class="label">hide</span></button>
+  <button class="db" data-dock="build"><kbd>b</kbd> <span class="label">build resume</span></button>
+  <button class="db" data-dock="open"><kbd>&#8629;</kbd> <span class="label">open</span></button>
+</div>
 
 <script>
 "use strict";
@@ -374,10 +421,10 @@ const GHOST_DAYS = 21;                 // untouched this long = awaiting respons
 
 // pipeline semantics for the match tags; * = judged by the LLM (cached per employer)
 const TAG_TITLE = {
-  TOP: "top company — matched by rules",
-  "TOP*": "top company — judged by the LLM, cached per employer",
-  ATL: "Atlanta metro (~35 mi) — matched by rules",
-  "ATL*": "Atlanta metro (~35 mi) — judged by the LLM",
+  TOP: "top company â€” matched by rules",
+  "TOP*": "top company â€” judged by the LLM, cached per employer",
+  ATL: "Atlanta metro (~35 mi) â€” matched by rules",
+  "ATL*": "Atlanta metro (~35 mi) â€” judged by the LLM",
   REMOTE: "remote role",
 };
 
@@ -460,19 +507,19 @@ function resumeAction(m) {
     return `<a class="btn built" href="/files/repo/${encodeURI(m.resume)}">${ICON.doc} resume</a>`;
   const b = busy.has(m.short);
   return `<button class="btn" data-build="${m.short}" ${b ? "disabled" : ""}>` +
-         `${b ? `<span class="spin">${ICON.refresh}</span> building…` : `${ICON.doc} build resume`}</button>`;
+         `${b ? `<span class="spin">${ICON.refresh}</span> buildingâ€¦` : `${ICON.doc} build resume`}</button>`;
 }
 
 function rowHtml(m) {
   const canWrite = DATA.issue && DATA.issue.writable;
-  const salary = m.salary ? ` · ${esc(m.salary)}` : "";
+  const salary = m.salary ? ` Â· ${esc(m.salary)}` : "";
   const st = m.status && m.status !== "applied"
     ? `<span class="tag st">${esc(STATUSES[m.status] || m.status)}</span>` : "";
   const tagv = m.tag ? m.tag.replace(/[\[\]]/g, "") : "";
   const tags = (tagv ? `<span class="tag"${TAG_TITLE[tagv] ? ` title="${esc(TAG_TITLE[tagv])}"` : ""}>${esc(tagv)}</span>` : "") + st;
   const isNew = LAST_VISIT && m.added && m.added > LAST_VISIT;
   const gone = likelyClosed(m) && !m.dismissed
-    ? `<span class="tag gone" title="not seen in any source for ${m.stale_days} days — the posting is probably closed">gone ${m.stale_days}d</span>`
+    ? `<span class="tag gone" title="not seen in any source for ${m.stale_days} days â€” the posting is probably closed">gone ${m.stale_days}d</span>`
     : "";
   const shots = m.artifacts
     ? `<button class="btn quiet" data-shots="${m.short}">${ICON.cam} ${m.artifacts.reduce((n, g) => n + g.files.length, 0)}</button>`
@@ -480,22 +527,22 @@ function rowHtml(m) {
   const dismiss = !canWrite ? ""
     : m.dismissed
       ? `<button class="btn quiet" data-restore="${m.short}" title="restore to the matches list">${ICON.undo} restore</button>`
-      : `<button class="btn quiet x" data-dismiss="${m.short}" title="hide — moves to the issue's Hidden section">${ICON.x}</button>`;
+      : `<button class="btn quiet x" data-dismiss="${m.short}" title="hide â€” moves to the issue's Hidden section">${ICON.x}</button>`;
   return `<div class="row ${m.applied ? "applied" : ""}${isNew ? " new" : ""}" id="r-${m.short}">
     <div class="ticks">
-      <label class="tick" title="${canWrite ? "applied — writes through the dashboard issue" : "read-only (no GitHub token)"}">
+      <label class="tick" title="${canWrite ? "applied â€” writes through the dashboard issue" : "read-only (no GitHub token)"}">
         <input type="checkbox" data-applied="${m.short}" ${m.applied ? "checked" : ""} ${canWrite ? "" : "disabled"}><span></span>
       </label>
-      <label class="tick save" title="${canWrite ? "saved — bookmark for later, writes through the dashboard issue" : "read-only (no GitHub token)"}">
+      <label class="tick save" title="${canWrite ? "saved â€” bookmark for later, writes through the dashboard issue" : "read-only (no GitHub token)"}">
         <input type="checkbox" data-saved="${m.short}" ${m.saved ? "checked" : ""} ${canWrite ? "" : "disabled"}><span></span>
       </label>
     </div>
     <div class="head">
       ${isNew ? '<span class="newdot" title="new since your last visit"></span>' : ""}<span class="company">${esc(m.company)}</span>${tags}${gone}
-      — <a class="title" href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}${ICON.ext}</a>
+      â€” <a class="title" href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}${ICON.ext}</a>
     </div>
     <div class="acts">${shots}${resumeAction(m)}${dismiss}</div>
-    <div class="meta">${esc(m.location)}${salary} · seen ${fmtDate(m.added)} · <span class="short">${m.short}</span></div>
+    <div class="meta">${esc(m.location)}${salary} Â· seen ${fmtDate(m.added)} Â· <span class="short">${m.short}</span></div>
   </div>`;
 }
 
@@ -525,12 +572,12 @@ function statsHtml() {
   const hidden = ms.length - active.length;
   const stat = (n, label, f) =>
     `<span class="seg" data-stat="${f}"><b>${n}</b> ${label}</span>`;
-  return stat(active.length, "matches", "all") + " · " +
-    stat(applied, "applied", "applied") + " · " +
-    stat(active.length - applied, "to go", "todo") + " · " +
+  return stat(active.length, "matches", "all") + " Â· " +
+    stat(applied, "applied", "applied") + " Â· " +
+    stat(active.length - applied, "to go", "todo") + " Â· " +
     stat(resumes, "resumes", "resume") +
-    (saved ? " · " + stat(saved, "saved", "saved") : "") +
-    (hidden ? " · " + stat(hidden, "hidden", "hidden") : "");
+    (saved ? " Â· " + stat(saved, "saved", "saved") : "") +
+    (hidden ? " Â· " + stat(hidden, "hidden", "hidden") : "");
 }
 
 // update the statline + a row's term-section count in place, without the
@@ -708,7 +755,7 @@ function render() {
   if (!DATA) return;
   const ms = DATA.matches;
 
-  $("#who").textContent = "— " + DATA.user;
+  $("#who").textContent = "â€” " + DATA.user;
   renderStats();
   const t = new Date(DATA.generated);
   $("#updated").textContent = "as of " +
@@ -757,6 +804,7 @@ function render() {
   document.querySelectorAll(".tab").forEach(t =>
     t.classList.toggle("on", t.dataset.tab === UI.tab));
   applyCursor();
+  updateDock();
 }
 
 /* ---------- tracker ---------- */
@@ -798,16 +846,16 @@ function trowHtml([short, rec]) {
   return `<div class="trow" id="t-${short}">
     <select class="st s-${esc(rec.status)}${rec.pending ? " pending" : ""}"
             data-setst="${short}" ${canWrite ? "" : "disabled"}
-            title="${canWrite ? "status — commits via the dashboard-write workflow" : "read-only (no GitHub token)"}">${opts}</select>
+            title="${canWrite ? "status â€” commits via the dashboard-write workflow" : "read-only (no GitHub token)"}">${opts}</select>
     <div class="head">
       <span class="company">${esc(rec.company)}</span>${wait}
-      — <a class="title" href="${esc(rec.url)}" target="_blank" rel="noopener">${esc(rec.title)}${ICON.ext}</a>
+      â€” <a class="title" href="${esc(rec.url)}" target="_blank" rel="noopener">${esc(rec.title)}${ICON.ext}</a>
     </div>
     <div class="acts">${resume}
       <button class="btn quiet" data-tnote="${short}">${ICON.plus} note</button>
       <button class="btn quiet" data-thist="${short}">history</button>
     </div>
-    <div class="meta">applied ${fmtDate(rec.applied)} · last activity ${fmtDate(lastActivity(rec))}${rec.pending ? " · syncing…" : ""}${note ? ` · <span class="lastnote">${esc(note)}</span>` : ""}</div>
+    <div class="meta">applied ${fmtDate(rec.applied)} Â· last activity ${fmtDate(lastActivity(rec))}${rec.pending ? " Â· syncingâ€¦" : ""}${note ? ` Â· <span class="lastnote">${esc(note)}</span>` : ""}</div>
   </div>`;
 }
 
@@ -830,7 +878,7 @@ function renderTracker() {
     `<span class="seg" data-tstat="${v}"><b>${n}</b> ${esc(label)}</span>`;
   $("#funnel").innerHTML = present
     .map(([v, label]) => seg(v, counts[v], label.toLowerCase()))
-    .join(" · ") + (waiting ? " · " + seg("waiting", waiting, "awaiting response") : "");
+    .join(" Â· ") + (waiting ? " Â· " + seg("waiting", waiting, "awaiting response") : "");
 
   const chips = [["all", "All"],
     ...Object.entries(STATUSES).filter(([v]) => counts[v]),
@@ -845,7 +893,7 @@ function renderTracker() {
     ? `<div class="rows">${shown.map(trowHtml).join("")}</div>`
     : `<div class="rows empty">${entries.length
         ? "Nothing matches the current filters."
-        : "No applications yet — tick a match as applied and it lands here permanently."}</div>`;
+        : "No applications yet â€” tick a match as applied and it lands here permanently."}</div>`;
 }
 
 /* ---------- inbox (mail-sync emails needing a human) ---------- */
@@ -873,10 +921,10 @@ function arowHtml(a) {
   const cands = a.candidates || [];
   const pick = decisive(cands);
   const options = [
-    `<option value="" ${pick ? "" : "selected"} disabled>match to application…</option>`,
+    `<option value="" ${pick ? "" : "selected"} disabled>match to applicationâ€¦</option>`,
     ...cands.map((c, i) =>
-      `<option value="${esc(c.short)}" ${pick && i === 0 ? "selected" : ""}>${esc(c.company)} — ${esc(c.title)}</option>`),
-    `<option value="__all">other application…</option>`,
+      `<option value="${esc(c.short)}" ${pick && i === 0 ? "selected" : ""}>${esc(c.company)} â€” ${esc(c.title)}</option>`),
+    `<option value="__all">other applicationâ€¦</option>`,
   ].join("");
   const sts = Object.entries(STATUSES).map(([v, label]) =>
     `<option value="${v}" ${v === a.signal ? "selected" : ""}>${label}</option>`).join("");
@@ -885,11 +933,11 @@ function arowHtml(a) {
     <div class="head">
       <span class="tag sig s-${esc(a.signal)}">${esc(STATUSES[a.signal] || a.signal)}</span>
       <span class="company">${esc(who)}</span>
-      — <a class="title" href="${esc(gmailLink(a))}" target="_blank" rel="noopener" title="open the email in Gmail">${esc(a.subject || "(no subject)")}${ICON.ext}</a>
+      â€” <a class="title" href="${esc(gmailLink(a))}" target="_blank" rel="noopener" title="open the email in Gmail">${esc(a.subject || "(no subject)")}${ICON.ext}</a>
     </div>
-    <div class="meta">${esc(f.addr)} · ${fmtDate((a.receivedAt || "").slice(0, 10))}${
-      a.evidence ? ` · <span class="lastnote">“${esc(a.evidence)}”</span>` : ""}${
-      a.source === "llm" ? ` · <span class="tag" title="signal from the LLM fallback, not the regex rules">llm</span>` : ""}</div>
+    <div class="meta">${esc(f.addr)} Â· ${fmtDate((a.receivedAt || "").slice(0, 10))}${
+      a.evidence ? ` Â· <span class="lastnote">â€œ${esc(a.evidence)}â€</span>` : ""}${
+      a.source === "llm" ? ` Â· <span class="tag" title="signal from the LLM fallback, not the regex rules">llm</span>` : ""}</div>
     <div class="resolve">
       <select class="cand" data-acand="${esc(a.id)}">${options}</select>
       <select class="st s-${esc(a.signal)}">${sts}</select>
@@ -971,7 +1019,7 @@ function checkStale() {
   const el = $("#updated");
   const stale = loadedAt && Date.now() - loadedAt > 2 * 3600e3;
   el.classList.toggle("stale", stale);
-  el.title = stale ? "data is older than one cron cycle — hit refresh" : "";
+  el.title = stale ? "data is older than one cron cycle â€” hit refresh" : "";
 }
 setInterval(checkStale, 60e3);
 
@@ -985,7 +1033,7 @@ async function setApplied(short, applied, input) {
     render();
     toast(res.error, true);
   } else if (res.queued) {
-    toast("Row is off the issue — queued a state write, lands in ~1 min");
+    toast("Row is off the issue â€” queued a state write, lands in ~1 min");
   }
 }
 
@@ -999,7 +1047,7 @@ async function setSaved(short, saved) {
     render();
     toast(res.error, true);
   } else if (res.queued) {
-    toast("Row is off the issue — queued a state write, lands in ~1 min");
+    toast("Row is off the issue â€” queued a state write, lands in ~1 min");
   }
 }
 
@@ -1019,7 +1067,7 @@ async function setStatus(short, status, note) {
     render();
     toast(res.error, true);
   } else {
-    toast(`${STATUSES[status]}${note ? " + note" : ""} queued — lands in ~1 min`);
+    toast(`${STATUSES[status]}${note ? " + note" : ""} queued â€” lands in ~1 min`);
   }
 }
 
@@ -1029,7 +1077,7 @@ function notePanel(short) {
   const div = document.createElement("div");
   div.className = "jd";
   div.innerHTML = `<textarea rows="2" style="min-height:52px"
-      placeholder="Note for the history — e.g. 'OA due Friday', 'recruiter: Sam'"></textarea>
+      placeholder="Note for the history â€” e.g. 'OA due Friday', 'recruiter: Sam'"></textarea>
     <div class="bar">
       <button class="btn" data-tnotego="${short}">save note</button>
       <button class="btn quiet" data-jdx>cancel</button>
@@ -1040,7 +1088,7 @@ function notePanel(short) {
 
 function showHistory(short) {
   const rec = DATA.applications[short];
-  $("#dlg-title").textContent = `${rec.company} — history`;
+  $("#dlg-title").textContent = `${rec.company} â€” history`;
   $("#dlg-body").innerHTML = `<ul class="hist">` +
     (rec.history || []).slice().reverse().map(e =>
       `<li><span class="on">${fmtDate(e.on)}</span>
@@ -1075,7 +1123,7 @@ function jdPanel(short, why) {
   const div = document.createElement("div");
   div.className = "jd";
   div.innerHTML = `<div class="hint">${esc(why)}</div>
-    <textarea placeholder="Paste the full job description here…"></textarea>
+    <textarea placeholder="Paste the full job description hereâ€¦"></textarea>
     <div class="bar">
       <button class="btn" data-jdgo="${short}">${ICON.doc} build with pasted JD</button>
       <button class="btn quiet" data-jdx>cancel</button>
@@ -1085,7 +1133,7 @@ function jdPanel(short, why) {
 }
 
 function showShots(m) {
-  $("#dlg-title").textContent = `${m.company} — apply-run screenshots`;
+  $("#dlg-title").textContent = `${m.company} â€” apply-run screenshots`;
   $("#dlg-body").innerHTML = `<div class="shots">` + m.artifacts.map(g =>
     g.files.map(f => {
       const src = `/files/artifacts/${encodeURIComponent(g.run)}/${encodeURIComponent(g.slug)}/${encodeURIComponent(f)}`;
@@ -1097,7 +1145,7 @@ function showShots(m) {
 
 function showReport(short) {
   const m = DATA.matches.find(m => m.short === short);
-  $("#dlg-title").textContent = `Build report — ${m.company}`;
+  $("#dlg-title").textContent = `Build report â€” ${m.company}`;
   $("#dlg-body").innerHTML = `<pre class="report">${esc(reports.get(short))}</pre>`;
   $("#dlg").showModal();
 }
@@ -1155,13 +1203,13 @@ document.addEventListener("change", e => {
   else if (e.target.dataset.setst)
     setStatus(e.target.dataset.setst, e.target.value);
   else if (e.target.dataset.acand && e.target.value === "__all") {
-    // "other application…": swap the shortlist for every tracked application
+    // "other applicationâ€¦": swap the shortlist for every tracked application
     e.target.innerHTML = [
-      `<option value="" selected disabled>all applications…</option>`,
+      `<option value="" selected disabled>all applicationsâ€¦</option>`,
       ...Object.entries(DATA.applications || {})
         .sort((x, y) => x[1].company.localeCompare(y[1].company))
         .map(([s, r]) =>
-          `<option value="${esc(s)}">${esc(r.company)} — ${esc(r.title)}</option>`),
+          `<option value="${esc(s)}">${esc(r.company)} â€” ${esc(r.title)}</option>`),
     ].join("");
   }
 });
@@ -1180,13 +1228,75 @@ const cursorRows = () =>
   [...$(TAB_ROWS[UI.tab].box).querySelectorAll(TAB_ROWS[UI.tab].row)];
 const rowShort = row => row.id.slice(2);          // "r-abc"/"t-abc" -> "abc"
 
+function dockResumeHref(m) {
+  if (!m) return null;
+  if (m.local_resume) return "/files/out/" + encodeURIComponent(m.local_resume);
+  if (m.resume_url) return m.resume_url;
+  if (m.resume && m.resume.startsWith("resumes/")) return "/files/repo/" + encodeURI(m.resume);
+  return null;
+}
+function ensureDockCursor() {
+  if (cursor) return cursor;
+  const rows = cursorRows();
+  if (!rows.length) return null;
+  cursor = rowShort(rows[0]);
+  applyCursor();
+  return cursor;
+}
+function advanceDockCursor() {
+  const rows = cursorRows();
+  const i = rows.findIndex(r => rowShort(r) === cursor);
+  if (i < 0) return;
+  const nxt = rows[i + 1];
+  if (nxt) {
+    cursor = rowShort(nxt);
+    applyCursor();
+    nxt.scrollIntoView({ block: "nearest" });
+  }
+}
+function updateDockBuildState() {
+  const dock = document.getElementById("triage-dock");
+  if (!dock || dock.hidden) return;
+  const short = cursor || (cursorRows()[0] ? rowShort(cursorRows()[0]) : null);
+  const m = short ? DATA.matches.find(mm => mm.short === short) : null;
+  const btn = dock.querySelector('[data-dock="build"]');
+  if (!btn || !m) return;
+  const isBusy = busy.has(m.short);
+  const href = dockResumeHref(m);
+  const hasResume = !!href;
+  if (isBusy) {
+    btn.disabled = true;
+    btn.classList.remove("built");
+    btn.innerHTML = '<kbd>b</kbd> <span class="spin">' + ICON.refresh + '</span> <span class="label">building…</span>';
+  } else if (hasResume) {
+    btn.disabled = false;
+    btn.classList.add("built");
+    btn.innerHTML = '<kbd>b</kbd> ' + ICON.doc + ' <span class="label">resume</span>';
+  } else {
+    btn.disabled = false;
+    btn.classList.remove("built");
+    btn.innerHTML = '<kbd>b</kbd> ' + ICON.doc + ' <span class="label">build resume</span>';
+  }
+}
+function updateDock() {
+  const dock = document.getElementById("triage-dock");
+  if (!dock) return;
+  const onMatches = UI.tab === "matches";
+  const rows = onMatches ? cursorRows() : [];
+  const show = onMatches && rows.length > 0;
+  dock.hidden = !show;
+  document.body.classList.toggle("docked", show);
+  if (show) updateDockBuildState();
+}
+
 function applyCursor() {
   document.querySelectorAll(".row.cur, .trow.cur, .arow.cur")
     .forEach(r => r.classList.remove("cur"));
-  if (!cursor) return;
+  if (!cursor) { updateDockBuildState(); return; }
   const row = document.getElementById(TAB_ROWS[UI.tab].pfx + cursor);
   if (row) row.classList.add("cur");
   else cursor = null;
+  updateDockBuildState();
 }
 
 function moveCursor(delta) {
@@ -1220,6 +1330,7 @@ document.addEventListener("keydown", e => {
     if (!box) return;
     if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
     setApplied(cursor, !box.checked, box);
+    advanceDockCursor();
   } else if (k === "h") {
     // move the cursor to the next visible row (previous if this was last)
     // BEFORE the row is removed, so `h h h` streams down the list
@@ -1234,6 +1345,62 @@ document.addEventListener("keydown", e => {
     if (!box) return;
     if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
     setSaved(cursor, !box.checked);
+    advanceDockCursor();
+  } else if (k === "b") {
+    const short = cursor;
+    const m = DATA.matches.find(mm => mm.short === short);
+    if (!m) return;
+    if (busy.has(short)) return;
+    const href = dockResumeHref(m);
+    if (href) window.open(href, "_blank", "noopener");
+    else build(short);
+  }
+});
+
+document.getElementById("triage-dock").addEventListener("click", e => {
+  const btn = e.target.closest("[data-dock]");
+  if (!btn) return;
+  const act = btn.dataset.dock;
+  if (act === "applied") {
+    const cur = ensureDockCursor();
+    if (!cur) return;
+    const box = document.getElementById("r-" + cur)?.querySelector("input[data-applied]");
+    if (!box) return;
+    if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
+    setApplied(cur, !box.checked, box);
+    advanceDockCursor();
+  } else if (act === "save") {
+    const cur = ensureDockCursor();
+    if (!cur) return;
+    const box = document.getElementById("r-" + cur)?.querySelector("input[data-saved]");
+    if (!box) return;
+    if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
+    setSaved(cur, !box.checked);
+    advanceDockCursor();
+  } else if (act === "hide") {
+    const cur = ensureDockCursor();
+    if (!cur) return;
+    const rows = cursorRows();
+    const i = rows.findIndex(r => rowShort(r) === cur);
+    if (i < 0) return;
+    const next = rows[i + 1] || rows[i - 1];
+    cursor = next ? rowShort(next) : null;
+    queueDismiss(rowShort(rows[i]), true);
+  } else if (act === "build") {
+    const cur = ensureDockCursor();
+    if (!cur) return;
+    const m = DATA.matches.find(mm => mm.short === cur);
+    if (!m) return;
+    if (busy.has(cur)) return;
+    const href = dockResumeHref(m);
+    if (href) window.open(href, "_blank", "noopener");
+    else build(cur);
+  } else if (act === "open") {
+    const cur = ensureDockCursor();
+    if (!cur) return;
+    const row = document.getElementById("r-" + cur);
+    const a = row ? row.querySelector(".title") : null;
+    if (a) window.open(a.href, "_blank", "noopener");
   }
 });
 
