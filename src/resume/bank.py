@@ -30,12 +30,18 @@ class StudyAbroad(BaseModel):
     date: str
 
 
+class GraduateDegree(BaseModel):
+    degree: str
+    grad_date: str
+
+
 class Education(BaseModel):
     institution: str
     grad_date: str
     degree: str
     threads: str = ""
     gpa: str = ""
+    graduate_degree: GraduateDegree | None = None
     study_abroad: StudyAbroad | None = None
 
 
