@@ -182,3 +182,85 @@ def test_sync_recreates_deleted_issue(monkeypatch):
     db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok")
     assert state["_meta"]["dashboard_issue"]["example"] == 9
     assert len(posted) == 1
+
+
+# --------------------------------------------- retro cross-source cleanup
+
+def _dup_item(key, url, **kw):
+    d = {"key": key, "company": "Cloudflare", "title": "Security Eng Intern",
+         "location": "Austin, TX", "salary": None, "url": url, "tag": "",
+         "term": "Fall 2026", "added": "2026-06-12", "applied": False}
+    d.update(kw)
+    return d
+
+
+GH_A = "https://boards.greenhouse.io/cloudflare/jobs/8052785"
+GH_B = "https://job-boards.greenhouse.io/cloudflare/jobs/8052785"
+
+
+def test_dedup_existing_demotes_redundant_row():
+    state = st.empty_state()
+    state["matches"]["u"] = [
+        _dup_item("url:a", GH_A, added="2026-06-10"),
+        _dup_item("jr:b", GH_B, added="2026-06-12"),
+    ]
+    n = db.dedup_existing_matches(state, "u")
+    assert n == 1
+    by_key = {i["key"]: i for i in state["matches"]["u"]}
+    assert not by_key["url:a"].get("dismissed")   # earliest-added survivor
+    assert by_key["jr:b"]["dismissed"] is True
+
+
+def test_dedup_existing_preserves_applied_and_saved():
+    state = st.empty_state()
+    state["matches"]["u"] = [
+        _dup_item("url:a", GH_A, added="2026-06-10"),
+        _dup_item("jr:b", GH_B, added="2026-06-12", applied=True),
+    ]
+    db.dedup_existing_matches(state, "u")
+    by_key = {i["key"]: i for i in state["matches"]["u"]}
+    # applied row is the survivor; the other is hidden, applied row untouched.
+    assert by_key["jr:b"]["applied"] is True
+    assert not by_key["jr:b"].get("dismissed")
+    assert by_key["url:a"]["dismissed"] is True
+
+
+def test_dedup_existing_keeps_all_when_two_acted_rows():
+    state = st.empty_state()
+    state["matches"]["u"] = [
+        _dup_item("url:a", GH_A, applied=True),
+        _dup_item("jr:b", GH_B, saved=True),
+    ]
+    assert db.dedup_existing_matches(state, "u") == 0
+    assert not any(i.get("dismissed") for i in state["matches"]["u"])
+
+
+def test_dedup_existing_idempotent_and_respects_restored():
+    state = st.empty_state()
+    state["matches"]["u"] = [
+        _dup_item("url:a", GH_A, added="2026-06-10"),
+        _dup_item("jr:b", GH_B, added="2026-06-12", restored=True),
+    ]
+    # restored row is never re-hidden.
+    assert db.dedup_existing_matches(state, "u") == 0
+    # idempotent: second call is a no-op even after clearing restored.
+    state["matches"]["u"][1].pop("restored")
+    assert db.dedup_existing_matches(state, "u") == 0
+
+
+def test_dedup_existing_catches_jobright_url_row_via_content():
+    # The historical jr: row stores the jobright link (canon None); it must
+    # still be grouped with its greenhouse twins via content compatibility.
+    state = st.empty_state()
+    state["matches"]["u"] = [
+        _dup_item("url:boards", GH_A, added="2026-06-10"),
+        _dup_item("jr:cf", "https://jobright.ai/jobs/info/" + "c" * 24,
+                  added="2026-06-11"),
+        _dup_item("url:jobboards", GH_B, added="2026-06-12", term="Unknown term"),
+    ]
+    n = db.dedup_existing_matches(state, "u")
+    assert n == 2   # earliest (url:boards) survives, other two hidden
+    by_key = {i["key"]: i for i in state["matches"]["u"]}
+    assert not by_key["url:boards"].get("dismissed")
+    assert by_key["jr:cf"]["dismissed"] is True
+    assert by_key["url:jobboards"]["dismissed"] is True

@@ -2,9 +2,9 @@ import datetime as dt
 
 import pytest
 
-from src.normalize import (extract_jobright_id, infer_terms, norm_company,
-                           normalize_url, parse_month_day, split_locations,
-                           strip_html, strip_tracking)
+from src.normalize import (canonical_url, extract_jobright_id, infer_terms,
+                           norm_company, normalize_url, parse_month_day,
+                           split_locations, strip_html, strip_tracking)
 
 TODAY = dt.date(2026, 6, 11)
 
@@ -101,3 +101,64 @@ def test_parse_month_day_year_rollover():
     assert parse_month_day("Dec 30", dt.date(2026, 1, 5)) == dt.date(2025, 12, 30)
     assert parse_month_day("garbage", TODAY) is None
     assert parse_month_day("Feb 30", TODAY) is None
+
+
+def test_canonical_url_greenhouse_host_variants_collapse():
+    a = canonical_url("https://boards.greenhouse.io/cloudflare/jobs/8052785")
+    b = canonical_url("https://job-boards.greenhouse.io/cloudflare/jobs/8052785")
+    assert a == b == "ats:gh:8052785"
+
+
+def test_canonical_url_gh_jid_path_variants_collapse():
+    # Same requisition, different marketing path (Zipline) and host (Tower).
+    a = canonical_url("https://www.zipline.com/careers?gh_jid=7780103003")
+    b = canonical_url("https://www.zipline.com/open-roles?gh_jid=7780103003")
+    assert a == b == "ats:gh:7780103003"
+    assert canonical_url(
+        "https://www.tower-research.com/open-positions?gh_jid=8024128") \
+        == "ats:gh:8024128"
+
+
+def test_canonical_url_greenhouse_custom_domain_slug():
+    assert canonical_url(
+        "https://careers.appian.com/jobs/8041237-software-engineering-intern") \
+        == "ats:gh:8041237"
+    # ... and it joins the greenhouse-hosted mirror of the same req.
+    assert canonical_url("https://job-boards.greenhouse.io/appian/jobs/8041237") \
+        == "ats:gh:8041237"
+
+
+def test_canonical_url_lever_and_ashby_ids():
+    assert canonical_url(
+        "https://jobs.lever.co/palantir/bdcfb29f-4f27-42de-933f-7f83a359b9f0/apply") \
+        == "ats:lever:palantir:bdcfb29f-4f27-42de-933f-7f83a359b9f0"
+    assert canonical_url(
+        "https://jobs.ashbyhq.com/ramp/12345678-1234-1234-1234-123456789abc") \
+        == "ats:ashby:12345678-1234-1234-1234-123456789abc"
+
+
+def test_canonical_url_fallback_string_joins_www_and_scheme():
+    # No stable ATS id -> hardened URL string; www/scheme variants collapse.
+    a = canonical_url("https://www.akunacapital.com/careers/job/8021481")
+    b = canonical_url("http://akunacapital.com/careers/job/8021481")
+    assert a == b == "https://akunacapital.com/careers/job/8021481"
+
+
+def test_canonical_url_none_cases():
+    assert canonical_url("https://jobright.ai/jobs/info/"
+                         "6a4298496faf756060967309") is None
+    assert canonical_url("mailto:x@y.com") is None
+    assert canonical_url("") is None
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://boards.greenhouse.io/cloudflare/jobs/8052785?utm_source=x"
+     "&gh_jid=8052785", "https://boards.greenhouse.io/cloudflare/jobs/8052785"),
+    ("https://X.com/EN-us/jobs/9/", "https://x.com/jobs/9"),
+    ("http://Foo.com/a?b=2&a=1", "http://foo.com/a?a=1&b=2"),
+    ("https://acme.com/j/1/", "https://acme.com/j/1"),
+])
+def test_normalize_url_unchanged_by_canon_refactor(url, expected):
+    # Guards the _sorted_kept_query extraction: normalize_url must be byte-
+    # identical to its pre-refactor behavior.
+    assert normalize_url(url) == expected

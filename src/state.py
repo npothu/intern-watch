@@ -14,8 +14,15 @@ Shape:
   },
   "companies": {
     "<norm_company>": {"top": {"example": true}, "judged": "2026-06-12"}
-  }
+  },
+  "url_index": {"<canonical_url>": "<dedup_key>"}   # cross-source identity join
 }
+
+url_index maps a canonical employer-URL identity (normalize.canonical_url) to
+the dedup_key first delivered under it, so the disjoint jr:/url: keyspaces can
+be joined: a jobright job and an ATS job for the same req resolve to one canon.
+A joined job entry may carry "canon" (its key in the index) and "dup_of" (the
+surviving key it was suppressed in favor of).
 
 "top company" is judged once per (normalized employer, user), not per job:
 per-job judgments let the same employer flip verdicts between postings
@@ -31,7 +38,7 @@ import json
 import logging
 from pathlib import Path
 
-from .normalize import norm_company
+from .normalize import canonical_url, norm_company
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +49,7 @@ HEALTH_ALERT_AFTER = 9  # consecutive failed runs (~18h at 2h cadence) before us
 def empty_state() -> dict:
     return {"_meta": {"version": 1, "source_rows": {}, "source_health": {}},
             "jobs": {}, "companies": {}, "outbox": {}, "last_email": {},
-            "matches": {}, "content": {}}
+            "matches": {}, "content": {}, "url_index": {}}
 
 
 def load_state(path: Path) -> dict:
@@ -58,6 +65,7 @@ def load_state(path: Path) -> dict:
     state.setdefault("last_email", {})
     state.setdefault("matches", {})
     state.setdefault("content", {})
+    state.setdefault("url_index", {})
     return state
 
 
@@ -101,6 +109,47 @@ def apply_url_get(state: dict, key: str) -> str | None:
 
 def apply_url_put(state: dict, key: str, url: str) -> None:
     state["jobs"].setdefault(key, {})["apply_url"] = url
+
+
+def url_index_get(state: dict, canon: str) -> str | None:
+    return state.get("url_index", {}).get(canon)
+
+
+def url_index_put(state: dict, canon: str, key: str) -> str:
+    """Map a canonical URL identity to a dedup_key. First writer wins (the
+    first-delivered key stays the survivor); returns the key now mapped. Back-
+    references jobs[key]['canon'] when that entry exists (never creates one)."""
+    idx = state.setdefault("url_index", {})
+    if canon in idx:
+        return idx[canon]
+    idx[canon] = key
+    if key in state["jobs"]:
+        state["jobs"][key]["canon"] = canon
+    return key
+
+
+def mark_dup_of(state: dict, suppressed_key: str, surviving_key: str) -> None:
+    _entry(state, suppressed_key)["dup_of"] = surviving_key
+
+
+def seed_url_index(state: dict) -> int:
+    """One-time: map canonical_url(item.url) -> item.key for every already-
+    delivered match, so an ATS re-arrival of an already-emailed job resolves to
+    the delivered key. Idempotent via _meta['url_index_seeded']; first-delivered
+    wins (matches lists are append-ordered)."""
+    meta = state.setdefault("_meta", {})
+    if meta.get("url_index_seeded"):
+        return 0
+    n = 0
+    for items in state.get("matches", {}).values():
+        for item in items:
+            canon = canonical_url(item.get("url") or "")
+            if canon:
+                url_index_put(state, canon, item["key"])
+                n += 1
+    meta["url_index_seeded"] = True
+    log.info("seeded url_index from %d delivered match url(s)", n)
+    return n
 
 
 # "pending" = this user still owes a decision/notification for the job
@@ -374,6 +423,8 @@ def prune(state: dict, today: dt.date, keep_days: int = PRUNE_AFTER_DAYS) -> int
         state["content"][user] = {
             s: r for s, r in sigs.items()
             if (r.get("last") or r.get("first", "")) >= cutoff}
+    idx = state.get("url_index", {})
+    state["url_index"] = {c: k for c, k in idx.items() if k in jobs}
     if stale:
         log.info("pruned %d stale state entries", len(stale))
     return len(stale)

@@ -1,7 +1,8 @@
 import datetime as dt
 
 from src import state as st
-from src.content_dedup import (SUPPRESS_WINDOW_DAYS, content_signature,
+from src.content_dedup import (SUPPRESS_WINDOW_DAYS, _parse_sig, compatible,
+                               content_signature, find_compatible,
                                seed_from_matches, signature_from_item)
 from src.filters import location_bucket
 from src.main import _drop_content_dupes
@@ -178,3 +179,77 @@ def test_signature_from_item_matches_single_location_job():
     item = {"company": "Acme", "title": "SWE Intern", "term": "Fall 2026",
             "location": "Atlanta, GA"}
     assert content_signature(job, "Fall 2026") == signature_from_item(item)
+
+
+# --------------------------------------------------- compatibility backstop
+
+def test_parse_sig_right_split_with_pipe_in_company():
+    p = _parse_sig("a|b corp|software engineer|Summer 2027|us-ny")
+    assert p == ("a|b corp", "software engineer", "Summer 2027",
+                 frozenset({"us-ny"}))
+    assert _parse_sig("too|few") is None
+
+
+def test_compatible_term_wildcard():
+    # Appian: jobright Unknown-term vs ATS Summer 2027, same company/title/loc.
+    # Both the empty marker "?" and primary_term's "Unknown term" sentinel
+    # must wildcard (production emits the latter).
+    assert compatible("appian|swe intern|?|us-va",
+                      "appian|swe intern|Summer 2027|us-va")
+    assert compatible("appian|swe intern|Unknown term|us-va",
+                      "appian|swe intern|Summer 2027|us-va")
+
+
+def test_compatible_location_unknown_wildcard():
+    # Cloudflare: ATS "In-Office" -> unknown vs jobright us-tx.
+    assert compatible("cloudflare|sec eng intern|Fall 2026|unknown",
+                      "cloudflare|sec eng intern|Fall 2026|us-tx")
+
+
+def test_compatible_multi_city_intersection():
+    assert compatible("tower|quant intern|Summer 2027|us-il+us-ny+us-tx",
+                      "tower|quant intern|Summer 2027|us-ny")
+
+
+def test_incompatible_distinct_known_states():
+    assert not compatible("acme|swe intern|Summer 2027|us-ga",
+                          "acme|swe intern|Summer 2027|us-tx")
+
+
+def test_incompatible_term_both_known():
+    assert not compatible("acme|swe intern|Fall 2026|us-ga",
+                          "acme|swe intern|Summer 2027|us-ga")
+
+
+def test_incompatible_distinct_title_or_company():
+    assert not compatible("acme|swe intern|?|us-ga", "acme|data intern|?|us-ga")
+    assert not compatible("acme|swe intern|?|us-ga", "beta|swe intern|?|us-ga")
+
+
+def test_find_compatible_respects_window_and_old_flat_sigs():
+    state = st.empty_state()
+    old = "acme|swe intern|Summer 2027|us-tx"   # a pre-change flat sig
+    st.content_mark(state, "u", old, "url:a", dt.date(2026, 6, 1))
+    probe = "acme|swe intern|?|us-tx"           # jobright Unknown-term twin
+    assert find_compatible(state, "u", probe, dt.date(2026, 6, 10),
+                           SUPPRESS_WINDOW_DAYS) == old
+    # Outside the window -> not found.
+    assert find_compatible(state, "u", probe, dt.date(2027, 6, 10),
+                           SUPPRESS_WINDOW_DAYS) is None
+
+
+def test_drop_content_dupes_uses_compatibility():
+    state = st.empty_state()
+    # An ATS row delivered first (explicit term + state bucket).
+    first = _job(terms=["Summer 2027"], locations=["Austin, TX"])
+    first.dedup_key = "url:acme"
+    kept = _drop_content_dupes(state, "u", [(first, [])], ["Summer 2027"],
+                               dt.date(2026, 6, 1))
+    assert [j.dedup_key for j, _ in kept] == ["url:acme"]
+    # The jobright twin: no term, city-only location -> both wildcards, but
+    # same company+title -> suppressed by the compatibility backstop.
+    twin = _job(terms=[], locations=[])
+    twin.dedup_key = "jr:acme"
+    kept2 = _drop_content_dupes(state, "u", [(twin, [])], ["Summer 2027"],
+                                dt.date(2026, 6, 2))
+    assert kept2 == []

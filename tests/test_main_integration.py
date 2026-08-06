@@ -321,3 +321,55 @@ def test_state_outbox_roundtrips_through_save_load(monkeypatch, tmp_path):
     reloaded = st.load_state(tmp_path / "again.json")
     assert st.outbox_items(reloaded, "example") == box
     assert reloaded["jobs"] == state["jobs"]
+
+# ------------------------------------------ cross-source url dedup end-to-end
+
+def test_cross_source_url_dupe_reaches_outbox_once(monkeypatch, tmp_path):
+    """Two greenhouse host variants of one req, from two sources, both accepted:
+    only one is delivered (outbox) and the other is marked notified + dup_of,
+    never building a second outbox/matches row."""
+    from src.models import Job
+
+    def _gh(key, host):
+        return Job(company="Cloudflare", title="Software Engineer Intern",
+                   url=f"https://{host}/cloudflare/jobs/8052785",
+                   source="ok-src", terms=["Summer 2027"],
+                   term_confidence="explicit", locations=["Austin, TX"])
+
+    class BoardsAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today):
+            return [_gh(1, "boards.greenhouse.io")]
+
+    class JobBoardsAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today):
+            return [_gh(2, "job-boards.greenhouse.io")]
+
+    sources = [SourceConfig(name="boards-src", adapter="a"),
+               SourceConfig(name="jobboards-src", adapter="a")]
+    _wire(monkeypatch, sources,
+          {"boards-src": BoardsAdapter, "jobboards-src": JobBoardsAdapter},
+          [_user_cfg()])
+    _freeze_clock(monkeypatch)
+
+    # not a first run: pre-seed an unrelated entry.
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["x"], TODAY)
+    st.save_state(pre, state_file)
+
+    rc = main.main(["--state-file", str(state_file)])
+    assert rc == 0
+    state = st.load_state(state_file)
+
+    # Exactly one variant survived the gate (NOW hits the 12:00 send slot, so
+    # the outbox has already flushed): the other is recorded as its dup_of and
+    # the index maps the shared canon to the survivor, never the suppressed key.
+    survivor = st.url_index_get(state, "ats:gh:8052785")
+    assert survivor is not None
+    dups = {k: v["dup_of"] for k, v in state["jobs"].items() if "dup_of" in v}
+    assert len(dups) == 1
+    (suppressed, points_to), = dups.items()
+    assert points_to == survivor
+    assert "dup_of" not in state["jobs"][survivor]
