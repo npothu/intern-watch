@@ -62,7 +62,7 @@ def test_get_ticks_builds_view_with_all_present(monkeypatch, tmp_path):
         assert request.method == "POST"
         body = json.loads(request.content)
         assert body["path"] == "tracker:getTicks"
-        assert body["args"] == {"user": "example"}
+        assert body["args"] == {"user": "example", "secret": "secret"}
         assert body["format"] == "json"
         seen.append(body["path"])
         return _success([
@@ -191,6 +191,9 @@ def test_record_status_validates_and_payload(monkeypatch, tmp_path):
 
 def test_get_ledger_shapes_records(monkeypatch, tmp_path):
     def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "tracker:getLedger"
+        assert body["args"] == {"user": "example", "secret": "secret"}
         return _success([
             {"short": "ab" * 6, "status": "oa", "note": "HackerRank",
              "history": [{"status": "applied", "at": "2026-07-02T09:00:00Z"},
@@ -216,6 +219,9 @@ def test_get_ledger_shapes_records(monkeypatch, tmp_path):
 def test_get_ledger_missing_snapshot_falls_back_to_created_at(
         monkeypatch, tmp_path):
     def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "tracker:getLedger"
+        assert body["args"] == {"user": "example", "secret": "secret"}
         return _success([
             {"short": "ab" * 6, "status": "oa", "note": None,
              "history": [{"status": "applied",
@@ -272,11 +278,36 @@ def test_push_matches_within_chunk_still_prunes(monkeypatch, tmp_path):
 
 def test_get_matches_returns_item_payloads(monkeypatch, tmp_path):
     def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "tracker:getMatches"
+        assert body["args"] == {"user": "example", "secret": "secret"}
         return _success([{"key": "url:1", "company": "Co1", "short": "ab" * 6}])
 
     _mock_client(monkeypatch, handler)
     assert _make_store(monkeypatch, tmp_path).get_matches("example") == [
         {"key": "url:1", "company": "Co1", "short": "ab" * 6}]
+
+
+def test_every_read_query_carries_the_secret(monkeypatch, tmp_path):
+    """Each tracker read query must send the secret with its args, or the
+    deployment (which now gates reads with TRACKER_SECRET) would reject it.
+    Guards against a future refactor dropping the secret from one path."""
+    by_path = {
+        "tracker:getTicks": _success([]),
+        "tracker:getLedger": _success([]),
+        "tracker:getMatches": _success([]),
+    }
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["args"].get("secret") == "secret"
+        return by_path[body["path"]]
+
+    _mock_client(monkeypatch, handler)
+    s = _make_store(monkeypatch, tmp_path)
+    assert s.get_ticks("example") is not None
+    assert s.get_ledger("example") == {}
+    assert s.get_matches("example") == []
 
 
 # -- constructor + factory -------------------------------------------------
