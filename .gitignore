@@ -6,6 +6,7 @@ venv/
 .env
 node_modules/
 .convex/
+convex/_generated/
 tests/fixtures/_full_*
 resumes/
 out/

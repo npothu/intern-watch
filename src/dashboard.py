@@ -466,19 +466,28 @@ def sync_user(state: dict, user: str, terms_order: list[str],
 
 def main(argv: list[str] | None = None) -> int:
     """Refresh a user's dashboard issue from current state. Used by the
-    `resume-batch` workflow to repaint the issue after a batch build (ticked
-    build boxes + resume links, trigger reset) without waiting for the watcher.
-    Needs GITHUB_REPOSITORY/GITHUB_TOKEN; no-ops cleanly if they're absent."""
+    `resume-batch` and `dashboard-write` workflows to repaint the issue
+    without waiting for the watcher. Needs GITHUB_REPOSITORY/GITHUB_TOKEN;
+    no-ops cleanly if they're absent.
+
+    The read-back ticks come from the TrackerStore (the same GitHub
+    mechanism); only a GitHub-issue driver paints an interactive body -- a
+    convex store writes a read-only digest with no checkboxes."""
     import argparse
     import sys
     from pathlib import Path
 
     from .filters import load_users
+    # Local import: .store imports this module at runtime (via webui.core),
+    # so a module-level import here would cycle (dashboard <-> store).
+    from .store import GitHubStore, make_store
 
     ap = argparse.ArgumentParser(prog="python -m src.dashboard",
                                  description=main.__doc__)
     ap.add_argument("--user", default="",
                     help="watcher user (default: the sole users/*.yaml)")
+    ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]),
+                    help="repo root (override for tests)")
     args = ap.parse_args(argv)
 
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -490,7 +499,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from . import ledger
 
-    root = Path(__file__).resolve().parents[1]
+    root = Path(args.root)
     users = {u["name"]: u for u in load_users(root / "users")}
     if not args.user:
         if len(users) != 1:
@@ -502,7 +511,10 @@ def main(argv: list[str] | None = None) -> int:
     state_path = root / "state" / "seen.json"
     state = st.load_state(state_path)
     now = dt.datetime.now(dt.timezone.utc)
-    sync_user(state, args.user, terms_order, now, repo, token)
+    store = make_store(root, users.get(args.user) or {"name": args.user})
+    ticks = store.get_ticks(args.user)
+    sync_user(state, args.user, terms_order, now, repo, token,
+              ticks=ticks, interactive=isinstance(store, GitHubStore))
     ledger.sync_file(state, args.user, ledger.ledger_path(root), now.date())
     st.save_state(state, state_path)
     return 0

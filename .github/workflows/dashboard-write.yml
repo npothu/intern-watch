@@ -61,6 +61,12 @@ jobs:
       - name: Apply the write
         env:  # note is user-typed text; env quoting keeps it inert
           NOTE: ${{ inputs.note }}
+          # TrackerStore driver -- repo Actions variable, defaults to the
+          # zero-infra GitHub driver; set to `convex` to read/write a hosted
+          # store (plus the two secrets) after the tracker migration
+          STORE: ${{ vars.STORE || 'github' }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_SECRET: ${{ secrets.CONVEX_SECRET }}
         run: |
           python -m src.statewrite \
             --user "${{ inputs.user }}" \
@@ -73,6 +79,12 @@ jobs:
         run: python -m src.dashboard --user "${{ inputs.user }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TrackerStore driver -- repo Actions variable, defaults to the
+          # zero-infra GitHub driver; set to `convex` to read/write a hosted
+          # store (plus the two secrets) after the tracker migration
+          STORE: ${{ vars.STORE || 'github' }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_SECRET: ${{ secrets.CONVEX_SECRET }}
 
       - name: Commit state
         run: |

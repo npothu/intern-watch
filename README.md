@@ -54,6 +54,13 @@ Who needs what:
   current ticks, ledger, and match snapshot in. Safe to re-run (idempotent
   upserts).
 
+Both the cron and the workflow repaints (the `dashboard-write` / resume
+steps) read the driver from the repo **Actions variable** `STORE` (Settings →
+Secrets and variables → Actions → Variables), defaulting to `github` when
+unset; `CONVEX_URL` and `CONVEX_SECRET` are set as repo **Actions secrets**,
+fed to the workflow env like any other secret. So flipping the backend is a
+repo-settings change, not a code change.
+
 Setting it up:
 
 1. `npx convex dev` (or `npx convex deploy`) in this repo to create the
@@ -81,6 +88,13 @@ truth — edits there are overwritten.
      `ANTHROPIC_API_KEY`) — optional; without it the tool runs
      deterministic-only
    - (`DISCORD_WEBHOOK_<NAME>` — only if a user enables the Discord channel)
+   - `JOBRIGHT_EMAIL` / `JOBRIGHT_PASSWORD` — optional; when set, accepted
+     matches whose link is still a jobright.ai URL get resolved to the real
+     employer apply URL at match time (session cookies persist across runs via
+     an Actions cache); without them the watcher keeps the jobright link —
+     everything else works. This logs into jobright.ai with your account —
+     enable it only with your own account and your own judgment on their terms
+     of service.
 4. **Tune your config.** Edit `users/example.yaml` (terms, keywords, rules,
    the prose "top company" definition) and `data/top_companies.txt` /
    `data/atlanta_companies.txt` (one company per line, `|` separates aliases).
@@ -99,7 +113,8 @@ Everything a fresh copy of this repo needs, in one place:
 2. **Secrets** (Settings → Secrets and variables → Actions):
    `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, and your LLM key
    (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY` — optional, deterministic-only
-   without it).
+   without it). Add `JOBRIGHT_EMAIL`/`JOBRIGHT_PASSWORD` (optional — see
+   Setup step 3) to resolve jobright links to real employer apply URLs.
 3. **Repo settings**: Settings → Actions → General →
    *Workflow permissions: Read and write* and
    *Allow GitHub Actions to create and approve pull requests* (the monthly
