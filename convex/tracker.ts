@@ -3,11 +3,13 @@ import { v } from "convex/values";
 import { applyStatus } from "./ledger";
 
 // Query/mutation functions backing the ConvexStore TrackerStore driver
-// (src/store.py). Every write endpoint checks the secret passed by the
-// driver against TRACKER_SECRET, so only someone holding the secret can
-// mutate state. The driver's Python side returns {"status":"error"} and
-// surfaces `errorMessage` when these throw, so callers degrade exactly as
-// they do on other API errors.
+// (src/store.py). Every endpoint - reads and writes - checks the secret
+// passed by the driver against TRACKER_SECRET, so only someone holding the
+// secret can read or mutate state. Reads are gated too: the queries return
+// per-user tracker data (ticks, ledger, matches) that must not be exposed to
+// anyone who merely learns the deployment URL. The driver's Python side
+// returns {"status":"error"} and surfaces `errorMessage` when these throw, so
+// callers degrade exactly as they do on other API errors.
 
 // The TRACKER_SECRET env var set in the Convex dashboard.
 function checkSecret(secret: string) {
@@ -21,8 +23,9 @@ const TICK_FIELDS = ["applied", "saved", "dismissed"] as const;
 // -- ticks --------------------------------------------------------------
 
 export const getTicks = query({
-  args: { user: v.string() },
-  handler: async (ctx, { user }) => {
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
     const rows = await ctx.db
       .query("ticks")
       .withIndex("by_user", (q) => q.eq("user", user))
@@ -86,8 +89,9 @@ export const setTicks = mutation({
 // -- applications ledger ---------------------------------------------------
 
 export const getLedger = query({
-  args: { user: v.string() },
-  handler: async (ctx, { user }) => {
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
     const rows = await ctx.db
       .query("applications")
       .withIndex("by_user", (q) => q.eq("user", user))
@@ -178,8 +182,9 @@ export const pruneMatches = mutation({
 });
 
 export const getMatches = query({
-  args: { user: v.string() },
-  handler: async (ctx, { user }) => {
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
     const rows = await ctx.db
       .query("matches")
       .withIndex("by_user", (q) => q.eq("user", user))

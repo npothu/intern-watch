@@ -355,9 +355,10 @@ class ConvexStore:
 
     Config comes from env: CONVEX_URL (the deployment origin) and
     CONVEX_SECRET, which must equal the deployment's TRACKER_SECRET env var
-    (every mutation checks it). get_ticks returns None on transport/API
-    failure (recording `error_name`), so callers degrade exactly as they do
-    for the GitHub driver; the mutation endpoints raise ApiError instead.
+    (every query and mutation checks it - reads return per-user tracker data,
+    so they are gated too). get_ticks returns None on transport/API failure
+    (recording `error_name`), so callers degrade exactly as they do for the
+    GitHub driver; the mutation endpoints raise ApiError instead.
 
     There is no dashboard issue in this model, so the issue plumbing fields
     the webui reads are all empty: repo/token/issue_number are unset, which
@@ -424,7 +425,8 @@ class ConvexStore:
         """The user's tick state, or None when the read failed (like
         GitHubStore; recorded on `error_name`)."""
         try:
-            rows = self._post("query", "getTicks", {"user": user})
+            rows = self._post("query", "getTicks",
+                              {"user": user, "secret": self.secret})
         except ApiError as exc:
             self.error_name = exc.__class__.__name__
             # Fold the root cause into a human warning rather than the bare
@@ -452,7 +454,8 @@ class ConvexStore:
         webui's tracker tab renders it: the display `snapshot` fields merged
         in, plus status / history / applied. History entries carry the date
         (`on`) the webui sorts and displays on."""
-        rows = self._post("query", "getLedger", {"user": user}) or []
+        rows = self._post("query", "getLedger",
+                          {"user": user, "secret": self.secret}) or []
         book: dict = {}
         for row in rows:
             rec = dict(row.get("snapshot") or {})
@@ -521,7 +524,8 @@ class ConvexStore:
         """The pushed match snapshot, item payloads only (storage fields
         stripped). None when the read fails, like GitHubStore."""
         try:
-            items = self._post("query", "getMatches", {"user": user})
+            items = self._post("query", "getMatches",
+                               {"user": user, "secret": self.secret})
         except ApiError:
             return None
         return items or []
