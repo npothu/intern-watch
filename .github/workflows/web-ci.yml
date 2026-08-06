@@ -1,0 +1,50 @@
+name: web CI
+
+# Build/typecheck/lint the hosted web app whenever web/ changes. Runs with
+# dummy env values so `next build` succeeds without any real secrets - the
+# app is scaffolded to build (not run correctly) without them.
+
+on:
+  pull_request:
+    paths: ["web/**"]
+    branches: ["**"]
+  push:
+    branches: ["main"]
+    paths: ["web/**"]
+
+env:
+  # Dummy values (documented in web/.env.example) - enough for `next build`.
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_YOUR_CLERK_PUBLISHABLE_KEY
+  CLERK_SECRET_KEY: sk_test_YOUR_CLERK_SECRET_KEY
+  NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+  NEXT_PUBLIC_CLERK_SIGN_UP_URL: /sign-up
+  CONVEX_URL: https://YOUR_DEPLOYMENT.convex.site
+  CONVEX_SECRET: dummy-convex-secret
+  TRACKER_USER_MAP: '{"you@example.com":"example"}'
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
