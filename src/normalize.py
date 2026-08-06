@@ -120,6 +120,17 @@ def strip_tracking(url: str) -> str:
 _LOCALE_SEG_RE = re.compile(r"^/[a-z]{2}[-_][a-z]{2}(?=/)", re.I)
 
 
+def _sorted_kept_query(path: str, query: str) -> str:
+    """Tracking-stripped, path-echo-dropped, sorted query string. Shared by
+    normalize_url and canonical_url so both treat query params identically."""
+    path_segments = set(path.lower().split("/"))
+    kept = sorted((k, v) for k, v in parse_qsl(query, keep_blank_values=True)
+                  if not k.lower().startswith("utm_")
+                  and k.lower() not in _TRACKING_KEYS
+                  and v.lower() not in path_segments)
+    return urlencode(kept)
+
+
 def normalize_url(url: str) -> str:
     """Canonical form for dedup: lowercase scheme+host, drop tracking params,
     sort the remaining params (job-id params like gh_jid survive *unless* the
@@ -128,13 +139,100 @@ def normalize_url(url: str) -> str:
     and fragment."""
     parts = urlsplit(url.strip())
     path = _LOCALE_SEG_RE.sub("", parts.path).rstrip("/")
-    path_segments = set(path.lower().split("/"))
-    kept = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-                  if not k.lower().startswith("utm_")
-                  and k.lower() not in _TRACKING_KEYS
-                  and v.lower() not in path_segments)
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path,
-                       urlencode(kept), ""))
+                       _sorted_kept_query(path, parts.query), ""))
+
+
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_GH_HOSTS = {"boards.greenhouse.io", "job-boards.greenhouse.io",
+             "boards.eu.greenhouse.io", "job-boards.eu.greenhouse.io"}
+_GH_PATH_ID_RE = re.compile(r"/jobs/(\d+)")
+_GH_CUSTOM_ID_RE = re.compile(r"/jobs/(\d{7,})-[\w-]+/?$")
+_LEVER_HOSTS = {"jobs.lever.co", "jobs.eu.lever.co"}
+_LEVER_PATH_RE = re.compile(
+    r"^/([^/]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    re.I)
+# Workday reqids ride on the job slug: .../Title_R17615 or
+# .../Title_JR2026520976. The group captures the reqid after the underscore;
+# repost counters (_JR2026520976-1) are dropped by requiring the match to end
+# on the digit run, so reposts of one requisition share a token.
+_WD_REQID_RE = re.compile(r"_(R[-\w]*\d{3,}|JR[-\w]*\d{3,})", re.I)
+_WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
+# Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
+# so this pattern carries its own optional two-letter locale segment.
+_AMAZON_RE = re.compile(r"^(?:/[a-z]{2})?/jobs/(\d+)(?:/.*)?$", re.I)
+
+
+def canonical_url(url: str) -> str | None:
+    """Aggressive cross-source identity for the url_index ONLY -- never a
+    dedup key. Collapses host/path variants of the same posting to one token:
+    an `ats:<sys>:<id>` when a stable ATS job id is recognizable, else a
+    hardened URL string (www./scheme normalized). Returns None for
+    jobright.ai, non-http, or empty input (a jobright URL is never an
+    identity -- the resolved employer URL is)."""
+    if not url:
+        return None
+    parts = urlsplit(url.strip())
+    if parts.scheme and parts.scheme.lower() not in ("http", "https"):
+        return None
+    host = parts.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return None
+    if host == "jobright.ai" or host.endswith(".jobright.ai"):
+        return None
+    path = _LOCALE_SEG_RE.sub("", parts.path).rstrip("/")
+
+    if host in _GH_HOSTS:
+        m = _GH_PATH_ID_RE.search(path)
+        if m:
+            return f"ats:gh:{m.group(1)}"
+    for k, v in parse_qsl(parts.query, keep_blank_values=True):
+        if k.lower() == "gh_jid" and v.isdigit():
+            return f"ats:gh:{v}"
+    m = _GH_CUSTOM_ID_RE.search(path)
+    if m:
+        return f"ats:gh:{m.group(1)}"
+    if host in _LEVER_HOSTS:
+        m = _LEVER_PATH_RE.match(path)
+        if m:
+            return f"ats:lever:{m.group(1).lower()}:{m.group(2).lower()}"
+    if host == "jobs.ashbyhq.com":
+        m = _UUID_RE.search(path)
+        if m:
+            return f"ats:ashby:{m.group(0).lower()}"
+
+    # Workday careers sites (tenant.wdN.myworkdayjobs.com). The reqid is the
+    # suffix after the final underscore of the job slug, which collapses the
+    # .../details/<slug> and .../job/<location>/<slug> forms plus any career
+    # site segment (INTERN, EXTERNAL_CAREERS). Hosts like *.myworkdaysite.com
+    # must fall through to the fallback: there the tenant is not the first
+    # host label, and a wrong tenant would merge two different companies.
+    if host.endswith(".myworkdayjobs.com"):
+        m = _WD_REQID_RE.search(path.rsplit("/", 1)[-1])
+        if m:
+            tenant = host.split(".", 1)[0]
+            return f"ats:wd:{tenant}:{m.group(1).upper()}"
+    if host == "apply.workable.com":
+        m = _WORKABLE_PATH_RE.match(path)
+        if m:
+            return f"ats:workable:{m.group(1).lower()}:{m.group(2).upper()}"
+    if host == "amazon.jobs":
+        m = _AMAZON_RE.match(path)
+        if m:
+            return f"ats:amazon:{m.group(1)}"
+    # Ashby embedded postings: ashby_jid=<uuid> on any host, same token shape
+    # as the jobs.ashbyhq.com rule so the two join.
+    for k, v in parse_qsl(parts.query, keep_blank_values=True):
+        if k.lower() == "ashby_jid":
+            m = _UUID_RE.search(v)
+            if m:
+                return f"ats:ashby:{m.group(0).lower()}"
+
+    query = _sorted_kept_query(path, parts.query)
+    return urlunsplit(("https", host, path, query, ""))
 
 
 _JR_ID_RE = re.compile(r"\bjr_id=([0-9a-f]{24})\b", re.I)

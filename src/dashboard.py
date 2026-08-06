@@ -21,7 +21,9 @@ import re
 
 import httpx
 
+from . import content_dedup
 from . import state as st
+from .normalize import canonical_url
 from .notify import _group_items
 
 log = logging.getLogger(__name__)
@@ -252,6 +254,70 @@ def auto_dismiss_stale(state: dict, user: str, today: dt.date,
     return n
 
 
+def _same_posting(a: dict, b: dict) -> bool:
+    """Two dashboard rows are the same real posting if they share a canonical
+    employer-URL identity, or (for pre-resolver rows whose jr: url is still the
+    jobright link, so canon is None) their content signatures are compatible."""
+    ca = canonical_url(a.get("url") or "")
+    cb = canonical_url(b.get("url") or "")
+    if ca and cb:
+        return ca == cb
+    return content_dedup.compatible(content_dedup.signature_from_item(a),
+                                    content_dedup.signature_from_item(b))
+
+
+def dedup_existing_matches(state: dict, user: str) -> int:
+    """One-time cleanup: cross-source duplicate rows already on the dashboard
+    (the same posting delivered as both a jr: and a url: match before the
+    url-index existed) are collapsed by hiding all but one per group. Rows are
+    grouped by _same_posting -- shared canonical url, or compatible content
+    signature for the historical jr: rows whose stored url is still the
+    (uncanonicalizable) jobright link. Survivor: an applied/saved row if any,
+    else the earliest-added. A group with more than one acted-on row is left
+    fully intact -- never risk hiding a row the user acted on. Rows already
+    dismissed/restored are left as-is (symmetric with auto_dismiss_stale).
+    Idempotent via a _meta flag. Returns how many rows were newly hidden."""
+    flag = state.setdefault("_meta", {}).setdefault("crossdedup_done", [])
+    if user in flag:
+        return 0
+    items = state["matches"].get(user, [])
+    # Greedy grouping: each row joins the first group it matches (order-stable,
+    # so the earliest row anchors each group).
+    groups: list[list[dict]] = []
+    for item in items:
+        for grp in groups:
+            if _same_posting(grp[0], item):
+                grp.append(item)
+                break
+        else:
+            groups.append([item])
+    n = 0
+    for rows in groups:
+        if len(rows) < 2:
+            continue
+        acted = [r for r in rows if r.get("applied") or r.get("saved")]
+        if len(acted) > 1:
+            continue  # more than one acted-on row -- don't choose, keep all
+        survivor = acted[0] if acted else min(
+            rows, key=lambda r: r.get("added", ""))
+        for r in rows:
+            if r is survivor or r.get("dismissed") or r.get("restored"):
+                continue
+            if r.get("applied") or r.get("saved"):
+                continue
+            # Set the flag directly (like auto_dismiss_stale) rather than via
+            # matches_set_dismissed, which would un-dismiss every other row.
+            r["dismissed"] = True
+            log.info("user %s: retro-hid dup %s == %s [layer=retro]",
+                     user, r.get("key"), survivor.get("key"))
+            n += 1
+    if n:
+        log.info("user %s: hid %d cross-source duplicate row(s) [layer=retro]",
+                 user, n)
+    flag.append(user)
+    return n
+
+
 def sync_user(state: dict, user: str, terms_order: list[str],
               now: dt.datetime, repo: str, token: str) -> None:
     """Read applied/hide checkboxes back into state, auto-hide stale rows,
@@ -301,8 +367,9 @@ def sync_user(state: dict, user: str, terms_order: list[str],
                     {by_short[s] for s in s_present if s in by_short})
 
         # after read-back (so a manual restore this cycle wins first), sweep
-        # long-gone postings into the Hidden section
+        # long-gone postings and existing cross-source duplicates into Hidden
         auto_dismiss_stale(state, user, now.date())
+        dedup_existing_matches(state, user)
 
         branch = os.environ.get("GITHUB_REF_NAME") or "main"
         body = build_body(st.matches_items(state, user), terms_order, now,

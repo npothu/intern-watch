@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 # Re-deliver an identical posting only if its prior delivery has aged past this
 # many days. Duplicates churn within hours/days, so a short window kills them;
 # a genuinely new identical-title repost months later still gets through.
-SUPPRESS_WINDOW_DAYS = 45
+SUPPRESS_WINDOW_DAYS = 120  # matches state.PRUNE_AFTER_DAYS
 
 
 def _signature(company: str, title: str, term: str, buckets: list[str]) -> str:
@@ -48,6 +48,70 @@ def content_signature(job: Job, term: str) -> str:
     is bucketed so a multi-state posting is distinct from a single-state one."""
     return _signature(job.company, job.title, term,
                       [location_bucket(loc) for loc in job.locations])
+
+
+def _parse_sig(sig: str) -> tuple[str, str, str, frozenset[str]] | None:
+    """company, title, term, bucket-set from a stored flat signature. Split
+    from the RIGHT (locs, term, title fixed at the end) so a '|' inside a
+    company name can't shift the fields. None if fewer than 4 parts."""
+    parts = sig.split("|")
+    if len(parts) < 4:
+        return None
+    locs, term, title = parts[-1], parts[-2], parts[-3]
+    company = "|".join(parts[:-3])
+    buckets = frozenset(locs.split("+")) if locs != "?" else frozenset()
+    return company, title, term, buckets
+
+
+# Term values that carry no discriminating signal. `?` is the empty-term
+# marker from _signature; "Unknown term" is notify.primary_term's sentinel for
+# a job whose term never resolved -- exactly the jobright rows that diverge
+# from an ATS twin carrying an explicit season, so both must wildcard.
+_UNKNOWN_TERMS = {"?", "Unknown term"}
+
+
+def _buckets_unknown(buckets: frozenset[str]) -> bool:
+    """A location side that carries no discriminating signal: no locations at
+    all, or every bucket is the catch-all `unknown`."""
+    return not buckets or buckets <= {"unknown"}
+
+
+def compatible(sig_a: str, sig_b: str) -> bool:
+    """True if two signatures plausibly name the SAME posting: identical
+    company and title, with term and location treated as wildcards when either
+    side is unknown. Terms match when equal or either is '?'; buckets match
+    when the sets intersect or either side is entirely unknown. This closes the
+    observed cross-source leaks (jobright emits Unknown-term / city-only rows
+    the ATS feed spells out) at the cost of possibly collapsing two genuinely
+    distinct same-title reqs where one side lacks a term or location."""
+    a, b = _parse_sig(sig_a), _parse_sig(sig_b)
+    if a is None or b is None:
+        return sig_a == sig_b
+    (ca, ta, tma, ba), (cb, tb, tmb, bb) = a, b
+    if ca != cb or ta != tb:
+        return False
+    if (tma != tmb and tma not in _UNKNOWN_TERMS
+            and tmb not in _UNKNOWN_TERMS):
+        return False
+    if _buckets_unknown(ba) or _buckets_unknown(bb):
+        return True
+    return bool(ba & bb)
+
+
+def find_compatible(state: dict, user: str, sig: str, today: dt.date,
+                    window_days: int) -> str | None:
+    """The stored signature for `user`, still inside the window, that is
+    `compatible` with `sig`; None if none. Prefilters on the company|title
+    prefix so the scan touches only same-role records."""
+    parsed = _parse_sig(sig)
+    prefix = "|".join(sig.split("|")[:-2]) if parsed else None
+    for stored in state.get("content", {}).get(user, {}):
+        if prefix is not None and "|".join(stored.split("|")[:-2]) != prefix:
+            continue
+        if compatible(sig, stored) and st.content_seen(
+                state, user, stored, today, window_days):
+            return stored
+    return None
 
 
 def signature_from_item(item: dict) -> str:

@@ -28,7 +28,7 @@ from .dedupe import dedupe
 from .filters import UserFilter, Verdict, load_users
 from .llm import api_key_env_for, classify
 from .models import Job, SourceConfig
-from .normalize import extract_jobright_id, norm_company
+from .normalize import canonical_url, extract_jobright_id, norm_company
 from .notify import (build_digest, build_email, build_health_email,
                      match_item, primary_term, send_discord, send_email)
 from .resume.build import build_for_job, resume_build_cfg
@@ -210,16 +210,79 @@ def _drop_content_dupes(state: dict, name: str,
     for job, reasons in accepted:
         term = primary_term(job, terms_order) or ""
         sig = content_dedup.content_signature(job, term)
-        if st.content_seen(state, name, sig, today,
-                           content_dedup.SUPPRESS_WINDOW_DAYS):
-            prior = st.content_keys(state, name, sig)
-            log.info("user %s: suppressing content-duplicate %s (%s | %s) -- "
-                     "already delivered as %s", name, job.dedup_key,
-                     job.company, term or "?", prior[0] if prior else "?")
-            st.content_mark(state, name, sig, job.dedup_key, today)
+        matched = content_dedup.find_compatible(
+            state, name, sig, today, content_dedup.SUPPRESS_WINDOW_DAYS)
+        if matched is not None:
+            prior = st.content_keys(state, name, matched)
+            log.info("user %s: content-dupe suppressed %s ~= %s (sig %s ~ %s) "
+                     "[layer=content]", name, job.dedup_key,
+                     prior[0] if prior else "?", sig, matched)
+            st.content_mark(state, name, matched, job.dedup_key, today)
             continue
         st.content_mark(state, name, sig, job.dedup_key, today)
         kept.append((job, reasons))
+    return kept
+
+
+def _owned_by_user(state: dict, name: str, key: str) -> bool:
+    """Delivered or delivery-owned by this user: notified, queued in the
+    outbox, or on the dashboard matches list."""
+    return (st.was_notified(state, key, name)
+            or any(i.get("key") == key
+                   for i in state.get("outbox", {}).get(name, []))
+            or any(i.get("key") == key
+                   for i in state.get("matches", {}).get(name, [])))
+
+
+def _drop_url_dupes(state: dict, name: str,
+                    accepted: list[tuple[Job, list[str]]],
+                    terms_order: list[str],
+                    today: dt.date) -> list[tuple[Job, list[str]]]:
+    """Deterministic cross-source join: suppress an accepted job whose
+    canonical employer-URL identity was already delivered to this user under a
+    different dedup_key (the jr:/url: namespace split). Runs after
+    _resolve_employer_urls so a jobright job carries its real employer url.
+    Jobs with no canonical url (unresolved jobright link) pass through to the
+    fuzzy content gate. Survivor within a batch: has-term > non-jobright >
+    arrival order. Fails open -- keeps the job when nothing joins."""
+    survivors: dict[str, Job] = {}
+    ordered = list(enumerate(accepted))
+
+    def rank(item: tuple[int, tuple[Job, list[str]]]) -> tuple[bool, bool, int]:
+        idx, (job, _r) = item
+        return (bool(job.terms), not job.jobright_id, -idx)
+
+    kept: list[tuple[Job, list[str]]] = []
+    for _idx, (job, reasons) in sorted(ordered, key=rank, reverse=True):
+        canon = canonical_url(job.url)
+        if canon is None:
+            kept.append((job, reasons))
+            continue
+        # Within-batch: fold a later same-canon job into the batch survivor.
+        winner = survivors.get(canon)
+        if winner is not None:
+            winner.sources = sorted(set(winner.sources) | set(job.sources))
+            st.mark_notified(state, job.dedup_key, name)
+            st.mark_dup_of(state, job.dedup_key, winner.dedup_key)
+            log.info("user %s: url-dupe suppressed %s == %s (canon %s) "
+                     "[layer=url-index-batch]", name, job.dedup_key,
+                     winner.dedup_key, canon)
+            continue
+        # Cross-run: a prior delivery this user already owns wins.
+        prior = st.url_index_get(state, canon)
+        if (prior is not None and prior != job.dedup_key
+                and _owned_by_user(state, name, prior)):
+            st.touch(state, prior, job.sources, today)
+            st.mark_notified(state, job.dedup_key, name)
+            st.mark_dup_of(state, job.dedup_key, prior)
+            log.info("user %s: url-dupe suppressed %s == %s (canon %s) "
+                     "[layer=url-index]", name, job.dedup_key, prior, canon)
+            continue
+        survivors[canon] = job
+        st.url_index_put(state, canon, job.dedup_key)
+        kept.append((job, reasons))
+    # Restore arrival order for stable downstream behavior.
+    kept.sort(key=lambda jr: accepted.index(jr))
     return kept
 
 
@@ -243,6 +306,41 @@ def _resolve_employer_urls(accepted: list[tuple[Job, list[str]]], state: dict,
                 st.apply_url_put(state, job.dedup_key, url)
         if url is not None:
             job.url = url
+
+
+BACKFILL_RESOLVE_CAP = 5
+
+
+def _backfill_apply_urls(state: dict, resolver,
+                         limit: int = BACKFILL_RESOLVE_CAP) -> int:
+    """Resolve a few already-DELIVERED jobright matches that still lack a cached
+    apply_url, oldest-first, so the url_index converges even on runs that hit
+    the session cap. Shares the resolver's per-run cap. Forward-only: stores
+    apply_url + the index entry; never rewrites the delivered item's display
+    url. Returns how many resolved."""
+    if resolver is None:
+        return 0
+    targets: dict[str, str] = {}   # jr key -> added date, oldest kept
+    for items in state.get("matches", {}).values():
+        for item in items:
+            key = item.get("key", "")
+            if (key.startswith("jr:") and st.apply_url_get(state, key) is None
+                    and key not in targets):
+                targets[key] = item.get("added", "")
+    resolved = 0
+    for key in sorted(targets, key=lambda k: targets[k])[:limit]:
+        url = resolver.resolve_apply_url(key[3:])
+        if not url:
+            continue
+        st.apply_url_put(state, key, url)
+        canon = canonical_url(url)
+        if canon:
+            st.url_index_put(state, canon, key)
+        resolved += 1
+    if resolved:
+        log.info("backfilled %d employer apply url(s) for the url index",
+                 resolved)
+    return resolved
 
 
 def _finalize(uf: UserFilter, job: Job, facts: dict) -> Verdict:
@@ -400,13 +498,15 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # to accept and drop any that now eliminate on the fetched JD.
     accepted = _drop_eliminated(uf, accepted, enricher, today)
 
-    # ---- Content-dedup gate: collapse same-posting duplicates that the
-    # jr:/url: key can't (distinct jobright ids, US/Canada splits, multiple
-    # ingestion feeds). Runs before resume build / notify so a suppressed dup
-    # neither builds a resume nor reaches the email/dashboard.
+    # ---- Cross-source dedup, before resume build / notify so a suppressed dup
+    # neither builds a resume nor reaches the email/dashboard. Resolve employer
+    # urls FIRST so a jobright job carries the same canonical identity as its
+    # ATS twin, then join on that url (deterministic), then fall back to the
+    # fuzzy content signature for jobs whose url couldn't be canonicalized.
     terms_order = list(user_cfg.get("terms_wanted", []))
-    accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
     _resolve_employer_urls(accepted, state, resolver)
+    accepted = _drop_url_dupes(state, name, accepted, terms_order, today)
+    accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
 
     # ---- Auto resume build (commit/email modes): tailor a .docx per accepted
     # job into resumes/<user>/ so both delivery modes can find the file. Built
@@ -761,6 +861,13 @@ def main(argv: list[str] | None = None) -> int:
     # One-time: seed content-dedup history from prior deliveries so jobs emailed
     # before this feature aren't re-sent when a duplicate key appears.
     content_dedup.seed_from_matches(state)
+    # One-time: seed the canonical-url index from prior deliveries so an ATS
+    # re-arrival of an already-emailed jobright job is joined and suppressed.
+    st.seed_url_index(state)
+    # One-time: migrate the index to canonical_url's ats: token dialect (and
+    # backfill jr: apply_urls). Must run before the ingest-registration loop
+    # below, so it never writes new-dialect tokens next to unmigrated ones.
+    st.migrate_url_index(state)
 
     if args.explain:
         users = load_users(ROOT / "users")
@@ -782,6 +889,14 @@ def main(argv: list[str] | None = None) -> int:
     new_jobs = [job for job in merged
                 if st.touch(state, job.dedup_key, job.sources, today)]
     log.info("%d new job(s) since last run", len(new_jobs))
+
+    # Register every job whose url is already an employer link (all ATS/Simplify
+    # rows, plus vanshb03 jr:-keyed rows). Free -- no auth -- and first-wins, so
+    # re-registering the same rows each run is a no-op. jobright urls -> None.
+    for job in merged:
+        canon = canonical_url(job.url)
+        if canon:
+            st.url_index_put(state, canon, job.dedup_key)
 
     if args.seed or (first_run and not args.backfill):
         log.info("%s: seeding state with %d jobs, no notifications%s",
@@ -825,6 +940,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()
+    if not args.dry_run:
+        _backfill_apply_urls(state, resolver)
     if resolver is not None and resolver.auth_failed_msg:
         st.record_source_failure(state, "jobright-auth", resolver.auth_failed_msg,
                                  today, floor=st.HEALTH_ALERT_AFTER)
