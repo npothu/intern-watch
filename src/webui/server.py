@@ -41,6 +41,12 @@ _DOCX_MIME = ("application/vnd.openxmlformats-officedocument"
 # Committed resume blobs are the only repo paths served from git; anything
 # fancier than this shape is refused rather than sanitized.
 _REPO_FILE_RE = re.compile(r"^resumes/[A-Za-z0-9._\- /]+\.docx$")
+# tick field -> the Hub cache set that mirrors it for rows it writes
+# instantly (issue-rendered). Shared by the single and batch paths so the
+# optimistic cache and the store stay in lockstep.
+_FIELD_ATTR = {"applied": "checked", "saved": "saved",
+               "dismissed": "hidden"}
+_SHORT_RE = re.compile(r"[0-9a-f]{12}")
 
 
 class Hub:
@@ -215,42 +221,54 @@ class Hub:
 
     # -- writes ---------------------------------------------------------
 
-    def _set_tick(self, short: str, field: str, on: bool,
-                  cache_attr: str) -> bool:
-        """Set one per-row toggle through the store. Rendered rows get the
-        instant checkbox PATCH; unrendered rows fall back to a
-        workflow-dispatched state write, surfaced through the pending
-        overlay until the commit lands. Returns True when queued."""
+    def set_ticks_batch(self, field: str, shorts: list[str],
+                        on: bool) -> dict:
+        """Persist one toggle across many shorts in a single store call
+        (one accumulated issue PATCH; off-window rows fall back to one
+        workflow dispatch each, surfaced through the pending overlay until
+        the commit lands). Validates the field and every short up front.
+        Returns the batch payload including which shorts were only queued."""
+        attr = _FIELD_ATTR.get(field)
+        if attr is None:
+            raise ApiError(f"unknown tick field {field!r} "
+                           f"(have: {', '.join(_FIELD_ATTR)})")
+        if len(shorts) > 500:
+            raise ApiError(f"tick batch too large ({len(shorts)} shorts, "
+                           f"max 500)")
+        bad = next((s for s in shorts if not _SHORT_RE.fullmatch(s)), None)
+        if bad is not None:
+            raise ApiError(f"bad short key {bad!r} (need 12 lowercase hex)")
         if not self.writable:
             raise ApiError("this state persists through the dashboard "
                            "issue and no GitHub token/issue is available — "
                            "run `gh auth login` and refresh")
         with self.lock:  # serialize read-modify-write PATCHes
-            queued_shorts = self.store.set_ticks(
-                self.user, [TickWrite(short, field, on)])
-            queued = short in queued_shorts
-            if queued:
-                self.pending.setdefault(short, {})[field] = on
-            else:
-                cache: set[str] | None = getattr(self, cache_attr)
-                if cache is not None:
-                    (cache.add if on else cache.discard)(short)
-        return queued
+            queued = self.store.set_ticks(
+                self.user, [TickWrite(s, field, on) for s in shorts])
+            for s in shorts:
+                if s in queued:
+                    self.pending.setdefault(s, {})[field] = on
+                else:
+                    cache: set[str] | None = getattr(self, attr)
+                    if cache is not None:
+                        (cache.add if on else cache.discard)(s)
+        return {"ok": True, "field": field, "value": on,
+                "count": len(shorts), "queued": queued}
 
     def set_applied(self, short: str, applied: bool) -> dict:
-        queued = self._set_tick(short, "applied", applied, "checked")
+        res = self.set_ticks_batch("applied", [short], applied)
         return {"ok": True, "short": short, "applied": applied,
-                "queued": queued}
+                "queued": short in res["queued"]}
 
     def set_dismissed(self, short: str, dismissed: bool) -> dict:
-        queued = self._set_tick(short, "dismissed", dismissed, "hidden")
+        res = self.set_ticks_batch("dismissed", [short], dismissed)
         return {"ok": True, "short": short, "dismissed": dismissed,
-                "queued": queued}
+                "queued": short in res["queued"]}
 
     def set_saved(self, short: str, saved: bool) -> dict:
-        queued = self._set_tick(short, "saved", saved, "saved")
+        res = self.set_ticks_batch("saved", [short], saved)
         return {"ok": True, "short": short, "saved": saved,
-                "queued": queued}
+                "queued": short in res["queued"]}
 
     def set_status(self, short: str, status: str, note: str = "") -> dict:
         """Tracker status update — always workflow-mediated (statuses have
@@ -312,6 +330,20 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as exc:
             raise ApiError(f"bad request body: {exc}") from exc
 
+    def _toggle(self, body: dict, field: str) -> dict:
+        """Serve both the legacy single-toggle body ({short, <field>}) and
+        the batch body ({shorts: [...]}); a single toggle returns the EXACT
+        legacy payload shape so a cached page keeps working."""
+        on = bool(body.get(field))
+        shorts = body.get("shorts")
+        if shorts is not None:
+            return self.hub.set_ticks_batch(
+                field, [str(s) for s in shorts], on)
+        short = str(body.get("short", ""))
+        res = self.hub.set_ticks_batch(field, [short], on)
+        return {"ok": True, "short": short, field: on,
+                "queued": short in res["queued"]}
+
     def _file(self, data: bytes, ctype: str, filename: str = "") -> None:
         self.send_response(200)
         self.send_header("Content-Type", ctype)
@@ -351,18 +383,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.hub.refresh()
                 self._json(self.hub.snapshot())
             elif self.path == "/api/applied":
-                body = self._read_body()
-                self._json(self.hub.set_applied(str(body.get("short", "")),
-                                                bool(body.get("applied"))))
+                self._json(self._toggle(self._read_body(), "applied"))
             elif self.path == "/api/dismissed":
-                body = self._read_body()
-                self._json(self.hub.set_dismissed(
-                    str(body.get("short", "")),
-                    bool(body.get("dismissed"))))
+                self._json(self._toggle(self._read_body(), "dismissed"))
             elif self.path == "/api/saved":
-                body = self._read_body()
-                self._json(self.hub.set_saved(str(body.get("short", "")),
-                                              bool(body.get("saved"))))
+                self._json(self._toggle(self._read_body(), "saved"))
             elif self.path == "/api/status":
                 body = self._read_body()
                 self._json(self.hub.set_status(

@@ -470,11 +470,25 @@ function rowHtml(m) {
   </div>`;
 }
 
-function render() {
-  if (!DATA) return;
-  const ms = DATA.matches;
+/* ---------- dismiss coalescing ---------- */
 
-  $("#who").textContent = "— " + DATA.user;
+// Batch-hide: every hide/restore lands in this Map (short -> desired
+// dismissed state, last write wins) and is flushed in one burst of at most
+// two POSTs (one per direction). A hide-then-undo before the flush sends
+// nothing. Rows disappear optimistically at enqueue time, not flush time,
+// so a rapid `h h h` keypress stream removes them without a full re-render.
+const dismissQueue = new Map();
+const FLUSH_IDLE = 500;          // debounce: 500ms after the last enqueue
+const FLUSH_MAX = 3000;          // hard ceiling from the burst's first write
+const FLUSH_CAP = 50;            // immediate flush at this many queued
+let dismissTimer = null;
+let dismissDeadline = 0;
+let dismissBusy = false;         // a flush is in flight (serialize requests)
+// the live undo toast covering the current hide burst, or null when sealed
+let dismissBurst = null;
+
+function statsHtml() {
+  const ms = DATA.matches;
   const active = ms.filter(m => !m.dismissed);
   const applied = active.filter(m => m.applied).length;
   const saved = active.filter(m => m.saved).length;
@@ -482,13 +496,191 @@ function render() {
   const hidden = ms.length - active.length;
   const stat = (n, label, f) =>
     `<span class="seg" data-stat="${f}"><b>${n}</b> ${label}</span>`;
-  $("#stats").innerHTML =
-    stat(active.length, "matches", "all") + " · " +
+  return stat(active.length, "matches", "all") + " · " +
     stat(applied, "applied", "applied") + " · " +
     stat(active.length - applied, "to go", "todo") + " · " +
     stat(resumes, "resumes", "resume") +
     (saved ? " · " + stat(saved, "saved", "saved") : "") +
     (hidden ? " · " + stat(hidden, "hidden", "hidden") : "");
+}
+
+// update the statline + a row's term-section count in place, without the
+// full re-render that a hide would otherwise need
+function renderStats() { $("#stats").innerHTML = statsHtml(); }
+
+function scheduleDismissFlush() {
+  if (!dismissQueue.size || dismissBusy) return;
+  if (dismissQueue.size >= FLUSH_CAP) {
+    if (dismissTimer) { clearTimeout(dismissTimer); dismissTimer = null; }
+    dismissFlush();
+    return;
+  }
+  if (!dismissTimer) dismissDeadline = Date.now() + FLUSH_MAX;
+  clearTimeout(dismissTimer);
+  const delay = Math.max(0, Math.min(FLUSH_IDLE, dismissDeadline - Date.now()));
+  dismissTimer = setTimeout(() => { dismissTimer = null; dismissFlush(); }, delay);
+}
+
+async function postShorts(shorts, value) {
+  const res = await api("/api/dismissed", { shorts, dismissed: value });
+  if (res.error) throw Object.assign(new Error(res.error), { shorts, value });
+  return res;
+}
+
+function dismissFlush() {
+  if (dismissTimer) { clearTimeout(dismissTimer); dismissTimer = null; }
+  if (!dismissQueue.size || dismissBusy) return;
+  const hid = [], res = [];
+  for (const [s, v] of dismissQueue) (v ? hid : res).push(s);
+  dismissBusy = true;
+  (async () => {
+    let failed = false;
+    try {
+      if (hid.length) {
+        const r = await postShorts(hid, true);
+        for (const s of hid) if (dismissQueue.get(s) === true) dismissQueue.delete(s);
+        syncToast(r);
+      }
+      if (res.length) {
+        const r = await postShorts(res, false);
+        for (const s of res) if (dismissQueue.get(s) === false) dismissQueue.delete(s);
+        syncToast(r);
+      }
+    } catch (e) {
+      failed = true;
+      // rollback exactly the failed request's shorts, then settle to server truth
+      for (const s of e.shorts) {
+        if (dismissQueue.get(s) === e.value) dismissQueue.delete(s);
+        const m = DATA.matches.find(m => m.short === s);
+        if (m) m.dismissed = !e.value;
+      }
+      render();
+      toast(e.message || "couldn't sync hides", true);
+    } finally {
+      dismissBusy = false;
+      // keep draining only when nothing errored; an error bubbles a toast and
+      // reschedules on the user's next hide rather than error-looping
+      if (!failed && dismissQueue.size) scheduleDismissFlush();
+    }
+  })();
+}
+
+// append " (N syncing)" to a live burst toast when a flush response reports
+// queued (off-window) rows that only land after a workflow commit
+function syncToast(r) {
+  const q = (r && r.queued) || [];
+  if (dismissBurst && !dismissBurst.dead && q.length) {
+    dismissBurst.sync += q.length;
+    paintBurst();
+  }
+}
+
+function paintBurst() {
+  if (!dismissBurst) return;
+  const n = dismissBurst.shorts.size;
+  dismissBurst.txt.nodeValue = "Hidden " + n +
+    (dismissBurst.sync ? " (" + dismissBurst.sync + " syncing - land in ~1 min)" : "");
+}
+
+function sealBurst() {
+  if (!dismissBurst) return;
+  if (dismissBurst.timer) clearTimeout(dismissBurst.timer);
+  dismissBurst.el.remove();
+  dismissBurst.dead = true;
+}
+
+// one live undo toast per hide burst; a new hide extends it and resets the
+// 6s lifetime, an idle 6s seals it (per-row restore stays on the Hidden tab)
+function extendBurst(short) {
+  if (!dismissBurst || dismissBurst.dead) {
+    const el = document.createElement("div");
+    el.className = "toast";
+    dismissBurst = { el, txt: document.createTextNode(""),
+                     shorts: new Set(), sync: 0, dead: false, timer: null };
+    el.append(dismissBurst.txt);
+    const b = document.createElement("button");
+    b.textContent = "Undo";
+    b.onclick = () => { sealBurst(); undoBurst(); };
+    el.append(b);
+    $("#toasts").append(el);
+  }
+  dismissBurst.shorts.add(short);
+  if (dismissBurst.timer) clearTimeout(dismissBurst.timer);
+  dismissBurst.timer = setTimeout(sealBurst, 6000);
+  paintBurst();
+}
+
+// undo the WHOLE burst: un-hide every short it covered, whether still
+// queued (just drop it - zero network) or already flushed (restore it)
+function undoBurst() {
+  if (!dismissBurst || dismissBurst.dead) return;
+  const shorts = [...dismissBurst.shorts];
+  let needsFlush = false;
+  for (const s of shorts) {
+    const v = dismissQueue.get(s);
+    if (v === true) dismissQueue.delete(s);
+    else if (v === false) { /* restore already queued */ }
+    else { dismissQueue.set(s, false); needsFlush = true; }
+  }
+  for (const m of DATA.matches)
+    if (shorts.includes(m.short)) m.dismissed = false;
+  render();
+  if (needsFlush) scheduleDismissFlush();
+}
+
+function queueDismiss(short, dismissed) {
+  const m = DATA.matches.find(m => m.short === short);
+  if (!m || m.dismissed === dismissed) return;
+  dismissQueue.set(short, dismissed);
+  m.dismissed = dismissed;
+  if (dismissed) {
+    hideRow(short);
+    extendBurst(short);
+  } else {
+    render();   // restoring needs the row back in the list
+  }
+  scheduleDismissFlush();
+}
+
+// remove one row's DOM node + update the counts in place (no full render)
+function hideRow(short) {
+  const row = document.getElementById("r-" + short);
+  if (row) {
+    const sec = row.closest("section");
+    if (sec) {
+      const n = $(".n", sec);
+      if (n) n.textContent = Math.max(0, (parseInt(n.textContent, 10) || 1) - 1);
+    }
+    row.remove();
+  }
+  renderStats();
+  applyCursor();
+}
+
+// send any queued writes through a beacon on navigation - fire-and-forget,
+// idempotent if a later flush re-sends them
+function shipDismissQueue() {
+  if (!dismissQueue.size) return;
+  const hid = [], res = [];
+  for (const [s, v] of dismissQueue) (v ? hid : res).push(s);
+  const beacon = (shorts, value) => shorts.length && navigator.sendBeacon(
+    "/api/dismissed",
+    new Blob([JSON.stringify({ shorts, dismissed: value })],
+             { type: "application/json" }));
+  beacon(hid, true);
+  beacon(res, false);
+}
+window.addEventListener("pagehide", shipDismissQueue);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") shipDismissQueue();
+});
+
+function render() {
+  if (!DATA) return;
+  const ms = DATA.matches;
+
+  $("#who").textContent = "— " + DATA.user;
+  renderStats();
   const t = new Date(DATA.generated);
   $("#updated").textContent = "as of " +
     t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) +
@@ -664,24 +856,6 @@ async function setApplied(short, applied, input) {
   }
 }
 
-async function setDismissed(short, dismissed) {
-  const m = DATA.matches.find(m => m.short === short);
-  m.dismissed = dismissed;        // optimistic
-  render();
-  const res = await api("/api/dismissed", { short, dismissed });
-  if (res.error) {
-    m.dismissed = !dismissed;
-    render();
-    toast(res.error, true);
-  } else if (dismissed) {
-    toast(`Hidden ${m.company} — ${m.title}` +
-          (res.queued ? " (queued, lands in ~1 min)" : ""), false,
-          { label: "Undo", run: () => setDismissed(short, false) });
-  } else if (res.queued) {
-    toast("Row is off the issue — queued a state write, lands in ~1 min");
-  }
-}
-
 async function setSaved(short, saved) {
   const m = DATA.matches.find(m => m.short === short);
   m.saved = saved;                // optimistic
@@ -822,8 +996,8 @@ document.addEventListener("click", e => {
     t.closest(".jd").remove();
     setStatus(short, DATA.applications[short].status, note);
   }
-  else if (t.dataset.dismiss) setDismissed(t.dataset.dismiss, true);
-  else if (t.dataset.restore) setDismissed(t.dataset.restore, false);
+  else if (t.dataset.dismiss) queueDismiss(t.dataset.dismiss, true);
+  else if (t.dataset.restore) queueDismiss(t.dataset.restore, false);
   else if (t.dataset.build) build(t.dataset.build);
   else if (t.dataset.shots) showShots(DATA.matches.find(m => m.short === t.dataset.shots));
   else if (t.dataset.report) showReport(t.dataset.report);
@@ -893,7 +1067,14 @@ document.addEventListener("keydown", e => {
     if (box.disabled) { toast("read-only (no GitHub token)", true); return; }
     setApplied(cursor, !box.checked, box);
   } else if (k === "h") {
-    setDismissed(cursor, true);
+    // move the cursor to the next visible row (previous if this was last)
+    // BEFORE the row is removed, so `h h h` streams down the list
+    const rows = cursorRows();
+    const i = rows.findIndex(r => rowShort(r) === cursor);
+    if (i < 0) return;
+    const next = rows[i + 1] || rows[i - 1];
+    cursor = next ? rowShort(next) : null;
+    queueDismiss(rowShort(rows[i]), true);
   } else if (k === "s") {
     const box = $(`#r-${cursor} input[data-saved]`);
     if (!box) return;
