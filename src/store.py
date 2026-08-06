@@ -87,6 +87,18 @@ class TrackerStore(Protocol):
 
     def get_matches(self, user: str) -> list[dict] | None: ...
 
+    def get_actions(self, user: str) -> dict | None:
+        """The user's mail-sync inbox actions ({actions, health}), or None
+        when the driver doesn't serve mail sync or the read failed."""
+        ...
+
+    def resolve_action(self, user: str, action_id: str, short: str = "",
+                       status: str = "", dismiss: bool = False) -> None:
+        """Resolve one inbox action server-side. Raises ApiError on failure
+        (bad status, unknown action, already resolved, or an unavailable
+        driver)."""
+        ...
+
     @property
     def writable(self) -> bool:
         """Whether a write can reach the store (issue + creds present for
@@ -322,6 +334,18 @@ class GitHubStore:
         seen.json directly."""
         return None
 
+    # -- mail sync (not served by this driver) ------------------------------
+
+    def get_actions(self, user: str) -> dict | None:
+        """The GitHub driver has no mail-sync backend; the webui frontend
+        hides the inbox tab when this returns None."""
+        return None
+
+    def resolve_action(self, user: str, action_id: str, short: str = "",
+                       status: str = "", dismiss: bool = False) -> None:
+        """Mail-sync actions live only behind the Convex store."""
+        raise ApiError("inbox actions need the convex store")
+
 
 class ConvexStore:
     """TrackerStore driver over a Convex deployment's HTTP API (no pip
@@ -374,10 +398,13 @@ class ConvexStore:
         """The deployment serves every write directly; always writable."""
         return True
 
-    def _post(self, kind: str, fn: str, args: dict) -> dict | list | None:
+    def _post(self, kind: str, fn: str, args: dict,
+              module: str = "tracker") -> dict | list | None:
         """POST one Convex HTTP endpoint and return the decoded `value`, or
-        raise ApiError on transport failure or a non-success status body."""
-        payload = {"path": f"tracker:{fn}", "args": args, "format": "json"}
+        raise ApiError on transport failure or a non-success status body.
+        `module` is the Convex module prefix for the function path (`tracker`
+        for human-state functions, `mail` for the mail-sync ones)."""
+        payload = {"path": f"{module}:{fn}", "args": args, "format": "json"}
         try:
             with httpx.Client(timeout=30.0) as client:
                 resp = client.post(f"{self.url}/api/{kind}", json=payload)
@@ -502,6 +529,45 @@ class ConvexStore:
         except ApiError:
             return None
         return items or []
+
+    # -- mail sync ----------------------------------------------------------
+
+    def get_actions(self, user: str) -> dict | None:
+        """The user's mail-sync inbox actions {actions, health|None}, or
+        None when the read fails (like get_matches: the webui hides the inbox
+        tab when it can't get actions)."""
+        try:
+            return self._post("query", "getActions",
+                              {"user": user, "secret": self.secret},
+                              module="mail")
+        except ApiError:
+            return None
+
+    def resolve_action(self, user: str, action_id: str, short: str = "",
+                       status: str = "", dismiss: bool = False) -> None:
+        """Resolve one inbox action: dismiss it, or apply a tracker status to
+        its matched job. Only includes the short/status keys when non-empty
+        and `dismiss` when True (the mutation throws on a bad status, unknown
+        action, or one already resolved)."""
+        args: dict = {"user": user, "id": action_id,
+                      "secret": self.secret}
+        if dismiss:
+            args["dismiss"] = True
+        else:
+            if short:
+                args["short"] = short
+            if status:
+                args["status"] = status
+        self._post("mutation", "resolveAction", args, module="mail")
+
+    def set_mail_account(self, user: str, email: str,
+                         refresh_token: str) -> None:
+        """Store the user's Gmail OAuth refresh token (only reachable through
+        this Convex driver; used by the mail-auth setup CLI)."""
+        self._post("mutation", "setMailAccount",
+                   {"user": user, "email": email,
+                    "refreshToken": refresh_token, "secret": self.secret},
+                   module="mail")
 
 
 def make_store(root: Path, user_cfg: dict | None = None) -> TrackerStore:

@@ -288,14 +288,123 @@ def test_get_matches_returns_item_payloads(monkeypatch, tmp_path):
         {"key": "url:1", "company": "Co1", "short": "ab" * 6}]
 
 
+# -- mail sync --------------------------------------------------------------
+
+def test_get_actions_queries_mail_module(monkeypatch, tmp_path):
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "mail:getActions"
+        assert body["args"] == {"user": "example", "secret": "secret"}
+        seen.append(body["path"])
+        return _success({"actions": [], "health": None})
+
+    _mock_client(monkeypatch, handler)
+    out = _make_store(monkeypatch, tmp_path).get_actions("example")
+    assert out == {"actions": [], "health": None}
+    assert seen == ["mail:getActions"]
+
+
+def test_get_actions_degrades_to_none_on_error(monkeypatch, tmp_path):
+    def handler(request):
+        return httpx.Response(200, json={"status": "error",
+                                          "errorMessage": "boom"})
+
+    _mock_client(monkeypatch, handler)
+    assert _make_store(monkeypatch, tmp_path).get_actions("example") is None
+
+
+def test_get_actions_degrades_to_none_on_transport_error(monkeypatch,
+                                                         tmp_path):
+    def handler(request):
+        raise httpx.ConnectError("down")
+
+    _mock_client(monkeypatch, handler)
+    assert _make_store(monkeypatch, tmp_path).get_actions("example") is None
+
+
+def test_resolve_action_shapes_args(monkeypatch, tmp_path):
+    """short/status only present when non-empty; dismiss only present when
+    True; the secret is always carried."""
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        return _success(None)
+
+    _mock_client(monkeypatch, handler)
+    s = _make_store(monkeypatch, tmp_path)
+
+    s.resolve_action("example", "act-1", short="ab" * 6, status="oa")
+    assert calls[-1]["path"] == "mail:resolveAction"
+    assert calls[-1]["args"] == {"user": "example", "id": "act-1",
+                                 "short": "ab" * 6, "status": "oa",
+                                 "secret": "secret"}
+    # empty short/status are omitted entirely
+    s.resolve_action("example", "act-2", short="", status="")
+    assert calls[-1]["args"] == {"user": "example", "id": "act-2",
+                                 "secret": "secret"}
+    # dismiss=True carries dismiss and skips short/status
+    s.resolve_action("example", "act-3", dismiss=True)
+    assert calls[-1]["args"] == {"user": "example", "id": "act-3",
+                                 "dismiss": True, "secret": "secret"}
+    # dismiss omitted when False
+    s.resolve_action("example", "act-4", short="cd" * 6, status="rejected")
+    assert "dismiss" not in calls[-1]["args"]
+
+
+def test_set_mail_account_mutation(monkeypatch, tmp_path):
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["path"] == "mail:setMailAccount"
+        assert body["args"] == {
+            "user": "example", "email": "a@x.com", "refreshToken": "rt",
+            "secret": "secret"}
+        calls.append(1)
+        return _success(None)
+
+    _mock_client(monkeypatch, handler)
+    _make_store(monkeypatch, tmp_path).set_mail_account(
+        "example", "a@x.com", "rt")
+    assert calls == [1]
+
+
+def test_tracker_module_prefix_regression(monkeypatch, tmp_path):
+    """The generalized _post still routes the existing tracker functions
+    under the `tracker:` prefix -- the mail functions are mail:, not a
+    global change."""
+    paths = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        paths.append(body["path"])
+        return _success([])
+
+    _mock_client(monkeypatch, handler)
+    s = _make_store(monkeypatch, tmp_path)
+    s.get_ticks("example")
+    s.set_ticks("example", [store.TickWrite("ab" * 6, "applied", True)])
+    s.get_ledger("example")
+    s.get_matches("example")
+    s.get_actions("example")
+    assert paths == ["tracker:getTicks", "tracker:setTicks",
+                     "tracker:getLedger", "tracker:getMatches",
+                     "mail:getActions"]
+
+
 def test_every_read_query_carries_the_secret(monkeypatch, tmp_path):
-    """Each tracker read query must send the secret with its args, or the
-    deployment (which now gates reads with TRACKER_SECRET) would reject it.
-    Guards against a future refactor dropping the secret from one path."""
+    """Each read query must send the secret with its args, or the deployment
+    (which now gates reads with TRACKER_SECRET) would reject it. Guards
+    against a future refactor dropping the secret from one path."""
     by_path = {
         "tracker:getTicks": _success([]),
         "tracker:getLedger": _success([]),
         "tracker:getMatches": _success([]),
+        "mail:getActions": _success({"actions": [], "health": None}),
     }
 
     def handler(request):
@@ -308,6 +417,7 @@ def test_every_read_query_carries_the_secret(monkeypatch, tmp_path):
     assert s.get_ticks("example") is not None
     assert s.get_ledger("example") == {}
     assert s.get_matches("example") == []
+    assert s.get_actions("example") == {"actions": [], "health": None}
 
 
 # -- constructor + factory -------------------------------------------------

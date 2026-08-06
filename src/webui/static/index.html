@@ -172,6 +172,28 @@
   select.st.s-rejected { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
   select.st.s-withdrawn { color: var(--ink-2); }
   .lastnote { font-style: italic; }
+
+  /* inbox actions (mail-sync emails needing a human) */
+  .arow {
+    display: grid; grid-template-columns: minmax(0,1fr);
+    gap: 2px 12px; padding: 10px 12px; border-top: 1px solid var(--line);
+  }
+  .arow:first-child { border-top: 0; }
+  .arow .meta { grid-column: 1; }
+  .arow .resolve {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    margin-top: 7px;
+  }
+  .arow select.cand {
+    font: 500 12.5px Switzer, sans-serif; max-width: 360px;
+    border: 1px solid var(--line-2); border-radius: 5px; padding: 5px 8px;
+    background: var(--surface); color: var(--ink);
+  }
+  .arow select.st { width: auto; }
+  .tag.sig { margin-left: 0; margin-right: 6px; }
+  .tag.s-rejected { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+  .tag.s-oa, .tag.s-phone_screen { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+  .tag.s-interview, .tag.s-offer { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .hist { margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
   .hist li { display: grid; grid-template-columns: 76px 110px minmax(0,1fr); gap: 10px; padding: 6px 0; border-top: 1px dashed var(--line); }
   .hist li:first-child { border-top: 0; }
@@ -286,6 +308,7 @@
   <nav class="tabs">
     <button class="tab on" data-tab="matches">Matches</button>
     <button class="tab" data-tab="tracker">Tracker<span class="n" id="tcount"></span></button>
+    <button class="tab" data-tab="inbox" id="tab-inbox" hidden>Inbox<span class="n" id="icount"></span></button>
   </nav>
 
   <div id="view-matches">
@@ -315,6 +338,10 @@
     </div>
     <div class="chips" id="tchips"></div>
     <main id="tlist"></main>
+  </div>
+
+  <div id="view-inbox" hidden>
+    <main id="ilist"></main>
   </div>
 </div>
 
@@ -721,8 +748,10 @@ function render() {
   }).join("") || `<div class="rows empty">Nothing matches the current filters.</div>`;
 
   renderTracker();
+  renderInbox();                 // may bounce UI.tab off a vanished inbox
   $("#view-matches").hidden = UI.tab !== "matches";
   $("#view-tracker").hidden = UI.tab !== "tracker";
+  $("#view-inbox").hidden = UI.tab !== "inbox";
   document.querySelectorAll(".tab").forEach(t =>
     t.classList.toggle("on", t.dataset.tab === UI.tab));
   applyCursor();
@@ -815,6 +844,108 @@ function renderTracker() {
     : `<div class="rows empty">${entries.length
         ? "Nothing matches the current filters."
         : "No applications yet — tick a match as applied and it lands here permanently."}</div>`;
+}
+
+/* ---------- inbox (mail-sync emails needing a human) ---------- */
+
+// '"Acme Recruiting" <no-reply@acme.com>' -> { name, addr }
+function fromParts(from) {
+  const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(from || "");
+  return m ? { name: m[1].trim(), addr: m[2].trim() }
+           : { name: "", addr: (from || "").trim() };
+}
+
+const gmailLink = a =>
+  "https://mail.google.com/mail/?authuser=" +
+  encodeURIComponent(a.accountEmail || "") +
+  "#all/" + encodeURIComponent(a.gmailMessageId);
+
+// preselect the top candidate only when it is decisively ahead of the
+// runner-up (same bar the backend uses before it would auto-apply)
+const decisive = c =>
+  c.length > 0 && c[0].score >= 3 &&
+  (c.length === 1 || c[1].score * 2 <= c[0].score);
+
+function arowHtml(a) {
+  const f = fromParts(a.from);
+  const cands = a.candidates || [];
+  const pick = decisive(cands);
+  const options = [
+    `<option value="" ${pick ? "" : "selected"} disabled>match to application…</option>`,
+    ...cands.map((c, i) =>
+      `<option value="${esc(c.short)}" ${pick && i === 0 ? "selected" : ""}>${esc(c.company)} — ${esc(c.title)}</option>`),
+    `<option value="__all">other application…</option>`,
+  ].join("");
+  const sts = Object.entries(STATUSES).map(([v, label]) =>
+    `<option value="${v}" ${v === a.signal ? "selected" : ""}>${label}</option>`).join("");
+  const who = cands.length ? cands[0].company : (f.name || f.addr);
+  return `<div class="arow" id="a-${esc(a.id)}">
+    <div class="head">
+      <span class="tag sig s-${esc(a.signal)}">${esc(STATUSES[a.signal] || a.signal)}</span>
+      <span class="company">${esc(who)}</span>
+      — <a class="title" href="${esc(gmailLink(a))}" target="_blank" rel="noopener" title="open the email in Gmail">${esc(a.subject || "(no subject)")}${ICON.ext}</a>
+    </div>
+    <div class="meta">${esc(f.addr)} · ${fmtDate((a.receivedAt || "").slice(0, 10))}${
+      a.evidence ? ` · <span class="lastnote">“${esc(a.evidence)}”</span>` : ""}${
+      a.source === "llm" ? ` · <span class="tag" title="signal from the LLM fallback, not the regex rules">llm</span>` : ""}</div>
+    <div class="resolve">
+      <select class="cand" data-acand="${esc(a.id)}">${options}</select>
+      <select class="st s-${esc(a.signal)}">${sts}</select>
+      <button class="btn" data-aresolve="${esc(a.id)}">apply</button>
+      <button class="btn quiet" data-adismiss="${esc(a.id)}">dismiss</button>
+    </div>
+  </div>`;
+}
+
+function renderInbox() {
+  const inbox = DATA.inbox_actions;
+  $("#tab-inbox").hidden = inbox == null;
+  if (inbox == null) {
+    if (UI.tab === "inbox") UI.tab = "matches";  // store stopped serving it
+    return;
+  }
+  const actions = inbox.actions || [];
+  $("#icount").textContent = actions.length || "";
+  $("#ilist").innerHTML = actions.length
+    ? `<div class="rows">${actions.map(arowHtml).join("")}</div>`
+    : `<div class="rows empty">No inbox actions. Recruiter emails the mail
+       sync can't match to an application on its own land here.</div>`;
+}
+
+// optimistic remove -> POST /api/action -> restore the row on error
+async function finishAction(id, body, okMsg, onOk) {
+  const list = DATA.inbox_actions.actions;
+  const i = list.findIndex(a => a.id === id);
+  if (i < 0) return;
+  const [a] = list.splice(i, 1);
+  render();
+  const res = await api("/api/action", body);
+  if (res.error) {
+    list.splice(i, 0, a);
+    render();
+    toast(res.error, true);
+    return;
+  }
+  if (onOk) onOk(a);
+  render();
+  toast(okMsg);
+}
+
+function resolveAction(id) {
+  const row = document.getElementById("a-" + id);
+  const short = $("select.cand", row).value;
+  const status = $("select.st", row).value;
+  if (!short || short === "__all") {
+    toast("pick the application this email is about", true);
+    return;
+  }
+  finishAction(id, { id, short, status }, `${STATUSES[status]} recorded`, () => {
+    // mirror setStatus's optimistic bookkeeping so the tracker agrees
+    const rec = DATA.applications[short];
+    if (rec) { rec.status = status; rec.pending = true; }
+    const m = (DATA.matches || []).find(m => m.short === short);
+    if (m) { m.status = status; m.applied = true; }
+  });
 }
 
 /* ---------- actions ---------- */
@@ -980,7 +1111,7 @@ $("#status").onchange = e => { UI.status = e.target.value; render(); };
 $("#tq").oninput = e => { UI.tq = e.target.value.trim().toLowerCase(); render(); };
 
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-term],[data-build],[data-shots],[data-report],[data-jdgo],[data-jdx],[data-dismiss],[data-restore],[data-tab],[data-tfilter],[data-tnote],[data-tnotego],[data-thist],[data-stat],[data-tstat]");
+  const t = e.target.closest("[data-term],[data-build],[data-shots],[data-report],[data-jdgo],[data-jdx],[data-dismiss],[data-restore],[data-tab],[data-tfilter],[data-tnote],[data-tnotego],[data-thist],[data-stat],[data-tstat],[data-aresolve],[data-adismiss]");
   if (!t) return;
   if (t.dataset.term) { UI.term = t.dataset.term; render(); }
   else if (t.dataset.stat) { UI.status = t.dataset.stat; $("#status").value = t.dataset.stat; render(); }
@@ -998,6 +1129,10 @@ document.addEventListener("click", e => {
   }
   else if (t.dataset.dismiss) queueDismiss(t.dataset.dismiss, true);
   else if (t.dataset.restore) queueDismiss(t.dataset.restore, false);
+  else if (t.dataset.aresolve) resolveAction(t.dataset.aresolve);
+  else if (t.dataset.adismiss)
+    finishAction(t.dataset.adismiss, { id: t.dataset.adismiss, dismiss: true },
+                 "dismissed");
   else if (t.dataset.build) build(t.dataset.build);
   else if (t.dataset.shots) showShots(DATA.matches.find(m => m.short === t.dataset.shots));
   else if (t.dataset.report) showReport(t.dataset.report);
@@ -1017,20 +1152,37 @@ document.addEventListener("change", e => {
     setSaved(e.target.dataset.saved, e.target.checked);
   else if (e.target.dataset.setst)
     setStatus(e.target.dataset.setst, e.target.value);
+  else if (e.target.dataset.acand && e.target.value === "__all") {
+    // "other application…": swap the shortlist for every tracked application
+    e.target.innerHTML = [
+      `<option value="" selected disabled>all applications…</option>`,
+      ...Object.entries(DATA.applications || {})
+        .sort((x, y) => x[1].company.localeCompare(y[1].company))
+        .map(([s, r]) =>
+          `<option value="${esc(s)}">${esc(r.company)} — ${esc(r.title)}</option>`),
+    ].join("");
+  }
 });
 
 /* ---------- keyboard triage ---------- */
 
+// per-tab row geometry: container, row selector, element-id prefix
+const TAB_ROWS = {
+  matches: { box: "#list", row: ".row", pfx: "r-" },
+  tracker: { box: "#tlist", row: ".trow", pfx: "t-" },
+  inbox: { box: "#ilist", row: ".arow", pfx: "a-" },
+};
+
 // visible cursorable rows of the active tab, in DOM order
-const cursorRows = () => [...$(UI.tab === "matches" ? "#list" : "#tlist")
-  .querySelectorAll(UI.tab === "matches" ? ".row" : ".trow")];
+const cursorRows = () =>
+  [...$(TAB_ROWS[UI.tab].box).querySelectorAll(TAB_ROWS[UI.tab].row)];
 const rowShort = row => row.id.slice(2);          // "r-abc"/"t-abc" -> "abc"
 
 function applyCursor() {
-  document.querySelectorAll(".row.cur, .trow.cur").forEach(r => r.classList.remove("cur"));
+  document.querySelectorAll(".row.cur, .trow.cur, .arow.cur")
+    .forEach(r => r.classList.remove("cur"));
   if (!cursor) return;
-  const pfx = UI.tab === "matches" ? "r-" : "t-";
-  const row = document.getElementById(pfx + cursor);
+  const row = document.getElementById(TAB_ROWS[UI.tab].pfx + cursor);
   if (row) row.classList.add("cur");
   else cursor = null;
 }
@@ -1056,7 +1208,7 @@ document.addEventListener("keydown", e => {
   if (k === "Escape") { cursor = null; applyCursor(); return; }
   if (!cursor) return;
   if (k === "Enter") {
-    const a = $(".title", document.getElementById((UI.tab === "matches" ? "r-" : "t-") + cursor));
+    const a = $(".title", document.getElementById(TAB_ROWS[UI.tab].pfx + cursor));
     if (a) window.open(a.href, "_blank", "noopener");
     return;
   }

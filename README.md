@@ -133,6 +133,9 @@ Everything a fresh copy of this repo needs, in one place:
    `users/<you>_apply.yaml` and `users/logins.example.yaml` →
    `users/<you>_logins.yaml` (the latter is gitignored — it holds
    passwords); see `docs/apply.md`.
+9. **Optional — mail sync** (Convex tracker only): recruiter emails update
+   application statuses automatically, with an Inbox action queue in the
+   webui for ambiguous ones; see `docs/mail-sync.md`.
 
 ### Config & secrets model
 

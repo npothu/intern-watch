@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { applyStatus } from "./ledger";
 
 // Query/mutation functions backing the ConvexStore TrackerStore driver
 // (src/store.py). Every endpoint - reads and writes - checks the secret
@@ -117,47 +118,11 @@ export const recordStatus = mutation({
   },
   handler: async (ctx, { user, short, status, note, snapshot, secret }) => {
     checkSecret(secret);
-    const entry: { status: string; at: string; note?: string } = {
-      status,
-      at: new Date().toISOString(),
-    };
-    if (note) {
-      entry.note = note;
-    }
-    const existing = await ctx.db
-      .query("applications")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
-      .first();
-    if (existing) {
-      const history = existing.history ?? [];
-      const last = history[history.length - 1];
-      // Repeating the current status without a change is a no-op rather than
-      // history spam (mirrors src/ledger.py set_status).
-      if (last && last.status === status && (last.note ?? "") === (note ?? "")) {
-        return;
-      }
-      history.push(entry);
-      const patch: Record<string, unknown> = { status, history };
-      if (note !== undefined) {
-        patch.note = note;
-      }
-      if (snapshot !== undefined) {
-        patch.snapshot = snapshot;
-      }
-      await ctx.db.patch(existing._id, patch);
-    } else {
-      await ctx.db.insert("applications", {
-        user,
-        short,
-        status,
-        note,
-        history: [entry],
-        snapshot,
-        createdAt: new Date().toISOString(),
-      });
-    }
+    // Shared ledger write (convex/ledger.ts): same-status dedupe, history
+    // append, create-if-missing, and snapshot backfill from the matches table
+    // when no snapshot is available - mail-sync writes go through the same
+    // helper so the two paths can't drift.
+    await applyStatus(ctx.db, { user, short, status, note, snapshot });
   },
 });
 

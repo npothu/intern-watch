@@ -26,7 +26,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .. import dashboard, state as st
+from .. import dashboard, ledger, state as st
 from ..models import Job
 from ..resume.build import build_for_job
 from ..store import (ApiError, TickWrite, TrackerStore, _git, make_store)
@@ -47,6 +47,33 @@ _REPO_FILE_RE = re.compile(r"^resumes/[A-Za-z0-9._\- /]+\.docx$")
 _FIELD_ATTR = {"applied": "checked", "saved": "saved",
                "dismissed": "hidden"}
 _SHORT_RE = re.compile(r"[0-9a-f]{12}")
+
+# How old a last-successful-sync can be before the account is flagged stalled.
+_MAIL_STALL_HOURS = 48
+
+
+def _mail_health_warnings(health: dict) -> list[str]:
+    """Human warnings derived from a mail-sync health object. `lastSyncAt`
+    and `watchExpiration` are epoch MILLISECONDS and `lastError` is a string
+    (the Convex getActions contract). Callers pass {} when no Gmail account
+    is set up yet."""
+    out: list[str] = []
+    now = dt.datetime.now(dt.timezone.utc)
+    if health.get("lastError"):
+        out.append(f"mail sync error: {health['lastError']}")
+    # only flag a stalled sync once a real account exists AND has synced at
+    # least once -- a fresh setup has no lastSyncAt yet and isn't stalled
+    if health.get("email") and health.get("lastSyncAt"):
+        last = dt.datetime.fromtimestamp(
+            health["lastSyncAt"] / 1000, tz=dt.timezone.utc)
+        if now - last > dt.timedelta(hours=_MAIL_STALL_HOURS):
+            out.append("mail sync stalled (>48h)")
+    if health.get("watchExpiration"):
+        exp = dt.datetime.fromtimestamp(
+            health["watchExpiration"] / 1000, tz=dt.timezone.utc)
+        if exp < now:
+            out.append("gmail watch expired - rerun setup")
+    return out
 
 
 class Hub:
@@ -85,6 +112,9 @@ class Hub:
         # snapshots until the dashboard-write commit lands on main
         self.pending: dict[str, dict] = {}
         self.warnings: list[str] = []
+        # mail-sync inbox actions {actions, health|None}; None when the store
+        # doesn't serve mail sync or the read failed (frontend hides the tab)
+        self.inbox: dict | None = None
 
     @property
     def writable(self) -> bool:
@@ -137,6 +167,18 @@ class Hub:
             # overlaid ticks from closed issues (view-only read-back),
             # unlike the cron which must not repaint a closed dashboard
 
+        # Mail-sync inbox actions (None when the driver doesn't serve them or
+        # the read failed). Guarded: mail trouble must never break refresh --
+        # the warnings it can't derive are dropped, not fatal.
+        inbox: dict | None = None
+        try:
+            inbox = self.store.get_actions(self.user)
+            if inbox is not None:
+                warnings.extend(
+                    _mail_health_warnings(inbox.get("health") or {}))
+        except Exception:  # noqa: BLE001 - mail never blocks the dashboard
+            log.exception("mail sync actions failed; carrying no inbox")
+
         with self.lock:
             self.state = state
             self.ledger = book
@@ -146,6 +188,7 @@ class Hub:
             self.checked, self.present = checked, present
             self.hidden, self.h_present = hidden, h_present
             self.saved, self.s_present = saved, s_present
+            self.inbox = inbox
             self.warnings = warnings
 
     # -- reads ----------------------------------------------------------
@@ -167,6 +210,7 @@ class Hub:
                                .isoformat(timespec="seconds"),
                 "fetched_main": self.fetched_main,
                 "warnings": list(self.warnings),
+                "inbox_actions": self.inbox,  # None hides the inbox tab
                 "terms_order": list(self.terms_order),
                 "issue": {"number": self.issue_number, "url": self.issue_url,
                           "writable": self.writable},
@@ -280,6 +324,33 @@ class Hub:
         return {"ok": True, "short": short, "status": status,
                 "queued": True}
 
+    def resolve_action(self, action_id: str, short: str = "",
+                       status: str = "", dismiss: bool = False) -> dict:
+        """Resolve one mail-sync inbox action. A resolve (not dismiss) turns
+        the action into an application: it validates the tracker status and
+        requires a short, then applies the same pending-overlay bookkeeping
+        set_status does so the ledger/match views show it before the store's
+        record lands on the next refresh. The action is dropped from the
+        cached inbox either way."""
+        with self.lock:
+            if not dismiss:
+                if status not in ledger.STATUSES:
+                    raise ApiError(f"unknown status {status!r} (have: "
+                                   f"{', '.join(ledger.STATUSES)})")
+                if not short:
+                    raise ApiError("resolving an inbox action needs a short")
+            self.store.resolve_action(self.user, action_id, short, status,
+                                      dismiss)
+            if not dismiss:
+                # a resolved action implies an application, mirroring set_status
+                self.pending.setdefault(short, {}).update(
+                    {"status": status, "applied": True})
+            actions = (self.inbox or {}).get("actions")
+            if actions is not None:
+                self.inbox["actions"] = [
+                    a for a in actions if a.get("id") != action_id]
+        return {"ok": True, "id": action_id}
+
     def build_resume(self, short: str, jd_text: str = "") -> dict:
         item = self._find_item(short)
         if item is None:
@@ -392,6 +463,14 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("short", "")),
                     str(body.get("status", "")),
                     str(body.get("note", "")).strip()))
+            elif self.path == "/api/action":
+                body = self._read_body()
+                self.hub.resolve_action(
+                    str(body.get("id", "")),
+                    short=str(body.get("short", "")),
+                    status=str(body.get("status", "")),
+                    dismiss=bool(body.get("dismiss")))
+                self._json({"ok": True, **self.hub.snapshot()})
             elif self.path == "/api/resume":
                 body = self._read_body()
                 self._json(self.hub.build_resume(

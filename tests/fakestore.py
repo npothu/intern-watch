@@ -27,6 +27,11 @@ class FakeStore:
         self.ledger: dict[str, dict] = {}
         self.matches: dict[str, list[dict] | None] = {}
         self.statuses: list[tuple[str, str, str, str]] = []
+        # mail-sync: configurable inbox (None = unavailable) + a record of
+        # resolve calls and a configurable error to raise
+        self.actions: dict | None = None
+        self.resolve_calls: list[tuple[str, str, str, str, bool]] = []
+        self.resolve_error: Exception | None = None
 
     @property
     def writable(self) -> bool:
@@ -70,3 +75,13 @@ class FakeStore:
 
     def get_matches(self, user: str) -> list[dict] | None:
         return self.matches.get(user)
+
+    def get_actions(self, user: str) -> dict | None:
+        """The configured inbox, or None when mail sync is unavailable."""
+        return self.actions
+
+    def resolve_action(self, user: str, action_id: str, short: str = "",
+                       status: str = "", dismiss: bool = False) -> None:
+        self.resolve_calls.append((user, action_id, short, status, dismiss))
+        if self.resolve_error is not None:
+            raise self.resolve_error
