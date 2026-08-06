@@ -295,6 +295,35 @@ def test_github_store_does_not_serve_matches(tmp_path):
     assert gs.push_matches("example", [{"key": "url:a"}]) is None
 
 
+# -- mail sync: the GitHub driver serves none of it -------------------------
+
+def test_github_store_does_not_serve_mail_sync(tmp_path):
+    gs = store.GitHubStore(tmp_path, {"name": "example"})
+    assert gs.get_actions("example") is None
+    with pytest.raises(store.ApiError) as ei:
+        gs.resolve_action("example", "action-1", short="a" * 12,
+                          status="oa")
+    assert "convex store" in str(ei.value)
+
+
+def test_protocol_conformance_github_and_convex(monkeypatch, tmp_path):
+    """Both drivers carry the two new mail-sync methods the Protocol declares
+    (get_actions / resolve_action). Uses attribute checks: TrackerStore is a
+    plain Protocol (not @runtime_checkable), so isinstance would TypeError."""
+    gs = store.GitHubStore(tmp_path, {"name": "example"})
+    monkeypatch.setenv("CONVEX_URL", "https://x.convex.cloud")
+    monkeypatch.setenv("CONVEX_SECRET", "secret")
+    cs = store.ConvexStore(tmp_path, {"name": "example"})
+    for driver in (gs, cs):
+        assert callable(driver.get_actions)
+        assert callable(driver.resolve_action)
+    # the Protocol itself declares both methods
+    assert "get_actions" in store.TrackerStore.__annotations__ or \
+        hasattr(store.TrackerStore, "get_actions")
+    assert "resolve_action" in store.TrackerStore.__annotations__ or \
+        hasattr(store.TrackerStore, "resolve_action")
+
+
 # -- factory ---------------------------------------------------------------
 
 def test_make_store_defaults_to_github_and_rejects_unknown(monkeypatch,
