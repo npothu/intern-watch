@@ -194,6 +194,10 @@ def render(plan: ResumePlan, out_path: str | Path) -> Path:
         if line:
             p = _para(doc)
             _run(p, line, SZ_EDU, italics=True)
+    if plan.graduate_degree_text:
+        _dated_line(doc, [HeadingRun(text=plan.graduate_degree_text,
+                                     italics=True)],
+                    plan.graduate_degree_date, SZ_EDU)
     if plan.study_abroad_text:
         _dated_line(doc, [HeadingRun(text=plan.study_abroad_text,
                                      italics=True)],

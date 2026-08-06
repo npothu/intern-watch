@@ -137,6 +137,8 @@ def estimate_height_pt(plan: ResumePlan) -> float:
     for line in (plan.degree, plan.threads, plan.gpa):
         if line:
             h += wrap_lines(line, w, SZ_EDU) * _line(SZ_EDU)
+    if plan.graduate_degree_text:
+        h += _line(SZ_EDU)
     if plan.study_abroad_text:
         h += _line(SZ_EDU)
     h += wrap_lines(f"Coursework: {plan.coursework}", w, SZ_EDU) * _line(SZ_EDU)

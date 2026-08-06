@@ -61,6 +61,8 @@ class ResumePlan(BaseModel):
     degree: str
     threads: str
     gpa: str
+    graduate_degree_text: str = ""
+    graduate_degree_date: str = ""
     study_abroad_text: str = ""
     study_abroad_date: str = ""
     coursework: str
@@ -197,6 +199,10 @@ def build_plan(bank: Bank, profile: jdmod.JDProfile,
         degree=edu.degree,
         threads=edu.threads,
         gpa=edu.gpa,
+        graduate_degree_text=(edu.graduate_degree.degree
+                              if edu.graduate_degree else ""),
+        graduate_degree_date=(edu.graduate_degree.grad_date
+                              if edu.graduate_degree else ""),
         study_abroad_text=edu.study_abroad.text if edu.study_abroad else "",
         study_abroad_date=edu.study_abroad.date if edu.study_abroad else "",
         coursework=", ".join(reorder_skills(bank.skills.coursework, profile)),
