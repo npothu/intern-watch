@@ -16,6 +16,8 @@ Writes (idempotent upserts - safe to re-run):
 
 Needs CONVEX_URL + CONVEX_SECRET (equal to the deployment's TRACKER_SECRET)
 env vars unless --dry-run, which only prints what would be written.
+Loads .env like every other local entrypoint (src.envfile.load_dotenv), so
+these can come from the repo's .env instead of the shell environment.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src import store  # noqa: E402
+from src.envfile import load_dotenv  # noqa: E402
 
 
 def _profiles(root: Path, want: str) -> list[tuple[str, Path]]:
@@ -53,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", default=str(ROOT),
                     help="repo root for profile files (tests)")
     args = ap.parse_args(argv)
+
+    # Local-only: pick up CONVEX_URL/CONVEX_SECRET from the gitignored .env
+    # like every other local entrypoint. No-op in Actions (no .env file).
+    load_dotenv()
 
     root = Path(args.root).expanduser().resolve()
     profiles = _profiles(root, args.user)
