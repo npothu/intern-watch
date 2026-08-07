@@ -39,14 +39,7 @@ export function AddUrlDialog() {
     return () => clearPoll();
   }, []);
 
-  // reset when dialog closes
-  useEffect(() => {
-    if (!open) {
-      setError(null);
-      setPhase("idle");
-      clearPoll();
-    }
-  }, [open]);
+  // reset handled in onOpenChange to avoid setState-in-effect
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -120,8 +113,17 @@ export function AddUrlDialog() {
 
   const busy = phase === "submitting" || phase === "polling";
 
+  const handleOpenChange = (v: boolean) => {
+    setOpen(v);
+    if (!v) {
+      setError(null);
+      setPhase("idle");
+      clearPoll();
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button
           variant="outline"

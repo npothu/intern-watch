@@ -901,17 +901,6 @@ function DesktopGroup({
   );
 }
 
-function EmptyState({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div className="rounded-md border border-line bg-surface">
-      <div className="px-4 py-20 text-center">
-        <div className="text-[13.5px] font-medium text-ink">{title}</div>
-        <p className="mt-1 text-[12.5px] text-ink-2">{hint}</p>
-      </div>
-    </div>
-  );
-}
-
 function ResumeButton({
   state,
   href,
