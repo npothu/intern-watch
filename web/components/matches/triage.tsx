@@ -35,7 +35,8 @@ import type { TickWrite } from "@/lib/convex";
  *     expand applied/open/resume)
  */
 
-type Filter = "all" | "applied" | "saved" | "resumes" | "hidden";
+type StatusFilter = "all" | "todo" | "applied" | "saved" | "resume" | "hidden" | "stale";
+type TermFilter = string; // "All" or a term like "Fall 2026"
 
 const TERM_ORDER = ["Fall 2026", "Spring 2027", "Summer 2027"];
 const UNKNOWN_TERM = "Unknown term";
@@ -45,11 +46,12 @@ const FLUSH_CAP = 50;
 const BURST_MS = 6000;
 const SWIPE_THRESHOLD = 70;
 
-const FILTERS: { key: Filter; label: string }[] = [
+// legacy statline keys map to the new StatusFilter (kept for clickable stats)
+const STATLINE_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "matches" },
   { key: "applied", label: "applied" },
   { key: "saved", label: "saved" },
-  { key: "resumes", label: "resumes" },
+  { key: "resume", label: "resumes" },
   { key: "hidden", label: "hidden" },
 ];
 
@@ -60,19 +62,31 @@ function fmtDate(iso?: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRow[] {
+function likelyClosed(r: TriageRow): boolean {
+  if (typeof r.staleDays === "number") return r.staleDays >= 7;
+  // fallback: derive from `added` when no server-provided staleness (python uses last_seen)
+  if (!r.added) return false;
+  const d = new Date(r.added.length === 10 ? `${r.added}T00:00:00` : r.added);
+  if (Number.isNaN(d.getTime())) return false;
+  const days = (Date.now() - d.getTime()) / 864e5;
+  return days >= 7;
+}
+
+function visibleRows(rows: TriageRow[], status: StatusFilter, term: TermFilter, query: string): TriageRow[] {
   const q = query.trim().toLowerCase();
   return rows.filter((r) => {
-    if (filter === "hidden") {
-      if (!r.dismissed) return false;
-    } else if (r.dismissed) {
-      return false;
-    }
-    if (filter === "applied" && !r.applied) return false;
-    if (filter === "saved" && !r.saved) return false;
-    if (filter === "resumes" && !r.resumeUrl) return false;
+    // dismissed gating mirrors python's `visible()` hidden logic
+    if (status === "hidden" ? !r.dismissed : r.dismissed) return false;
+    if (term !== "All" && (r.term || UNKNOWN_TERM) !== term) return false;
+    if (status === "todo" && r.applied) return false;
+    if (status === "applied" && !r.applied) return false;
+    if (status === "saved" && !r.saved) return false;
+    if (status === "resume" && !r.resumeUrl) return false;
+    if (status === "stale" && !likelyClosed(r)) return false;
+    // python's "agent" filter (has artifacts) omitted for now — no Convex field yet
     if (q) {
-      const hay = `${r.company} ${r.title} ${r.location}`.toLowerCase();
+      // python also searches `short`; include it for parity
+      const hay = `${r.company} ${r.title} ${r.location} ${r.short}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -145,7 +159,8 @@ function Divider({ className }: { className?: string }) {
 
 export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   const [rows, setRows] = useState<TriageRow[]>(initialRows);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [term, setTerm] = useState<TermFilter>("All");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState<string | null>(null);
   const [burst, setBurst] = useState<{ visible: boolean; count: number }>({
@@ -171,8 +186,8 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   }, []);
 
   const visible = useMemo(
-    () => visibleRows(rows, filter, query),
-    [rows, filter, query]
+    () => visibleRows(rows, status, term, query),
+    [rows, status, term, query]
   );
   const groups = useMemo(() => groupByTerm(visible), [visible]);
   // Navigation must follow the RENDERED order (term groups, sorted within
@@ -184,10 +199,21 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     return {
       matches: active.length,
       applied: active.filter((r) => r.applied).length,
+      togo: active.filter((r) => !r.applied).length,
       saved: active.filter((r) => r.saved).length,
       resumes: active.filter((r) => r.resumeUrl).length,
       hidden: rows.length - active.length,
+      stale: active.filter((r) => likelyClosed(r)).length,
     };
+  }, [rows]);
+
+  // term chip list mirrors python: configured order first, then whatever else appears, sorted
+  const termOptions = useMemo(() => {
+    const inData = [...new Set(rows.map((r) => r.term || UNKNOWN_TERM))];
+    const ordered = TERM_ORDER.filter((tt) => inData.includes(tt));
+    const rest = inData.filter((tt) => !TERM_ORDER.includes(tt) && tt !== UNKNOWN_TERM).sort();
+    const tail = inData.includes(UNKNOWN_TERM) ? [UNKNOWN_TERM] : [];
+    return ["All", ...ordered, ...rest, ...tail.filter((x) => !ordered.includes(x) && !rest.includes(x))];
   }, [rows]);
 
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
@@ -402,9 +428,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
       ref={rootRef}
       className="mx-auto w-full max-w-[1060px] px-5 py-5 pb-32"
     >
-      {/* statline */}
+      {/* statline — mirrors python statsHtml(): clickable segments */}
       <div className="mb-3 text-[13px] text-ink-2 tabular-nums">
-        {FILTERS.map((s, i) => {
+        {STATLINE_FILTERS.map((s, i) => {
           const n =
             s.key === "all"
               ? stats.matches
@@ -412,16 +438,16 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                 ? stats.applied
                 : s.key === "saved"
                   ? stats.saved
-                  : s.key === "resumes"
+                  : s.key === "resume"
                     ? stats.resumes
                     : stats.hidden;
-          const active = filter === s.key;
+          const active = status === s.key;
           return (
             <span key={s.key}>
               {i > 0 && <span className="mx-1">·</span>}
               <button
                 type="button"
-                onClick={() => setFilter((f) => (f === s.key ? "all" : s.key))}
+                onClick={() => setStatus((f) => (f === s.key ? "all" : s.key))}
                 className={cn(
                   "cursor-pointer rounded-sm px-0.5 transition-colors",
                   active
@@ -435,19 +461,75 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
             </span>
           );
         })}
+        <span className="mx-1">·</span>
+        <button
+          type="button"
+          onClick={() => setStatus((f) => (f === "todo" ? "all" : "todo"))}
+          className={cn("cursor-pointer rounded-sm px-0.5 transition-colors", status === "todo" ? "text-accent underline decoration-dashed underline-offset-[3px]" : "hover:text-accent hover:underline hover:decoration-dashed hover:underline-offset-[3px]")}
+        >
+          <b className="font-semibold text-ink">{stats.togo}</b> <span className="text-ink-2">to go</span>
+        </button>
+        {stats.stale > 0 && (
+          <>
+            <span className="mx-1">·</span>
+            <button
+              type="button"
+              onClick={() => setStatus((f) => (f === "stale" ? "all" : "stale"))}
+              className={cn("cursor-pointer rounded-sm px-0.5 transition-colors", status === "stale" ? "text-accent underline decoration-dashed underline-offset-[3px]" : "hover:text-accent hover:underline hover:decoration-dashed hover:underline-offset-[3px]")}
+            >
+              <b className="font-semibold text-ink">{stats.stale}</b> <span className="text-ink-2">likely closed</span>
+            </button>
+          </>
+        )}
       </div>
 
-      {/* search */}
-      <input
-        ref={searchRef}
-        type="search"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search company, title, location…"
-        autoComplete="off"
-        aria-label="Search matches"
-        className="mb-4 w-full rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
-      />
+      {/* toolbar — python parity: search + status select */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <input
+          ref={searchRef}
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search company, title, location, short…"
+          autoComplete="off"
+          aria-label="Search matches"
+          className="min-w-[240px] flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
+        />
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value as StatusFilter)}
+          aria-label="Status filter"
+          className="rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink focus:border-accent focus:outline-none"
+        >
+          <option value="all">All</option>
+          <option value="todo">To apply</option>
+          <option value="applied">Applied</option>
+          <option value="saved">Saved</option>
+          <option value="resume">Has resume</option>
+          <option value="stale">Likely closed</option>
+          <option value="hidden">Hidden</option>
+        </select>
+      </div>
+
+      {/* term chips — mirrors python's #terms */}
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {termOptions.map((tt) => (
+          <button
+            key={tt}
+            type="button"
+            onClick={() => setTerm(tt)}
+            aria-pressed={term === tt}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-[12.5px] font-medium leading-none transition-colors",
+              term === tt
+                ? "border-accent bg-accent text-accent-ink"
+                : "border-line-2 bg-surface text-ink-2 hover:border-line hover:text-ink"
+            )}
+          >
+            {tt}
+          </button>
+        ))}
+      </div>
 
       {!hasAnyRows ? (
         <EmptyState title="No matches yet." hint="Matches will land here as the watcher finds them." />
@@ -458,7 +540,8 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
             <button
               type="button"
               onClick={() => {
-                setFilter("all");
+                setStatus("all");
+                setTerm("All");
                 setQuery("");
               }}
               className="ml-2 font-medium text-accent underline decoration-dashed underline-offset-2"

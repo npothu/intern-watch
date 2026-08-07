@@ -28,6 +28,10 @@ export type TriageRow = {
   applied: boolean;
   saved: boolean;
   dismissed: boolean;
+  // optional python-view parity fields; absent in current Convex snapshot
+  // so filters degrade gracefully when missing
+  staleDays?: number;
+  artifacts?: boolean;
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");

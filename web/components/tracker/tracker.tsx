@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   ExternalLink as ExternalLinkIcon,
@@ -46,6 +46,15 @@ import type {
  *
  * Status and note changes commit through the server action optimistically -
  * the row updates in place, rolls back with a toast if the write fails.
+ *
+ * Search/filters parity with src/webui/static/index.html (python webui):
+ *   - tvisible() mirrors the python's tvisible(): waiting filter, per-status
+ *     filter, and substring search over company + title + lastNote + short
+ *   - funnel chips: All + each present status + "Awaiting GHOST_DAYSd+" when any
+ *     entry is >= GHOST_DAYS quiet days on a live status
+ *   - funnel statline segments are clickable (data-tstat) and toggle tfilter
+ *   - funnel bar itself stays derived from the full ledger (not the filtered
+ *     view), matching the python
  */
 
 /* Funnel segment fill, mirroring the webui's .fb-* colors. */
@@ -75,7 +84,26 @@ function labelLower(status: string): string {
   return (STATUS_LABELS[status as TrackerStatus] ?? status).toLowerCase();
 }
 
-function Funnel({ rows }: { rows: TrackerRow[] }) {
+/** Mirrors python's tvisible(): waiting/status + substring search. */
+function tvisible(row: TrackerRow, tq: string, tfilter: string): boolean {
+  if (tfilter === "waiting" && waitingDays(row) < GHOST_DAYS) return false;
+  if ((STATUS_LABELS as Record<string, string>)[tfilter] && row.status !== tfilter) return false;
+  if (tq) {
+    const hay = `${row.company} ${row.title} ${row.lastNote} ${row.short}`.toLowerCase();
+    if (!hay.includes(tq)) return false;
+  }
+  return true;
+}
+
+function Funnel({
+  rows,
+  tfilter,
+  onFilter,
+}: {
+  rows: TrackerRow[];
+  tfilter: string;
+  onFilter: (v: string) => void;
+}) {
   const counts: Record<string, number> = {};
   let waiting = 0;
   for (const r of rows) {
@@ -86,7 +114,7 @@ function Funnel({ rows }: { rows: TrackerRow[] }) {
   if (present.length === 0 && waiting === 0) return null;
 
   return (
-    <div className="mb-5 mt-4">
+    <div className="mb-1 mt-4">
       <div className="flex h-3.5 overflow-hidden rounded-md border border-line-2">
         {present.map((s) => (
           <span
@@ -101,15 +129,37 @@ function Funnel({ rows }: { rows: TrackerRow[] }) {
         {present.map((s, i) => (
           <span key={s}>
             {i > 0 && <span className="mx-1">·</span>}
-            <b className="font-semibold text-ink">{counts[s]}</b>{" "}
-            {labelLower(s)}
+            <button
+              type="button"
+              data-tstat={s}
+              onClick={() => onFilter(tfilter === s ? "all" : s)}
+              className={cn(
+                "cursor-pointer rounded-sm px-0.5 transition-colors",
+                tfilter === s
+                  ? "text-accent underline decoration-dashed underline-offset-[3px]"
+                  : "hover:text-accent hover:underline hover:decoration-dashed hover:underline-offset-[3px]"
+              )}
+            >
+              <b className="font-semibold text-ink">{counts[s]}</b> {labelLower(s)}
+            </button>
           </span>
         ))}
         {waiting > 0 && (
           <>
             {present.length > 0 && <span className="mx-1">·</span>}
-            <b className="font-semibold text-ink">{waiting}</b> awaiting
-            response
+            <button
+              type="button"
+              data-tstat="waiting"
+              onClick={() => onFilter(tfilter === "waiting" ? "all" : "waiting")}
+              className={cn(
+                "cursor-pointer rounded-sm px-0.5 transition-colors",
+                tfilter === "waiting"
+                  ? "text-accent underline decoration-dashed underline-offset-[3px]"
+                  : "hover:text-accent hover:underline hover:decoration-dashed hover:underline-offset-[3px]"
+              )}
+            >
+              <b className="font-semibold text-ink">{waiting}</b> awaiting response
+            </button>
           </>
         )}
       </div>
@@ -357,11 +407,12 @@ function NoteDialog({
   );
 }
 
-function EmptyState() {
+function EmptyState({ filtered }: { filtered: boolean }) {
   return (
     <div className="mt-2 rounded-md border border-line bg-surface px-4 py-9 text-center text-[13px] text-ink-2">
-      No applications yet - tick a match as applied and it lands here
-      permanently.
+      {filtered
+        ? "Nothing matches the current filters."
+        : "No applications yet - tick a match as applied and it lands here permanently."}
     </div>
   );
 }
@@ -370,6 +421,32 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
   const [rows, setRows] = useState(initialRows);
   const [historyRow, setHistoryRow] = useState<TrackerRow | null>(null);
   const [noteRow, setNoteRow] = useState<TrackerRow | null>(null);
+  const [tq, setTq] = useState("");
+  const [tfilter, setTfilter] = useState("all");
+
+  // funnel counts come from the full ledger, matching python's renderTracker
+  const { counts, waiting } = useMemo(() => {
+    const c: Record<string, number> = {};
+    let w = 0;
+    for (const r of rows) {
+      c[r.status] = (c[r.status] ?? 0) + 1;
+      if (waitingDays(r) >= GHOST_DAYS) w++;
+    }
+    return { counts: c, waiting: w };
+  }, [rows]);
+
+  const chips: Array<[string, string]> = useMemo(() => {
+    const present = STATUS_ORDER.filter((s) => counts[s]);
+    const out: Array<[string, string]> = [["all", "All"]];
+    for (const s of present) out.push([s, STATUS_LABELS[s as TrackerStatus] ?? s]);
+    if (waiting > 0) out.push(["waiting", `Awaiting ${GHOST_DAYS}d+`]);
+    return out;
+  }, [counts, waiting]);
+
+  const visible = useMemo(() => {
+    const q = tq.trim().toLowerCase();
+    return rows.filter((r) => tvisible(r, q, tfilter));
+  }, [rows, tq, tfilter]);
 
   function applyChange(short: string, status: string, note: string) {
     const today = new Date().toISOString();
@@ -421,13 +498,49 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
 
   return (
     <div>
-      <Funnel rows={rows} />
+      <Funnel rows={rows} tfilter={tfilter} onFilter={setTfilter} />
+
+      {/* toolbar: search — mirrors python's #tq */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <input
+          type="search"
+          value={tq}
+          onChange={(e) => setTq(e.target.value.toLowerCase())}
+          placeholder="Search applications…"
+          autoComplete="off"
+          aria-label="Search applications"
+          className="min-w-[220px] flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
+        />
+      </div>
+
+      {/* funnel chips — mirrors python's #tchips */}
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {chips.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            data-tfilter={value}
+            aria-pressed={tfilter === value}
+            onClick={() => setTfilter(value)}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-[12.5px] font-medium leading-none transition-colors",
+              tfilter === value
+                ? "border-accent bg-accent text-accent-ink"
+                : "border-line-2 bg-surface text-ink-2 hover:border-line hover:text-ink"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       {rows.length === 0 ? (
-        <EmptyState />
+        <EmptyState filtered={false} />
+      ) : visible.length === 0 ? (
+        <EmptyState filtered />
       ) : (
         <div className="overflow-hidden rounded-md border border-line bg-surface">
-          {rows.map((r) => (
+          {visible.map((r) => (
             <TrackerRowView
               key={r.short}
               row={r}
