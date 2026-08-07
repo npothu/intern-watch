@@ -30,6 +30,7 @@ interface LedgerRec {
   snapshot?: unknown;
   company?: unknown;
   title?: unknown;
+  location?: unknown;
   url?: unknown;
 }
 
@@ -98,17 +99,22 @@ export function buildTrackerRows(
     const snap = snapshotOf(rec) ?? {
       company: rec.company,
       title: rec.title,
+      location: rec.location,
       url: rec.url,
     };
     let company = asStrings(snap.company);
     let title = asStrings(snap.title);
     let url = asStrings(snap.url);
+    // Only the search box reads location, so an absent one just narrows what
+    // the query can match - never a reason to fall back to the live match row.
+    let location = asStrings(snap.location);
     if (!company && !title) {
       const match = byShort.get(short);
       if (match) {
         company = match.company;
         title = match.title;
         url = match.url;
+        location = location || match.location;
       }
     }
 
@@ -131,6 +137,7 @@ export function buildTrackerRows(
       history,
       company,
       title,
+      location,
       url,
       resumeUrl: resumeUrls[short],
     });

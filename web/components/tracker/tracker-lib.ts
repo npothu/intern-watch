@@ -66,6 +66,8 @@ export type TrackerRow = {
   history: HistoryEntry[];
   company: string;
   title: string;
+  /** Carried for the tracker's search box; the row meta line does not show it. */
+  location: string;
   url: string;
   resumeUrl?: string;
 };
