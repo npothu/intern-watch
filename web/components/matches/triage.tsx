@@ -1213,8 +1213,13 @@ function RowView({
           {title}
         </div>
         <div className="mt-0.5 text-[11.5px] text-ink-2 tabular-nums">
-          {location}
-          {salary ? ` · ${salary}` : ""} · seen {fmtDate(added)} ·{" "}
+          {/* Joined rather than concatenated with fixed separators: a manually
+              added job often has no location or salary, which left the line
+              opening on a dangling "·". */}
+          {[location, salary, `seen ${fmtDate(added)}`]
+            .filter(Boolean)
+            .join(" · ")}{" "}
+          ·{" "}
           <span className="font-mono text-[10.5px]">{short}</span>
         </div>
       </div>
@@ -1388,8 +1393,9 @@ function MobileCard({
               {row.title}
             </div>
             <div className="mt-1 truncate text-[11px] text-ink-2 tabular-nums">
-              {row.location}
-              {row.salary ? ` · ${row.salary}` : ""} · seen {fmtDate(row.added)}
+              {[row.location, row.salary, `seen ${fmtDate(row.added)}`]
+                .filter(Boolean)
+                .join(" · ")}
             </div>
           </div>
           <button
