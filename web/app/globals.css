@@ -171,84 +171,85 @@
   }
 }
 /* ============================================================
-   intern-watch motion block — APPEND to web/app/globals.css
-   (1a rail + ticks, 1b cascade, 1d dock, 1g collapse + slab,
-    1h tab pill + sync sweep)
+   motion
+   ------------------------------------------------------------
+   Transform/opacity only, apart from the one grid-row collapse
+   that hides a row (contained to that row). Timings are measured
+   off the approved motion demo: the cursor rail lands in ~150ms
+   so it keeps up with a held j/k instead of rubber-banding
+   behind it, and entrances are quick rather than luxurious.
+
+   One-shot feedback (tick pop, check draw, dock keycap ring)
+   lives in lib/motion.ts on the Web Animations API, which
+   restarts reliably on repeat triggers. Only the animations that
+   fire once per element on mount are keyframed here.
    ============================================================ */
 
 :root {
+  /* Expo-out: entrances, collapses. */
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-spring: cubic-bezier(0.3, 1.4, 0.4, 1);
+  /* Barely-there overshoot: the cursor rail arrives with a tick of weight. */
+  --ease-rail: cubic-bezier(0.2, 0.9, 0.25, 1.06);
+  /* Back-out: pops. */
   --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Gentler back-out for the header's sliding tab indicator, which animates
+     width as well as position - the pop curve overshoots both at once and the
+     chip visibly bulges past the tab it is landing on. */
+  --ease-spring: cubic-bezier(0.3, 1.4, 0.4, 1);
+
+  --rail-ms: 150ms;
 }
 
-/* 1a — applied check draws itself; tick pop (A/B duplicates exist so the
-   same element can restart the animation on consecutive toggles by
-   alternating names on a counter's parity) */
-@keyframes checkdraw {
-  from { stroke-dashoffset: 20; }
-  to   { stroke-dashoffset: 0; }
-}
-@keyframes tickpopA {
-  0%   { transform: scale(0.7); }
-  55%  { transform: scale(1.14); }
-  100% { transform: scale(1); }
-}
-@keyframes tickpopB {
-  0%   { transform: scale(0.7); }
-  55%  { transform: scale(1.14); }
-  100% { transform: scale(1); }
-}
-
-/* 1b — list entrance cascade */
+/* List entrance cascade. Short rise - a big translate reads as jank on a
+   dense list, where several rows are always in flight at once. */
 @keyframes cascade {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(9px); }
   to   { opacity: 1; transform: none; }
 }
 
-/* 1d — dock keycap press ripple (A/B for restart) + dock entrance.
-   dockup must carry the dock's translateX(-50%) centering.
-   Mocked from Claude video: dock pops with spring, not just a nudge. */
-@keyframes keypressA {
-  0%   { transform: scale(0.96); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 28%, transparent); }
-  32%  { transform: scale(0.88) translateY(1px); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 28%, transparent); }
-  58%  { transform: scale(1.10); box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 18%, transparent); }
-  100% { transform: scale(1); box-shadow: 0 0 0 8px transparent; }
-}
-@keyframes keypressB {
-  0%   { transform: scale(0.96); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 28%, transparent); }
-  32%  { transform: scale(0.88) translateY(1px); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 28%, transparent); }
-  58%  { transform: scale(1.10); box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 18%, transparent); }
-  100% { transform: scale(1); box-shadow: 0 0 0 8px transparent; }
-}
+/* Dock entrance. The keyframes must carry the dock's own translateX(-50%)
+   centring, or it lands half a dock-width off. */
 @keyframes dockup {
-  from { opacity: 0; transform: translate(-50%, 14px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translate(-50%, 16px) scale(0.97); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
 }
 
-/* 1g — undo slab entrance */
+/* Undo slab entrance. */
 @keyframes toastin {
   from { opacity: 0; transform: translateY(10px) scale(0.97); }
   to   { opacity: 1; transform: none; }
 }
 
-/* 1g — collapse shells: the first row in a group keeps no top border
-   (replaces the old `first:border-t-0`, which broke once rows got a
-   wrapper), and the first mobile card loses its spacer padding. */
-.collapse-shell:first-child [data-row-line] { border-top-color: transparent; }
-.collapse-shell:first-child [data-card-pad] { padding-top: 0; }
-
-/* 1h — header sync sweep */
+/* Header sync sweep: one pass down the header's bottom edge per route change. */
 @keyframes sweep {
   from { transform: translateX(-110%); }
   to   { transform: translateX(620%); }
 }
 
-/* Reduced motion: everything lands instantly, nothing loops */
+/* Collapse shells: the first row in a group draws no top border, and the
+   first mobile card drops its spacer. The row wrapper broke the plain
+   `:first-child` selectors these replace. */
+.collapse-shell:first-child [data-row-line] { border-top-color: transparent; }
+.collapse-shell:first-child [data-card-pad] { padding-top: 0; }
+
+/* Reduced motion: everything lands instantly, nothing loops.
+   Delays are zeroed alongside durations - collapsing only the duration leaves
+   the cascade's per-row `animation-delay` intact, and with `fill: both` that
+   holds rows at opacity 0 for up to half a second, i.e. the list reads as
+   missing rather than as instant.
+   `data-force-motion` on <html> opts out, so the motion can be reviewed on a
+   machine whose OS has animations switched off (see components/motion-preview).
+   lib/motion.ts honours the same pair of signals, since neither this override
+   nor the media query reaches Web Animations. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  html:not([data-force-motion]) *,
+  html:not([data-force-motion]) *::before,
+  html:not([data-force-motion]) *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
   }
 }

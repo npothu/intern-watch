@@ -1,8 +1,7 @@
 "use client";
 
-// web/components/site-header.tsx — full replacement.
-// 1h: sliding chip indicator behind the nav tabs + one-pass sync sweep on
-// route change. Everything else identical to the original.
+// Sliding chip indicator behind the nav tabs, plus a one-pass sync sweep along
+// the header's bottom edge on route change.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -21,11 +20,16 @@ function ThemeToggle() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const active = theme === "system" ? resolvedTheme : theme;
   const isDark = active === "dark";
+  // The button's name and tooltip stay constant, because the server cannot
+  // know the visitor's theme: deriving them from `resolvedTheme` renders
+  // "Switch to dark mode" on the server and "Switch to light mode" on the
+  // client, and React reports that as a hydration mismatch it will not patch.
+  // The icons may still swap on state - they are driven by the `dark` class
+  // next-themes sets before hydration, so they never disagree.
   return (
     <button
       type="button"
-      aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
-      title={isDark ? "Light mode" : "Dark mode"}
+      title="Toggle theme"
       onClick={() => setTheme(isDark ? "light" : "dark")}
       className="relative inline-flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 transition-colors hover:bg-chip hover:text-ink"
     >
@@ -99,6 +103,21 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
           <ThemeToggle />
           <UserChip trackerUser={trackerUser} />
         </div>
+      </div>
+      {/* Sync sweep: a 2px track standing in for the header's border-b, keyed
+          by pathname so one pass runs per route change and then it sits still
+          as a plain rule. */}
+      <div className="relative h-[2px] overflow-hidden bg-line">
+        <span
+          key={pathname}
+          aria-hidden
+          className="absolute inset-y-0 left-0 w-[18%]"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent, var(--color-accent), transparent)",
+            animation: "sweep 1.4s ease-in-out .1s 1 both",
+          }}
+        />
       </div>
     </header>
   );
