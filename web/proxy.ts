@@ -25,5 +25,5 @@ export const config = {
   // Match all app routes except Next internals and files with a dot in the
   // path (static assets), so sign-in/sign-up are still caught and whitelisted
   // inside the handler.
-  matcher: ["/((?!_next|.*\\..*).*)"],
+  matcher: ["/((?!_next|lavish|.*\\..*).*)"],
 };
