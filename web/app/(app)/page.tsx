@@ -1,17 +1,25 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { getTrackerUserData, type MatchItem } from "@/lib/convex";
 import { shortKey } from "@/lib/shortkey";
-import { Triage } from "@/components/matches/triage";
+import { buildTrackerRows } from "@/components/tracker/build-rows";
+import { AppViews } from "@/components/app-views";
+import type { TrackerRow } from "@/components/tracker/tracker-lib";
 
 /**
- * The matches triage page (the app's default route). Resolves the signed-in
- * user to their tracker user, folds the store's ticks into the match rows by
- * short key, attaches each built resume URL, and hands a clean, fully typed
- * array to the client component. The app layout already renders the
- * "not provisioned" screen when resolveTrackerUser() is null, so a null here
- * shouldn't happen - guard anyway so this component never renders a broken
- * page on its own.
+ * The app route - it serves both surfaces, matches and tracker, and the URL
+ * says which one is showing (see lib/view.ts). One server render loads
+ * everything both need, so switching views is client-side and instant.
+ *
+ * The two datasets cost nothing extra to load together: `getTrackerUserData`
+ * already fetches matches, ticks, ledger and resume URLs in one parallel batch,
+ * and that is a superset of what each surface used to fetch on its own.
+ *
+ * The app layout already renders the "not provisioned" screen when
+ * resolveTrackerUser() is null, so a null here shouldn't happen - guard anyway
+ * so this component never renders a broken page on its own.
  */
+
+export const dynamic = "force-dynamic";
 
 export type TriageRow = {
   key: string;
@@ -32,23 +40,15 @@ export type TriageRow = {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-export default async function MatchesPage({
-  searchParams,
-}: {
-  // `?filter=hidden` opens the list on that filter, which is how the command
-  // palette's "Show hidden" reaches this page from the tracker.
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+export default async function AppPage() {
   const user = await resolveTrackerUser();
   if (!user) return null;
-
-  const filterParam = (await searchParams).filter;
 
   const data = await getTrackerUserData(user);
 
   const ticksByShort = new Map(data.ticks.map((t) => [t.short, t]));
 
-  const rows: TriageRow[] = data.matches.map((m: MatchItem) => {
+  const matches: TriageRow[] = data.matches.map((m: MatchItem) => {
     const short =
       typeof m.short === "string" && m.short ? m.short : shortKey(m.key);
     const tick = ticksByShort.get(short);
@@ -73,10 +73,11 @@ export default async function MatchesPage({
     };
   });
 
-  return (
-    <Triage
-      rows={rows}
-      initialFilter={typeof filterParam === "string" ? filterParam : undefined}
-    />
+  const applications: TrackerRow[] = buildTrackerRows(
+    data.ledger,
+    data.matches,
+    data.resumes
   );
+
+  return <AppViews matches={matches} applications={applications} />;
 }

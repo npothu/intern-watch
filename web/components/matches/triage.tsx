@@ -24,7 +24,6 @@ import {
   type CSSProperties,
   type TouchEvent as ReactTouchEvent,
 } from "react";
-import { useRouter } from "next/navigation";
 import {
   Check,
   Star,
@@ -59,6 +58,7 @@ import { CommandPalette, type PaletteAction } from "@/components/command-palette
 import { FilterPills, type PillOption } from "@/components/filter-pills";
 import { RefreshControl } from "@/components/refresh-control";
 import { AddUrlDialog } from "./add-url-dialog";
+import { useAppView } from "@/lib/view";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TickWrite } from "@/lib/convex";
 
@@ -297,7 +297,7 @@ export function Triage({
    */
   initialFilter?: string;
 }) {
-  const router = useRouter();
+  const { show } = useAppView();
   const [rows, setRows] = useState<TriageRow[]>(initialRows);
 
   /* Re-seed from the server whenever it hands over a new array - a refresh, or
@@ -837,7 +837,7 @@ export function Triage({
       id: "tracker",
       label: "Go to Tracker",
       icon: <ListChecks className="size-4" />,
-      run: () => router.push("/tracker"),
+      run: () => show("tracker"),
     },
     {
       id: "hidden",

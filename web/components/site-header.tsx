@@ -1,7 +1,7 @@
 "use client";
 
 // Sliding chip indicator behind the nav tabs, plus a one-pass sync sweep along
-// the header's bottom edge on route change.
+// the header's bottom edge each time the server hands over fresh data.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -10,10 +10,12 @@ import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UserChip } from "@/components/user-chip";
+import { useAppView, viewHref, type AppView } from "@/lib/view";
+import { useSyncPulse } from "@/lib/sync-pulse";
 
-const NAV = [
-  { href: "/", label: "Matches" },
-  { href: "/tracker", label: "Tracker" },
+const NAV: { view: AppView; label: string }[] = [
+  { view: "matches", label: "Matches" },
+  { view: "tracker", label: "Tracker" },
 ];
 
 function ThemeToggle() {
@@ -42,6 +44,8 @@ function ThemeToggle() {
 
 export function SiteHeader({ trackerUser }: { trackerUser: string }) {
   const pathname = usePathname();
+  const { view, show } = useAppView();
+  const syncPulse = useSyncPulse();
   const navRef = useRef<HTMLElement>(null);
   const [ind, setInd] = useState<{ x: number; w: number } | null>(null);
   // No slide on first paint: transitions enable only after the first measure.
@@ -55,7 +59,7 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
     else setInd(null);
     const id = requestAnimationFrame(() => setAnimate(true));
     return () => cancelAnimationFrame(id);
-  }, [pathname]);
+  }, [pathname, view]);
 
   return (
     <header className="bg-surface">
@@ -82,13 +86,23 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
             }}
           />
           {NAV.map((n) => {
-            const active =
-              n.href === "/" ? pathname === "/" : pathname.startsWith(n.href);
+            // Both views live on "/", so nothing is active anywhere else (the
+            // dev-only motion lab), same as before this became one route.
+            const active = pathname === "/" && view === n.view;
             return (
               <Link
-                key={n.href}
-                href={n.href}
+                key={n.view}
+                href={viewHref(n.view)}
                 data-active={active ? "1" : undefined}
+                onClick={(e) => {
+                  // Let the browser have modified clicks (new tab, new window)
+                  // and let Link do a real navigation from anywhere that isn't
+                  // the app route. Everything else switches in place.
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  if (pathname !== "/") return;
+                  e.preventDefault();
+                  show(n.view);
+                }}
                 className={cn(
                   "relative rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors",
                   active ? "text-ink" : "text-ink-2 hover:text-ink"
@@ -105,11 +119,12 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
         </div>
       </div>
       {/* Sync sweep: a 2px track standing in for the header's border-b, keyed
-          by pathname so one pass runs per route change and then it sits still
-          as a plain rule. */}
+          by the sync counter so one pass runs per data load - the first paint
+          and every refresh after it - and then it sits still as a plain rule.
+          Swapping views syncs nothing, so it no longer replays there. */}
       <div className="relative h-[2px] overflow-hidden bg-line">
         <span
-          key={pathname}
+          key={syncPulse}
           aria-hidden
           className="absolute inset-y-0 left-0 w-[18%]"
           style={{
