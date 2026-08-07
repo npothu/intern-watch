@@ -1,5 +1,9 @@
 import { resolveTrackerUser } from "@/lib/user";
-import { getTrackerUserData, type MatchItem } from "@/lib/convex";
+import {
+  getTrackerUserData,
+  type MatchItem,
+  type ResumeMeta,
+} from "@/lib/convex";
 import { shortKey } from "@/lib/shortkey";
 import { Triage } from "@/components/matches/triage";
 
@@ -25,6 +29,8 @@ export type TriageRow = {
   salary: string;
   url: string;
   resumeUrl: string | null;
+  /** Full build metadata (report, previous version) for the report dialog. */
+  resumeMeta?: ResumeMeta | null;
   applied: boolean;
   saved: boolean;
   dismissed: boolean;
@@ -63,10 +69,11 @@ export default async function MatchesPage({
       tag: str(m.tag),
       salary: str(m.salary),
       url: str(m.url),
-      // Only an actually-resolved external URL counts as "built" in v1; a
+      // Only an actually-resolved external URL counts as "built"; a
       // repo-relative path or storage id from the source item is not a
       // linkable resume and is deliberately dropped.
-      resumeUrl: data.resumes[short] ?? null,
+      resumeUrl: data.resumes[short]?.url ?? null,
+      resumeMeta: data.resumes[short] ?? null,
       applied: tick?.applied ?? m.applied ?? false,
       saved: tick?.saved ?? m.saved ?? false,
       dismissed: tick?.dismissed ?? m.dismissed ?? false,

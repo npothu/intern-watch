@@ -10,10 +10,12 @@ import { resolveTrackerUser } from "@/lib/user";
 import {
   setTicks,
   getResumeUrls,
+  restoreResume,
   requestResumeBuild as convexRequestBuild,
   fetchBuildStatus as convexFetchBuildStatus,
   type TickWrite,
   type BuildStatus,
+  type ResumeMeta,
 } from "@/lib/convex";
 
 // The first 12 hex chars of a match key's sha1 (see lib/shortkey.ts).
@@ -110,5 +112,82 @@ export async function fetchResumeUrl(short: string): Promise<string | null> {
   if (!user) return null;
   if (typeof short !== "string" || !SHORT_RE.test(short)) return null;
   const urls = await getResumeUrls(user);
+  return urls[short]?.url ?? null;
+}
+
+/**
+ * Full build metadata for one short - the report dialog's payload (report,
+ * previous-version URL) - fetched on demand when the dialog opens or after a
+ * rebuild completes.
+ */
+export async function fetchResumeMeta(
+  short: string
+): Promise<ResumeMeta | null> {
+  const user = await resolveTrackerUser();
+  if (!user) return null;
+  if (typeof short !== "string" || !SHORT_RE.test(short)) return null;
+  const urls = await getResumeUrls(user);
   return urls[short] ?? null;
+}
+
+/**
+ * Rebuild with refinements from the report dialog's Edit tab: pasted JD,
+ * free-form LLM instructions, hand-edited bullet overrides. Validated to the
+ * same caps requestBuild enforces server-side.
+ */
+export async function requestResumeRebuild(
+  short: string,
+  opts: {
+    jdText?: string;
+    instructions?: string;
+    overrides?: { name: string; bullets: string[] }[];
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await resolveTrackerUser();
+  if (!user) return { ok: false, error: "Not signed in." };
+  if (typeof short !== "string" || !SHORT_RE.test(short)) {
+    return { ok: false, error: "Bad short key." };
+  }
+  const jdText =
+    typeof opts.jdText === "string" ? opts.jdText.slice(0, 20_000) : undefined;
+  const instructions =
+    typeof opts.instructions === "string"
+      ? opts.instructions.slice(0, 1000)
+      : undefined;
+  const overrides = Array.isArray(opts.overrides)
+    ? opts.overrides
+        .filter(
+          (o) =>
+            o &&
+            typeof o.name === "string" &&
+            Array.isArray(o.bullets) &&
+            o.bullets.every((b) => typeof b === "string")
+        )
+        .slice(0, 12)
+    : undefined;
+  try {
+    return await convexRequestBuild(user, short, {
+      jdText,
+      instructions,
+      overrides,
+    });
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+/** Swap back to the previous kept build (keep-N=2 restore). */
+export async function requestResumeRestore(
+  short: string
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await resolveTrackerUser();
+  if (!user) return { ok: false, error: "Not signed in." };
+  if (typeof short !== "string" || !SHORT_RE.test(short)) {
+    return { ok: false, error: "Bad short key." };
+  }
+  try {
+    return await restoreResume(user, short);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }

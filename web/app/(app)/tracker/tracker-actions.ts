@@ -1,7 +1,7 @@
 "use server";
 
 import { resolveTrackerUser } from "@/lib/user";
-import { recordStatus } from "@/lib/convex";
+import { recordStatus, setDueAt, setSnooze } from "@/lib/convex";
 import {
   isTrackerStatus,
   STATUS_ORDER,
@@ -54,4 +54,78 @@ export async function updateStatus(
     };
   }
   return { ok: true, status, note: trimmed };
+}
+
+/** Accepts a yyyy-mm-dd or full ISO datetime; null clears the field. */
+function isDateString(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+export type UpdateDueAtResult =
+  | { ok: true; dueAt: string | null }
+  | { ok: false; error: string };
+
+/** Set (or clear) a match's due date. */
+export async function updateDueAt(
+  short: string,
+  dueAt: string | null
+): Promise<UpdateDueAtResult> {
+  if (!SHORT_RE.test(short)) {
+    return { ok: false, error: "Invalid application key." };
+  }
+  if (dueAt !== null && !isDateString(dueAt)) {
+    return { ok: false, error: "dueAt must be an ISO date, or null to clear." };
+  }
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "Not signed in, or this account isn't provisioned.",
+    };
+  }
+  try {
+    await setDueAt(user, short, dueAt);
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't save the due date.",
+    };
+  }
+  return { ok: true, dueAt };
+}
+
+export type UpdateSnoozeResult =
+  | { ok: true; snoozedUntil: string | null }
+  | { ok: false; error: string };
+
+/** Set (or clear) a match's snooze. */
+export async function updateSnooze(
+  short: string,
+  snoozedUntil: string | null
+): Promise<UpdateSnoozeResult> {
+  if (!SHORT_RE.test(short)) {
+    return { ok: false, error: "Invalid application key." };
+  }
+  if (snoozedUntil !== null && !isDateString(snoozedUntil)) {
+    return {
+      ok: false,
+      error: "snoozedUntil must be an ISO date, or null to clear.",
+    };
+  }
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "Not signed in, or this account isn't provisioned.",
+    };
+  }
+  try {
+    await setSnooze(user, short, snoozedUntil);
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't save the snooze.",
+    };
+  }
+  return { ok: true, snoozedUntil };
 }

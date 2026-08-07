@@ -70,7 +70,33 @@ export type TrackerRow = {
   location: string;
   url: string;
   resumeUrl?: string;
+  /** Next externally imposed deadline (yyyy-mm-dd), user-entered. */
+  dueAt?: string;
+  /** Defers the row's appearance in the needs-attention queue only. */
+  snoozedUntil?: string;
 };
+
+/** Days until dueAt, end-of-day inclusive: 0 = due today, negative =
+ * overdue, null = no deadline set. */
+export function dueInDays(row: TrackerRow): number | null {
+  if (!row.dueAt) return null;
+  const due = new Date(
+    row.dueAt.length === 10 ? `${row.dueAt}T23:59:59` : row.dueAt
+  ).getTime();
+  if (Number.isNaN(due)) return null;
+  return Math.floor((due - Date.now()) / 864e5);
+}
+
+/** Whether the row's needs-attention appearance is currently deferred. */
+export function isSnoozed(row: TrackerRow): boolean {
+  if (!row.snoozedUntil) return false;
+  const until = new Date(
+    row.snoozedUntil.length === 10
+      ? `${row.snoozedUntil}T23:59:59`
+      : row.snoozedUntil
+  ).getTime();
+  return !Number.isNaN(until) && until > Date.now();
+}
 
 /** Days thresholds, mirroring the Python webui. */
 export const WAIT_DAYS = 10; // >= this many quiet days on a live status -> "waiting Nd"

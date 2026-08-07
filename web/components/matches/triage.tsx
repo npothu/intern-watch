@@ -30,6 +30,7 @@ import {
   Star,
   X,
   Undo2,
+  FileSearch,
   FileText,
   Loader2,
   Ghost,
@@ -52,15 +53,22 @@ import {
 import {
   writeTicks,
   requestResumeBuild,
+  requestResumeRebuild,
+  requestResumeRestore,
   fetchBuildStatus,
   fetchResumeUrl,
+  fetchResumeMeta,
 } from "@/app/(app)/matches-actions";
 import { CommandPalette, type PaletteAction } from "@/components/command-palette";
 import { FilterPills, type PillOption } from "@/components/filter-pills";
 import { RefreshControl } from "@/components/refresh-control";
+import {
+  ResumeReportDialog,
+  type RebuildOpts,
+} from "@/components/matches/resume-report";
 import { AddUrlDialog } from "./add-url-dialog";
 import type { TriageRow } from "@/app/(app)/page";
-import type { TickWrite } from "@/lib/convex";
+import type { ResumeMeta, TickWrite } from "@/lib/convex";
 
 type Filter = "all" | "applied" | "saved" | "resumes" | "hidden";
 
@@ -352,10 +360,12 @@ export function Triage({
   const buildStartedAt = useRef<Record<string, number>>({});
   const buildStateFor = useCallback(
     (row: TriageRow): BuildState => {
-      if (row.resumeUrl) return "built";
+      // In-flight wins over an existing URL: a REBUILD runs while the old
+      // artifact is still attached, and must read as "building".
       const s = builds[row.short];
       if (s === "building") return "building";
       if (typeof s === "object" && s?.failed !== undefined) return "failed";
+      if (row.resumeUrl) return "built";
       return "idle";
     },
     [builds]
@@ -367,6 +377,68 @@ export function Triage({
     },
     [builds]
   );
+
+  // Build-report dialog: which row's report is open, a per-short metadata
+  // cache (server-rendered meta first, refetched after in-session builds),
+  // and the set of rows whose report icon should play its "just built" pulse.
+  const [reportShort, setReportShort] = useState<string | null>(null);
+  const [metaCache, setMetaCache] = useState<Record<string, ResumeMeta>>({});
+  const [justBuilt, setJustBuilt] = useState<Set<string>>(new Set());
+
+  const metaFor = useCallback(
+    (row: TriageRow): ResumeMeta | null =>
+      metaCache[row.short] ?? row.resumeMeta ?? null,
+    [metaCache]
+  );
+
+  const refreshMeta = useCallback((short: string) => {
+    void fetchResumeMeta(short)
+      .then((meta) => {
+        if (meta) setMetaCache((prev) => ({ ...prev, [short]: meta }));
+      })
+      .catch(() => {});
+  }, []);
+
+  function openReport(row: TriageRow) {
+    if (!metaFor(row)?.report) refreshMeta(row.short);
+    setJustBuilt((prev) => {
+      if (!prev.has(row.short)) return prev;
+      const next = new Set(prev);
+      next.delete(row.short);
+      return next;
+    });
+    setReportShort(row.short);
+  }
+
+  function rebuild(short: string, opts: RebuildOpts) {
+    setReportShort(null);
+    delete buildStartedAt.current[short];
+    setBuilds((prev) => ({ ...prev, [short]: "building" as const }));
+    toast.success("Rebuilding - the current version stays restorable");
+    void requestResumeRebuild(short, opts).then((res) => {
+      if (res.ok) return;
+      setBuilds((prev) => ({
+        ...prev,
+        [short]: { failed: res.error || "Couldn't start the rebuild." },
+      }));
+      toast.error(res.error || "Couldn't start the rebuild.");
+    });
+  }
+
+  function restore(short: string) {
+    void requestResumeRestore(short).then(async (res) => {
+      if (!res.ok) {
+        toast.error(res.error || "Couldn't restore the previous version.");
+        return;
+      }
+      toast.success("Previous version restored");
+      refreshMeta(short);
+      try {
+        const url = await fetchResumeUrl(short);
+        if (url) updateRow(short, { resumeUrl: url });
+      } catch {}
+    });
+  }
 
   const updateRow = useCallback((short: string, patch: Partial<TriageRow>) => {
     setRows((prev) =>
@@ -692,11 +764,15 @@ export function Triage({
             delete next[s];
             return next;
           });
+          // Pull the fresh build report and pulse the report affordance so
+          // the "what did the tailor do" surface announces itself once.
+          refreshMeta(s);
+          setJustBuilt((prev) => new Set(prev).add(s));
         })();
       }
     }, BUILD_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [builds, updateRow, demo]);
+  }, [builds, updateRow, demo, refreshMeta]);
 
   /** Moves the cursor by `delta`, returning false when it was already at that
    *  end of the list (which is the caller's cue to scroll the page instead). */
@@ -999,6 +1075,7 @@ export function Triage({
                               buildState={buildStateFor(r)}
                               buildError={buildErrorFor(r)}
                               onBuild={() => startBuild(r.short)}
+                              onOpenReport={() => openReport(r)}
                             />
                           </div>
                         </CollapseShell>
@@ -1029,6 +1106,8 @@ export function Triage({
                             onHide={() => hideShort(r.short)}
                             onRestore={() => restoreShort(r.short)}
                             onBuild={() => startBuild(r.short)}
+                            onOpenReport={() => openReport(r)}
+                            reportPulse={justBuilt.has(r.short)}
                           />
                         </CollapseShell>
                       );
@@ -1045,6 +1124,22 @@ export function Triage({
         jumps={paletteJumps}
         onJump={paletteJump}
         actions={paletteActions}
+      />
+
+      <ResumeReportDialog
+        company={
+          rows.find((r) => r.short === reportShort)?.company ?? "Resume"
+        }
+        short={reportShort}
+        meta={(() => {
+          const r = rows.find((x) => x.short === reportShort);
+          return r ? metaFor(r) : null;
+        })()}
+        onOpenChange={(o) => {
+          if (!o) setReportShort(null);
+        }}
+        onRebuild={rebuild}
+        onRestore={restore}
       />
 
       <Dock
@@ -1294,6 +1389,8 @@ function RowView({
   onHide,
   onRestore,
   onBuild,
+  onOpenReport,
+  reportPulse,
 }: {
   row: TriageRow;
   cascade: CSSProperties;
@@ -1308,6 +1405,9 @@ function RowView({
   onHide: () => void;
   onRestore: () => void;
   onBuild: () => void;
+  onOpenReport: () => void;
+  /** Play the one-shot "just built" ring on the report affordance. */
+  reportPulse: boolean;
 }) {
   const { short, company, title, location, salary, added, applied, saved, dismissed } = row;
 
@@ -1340,6 +1440,7 @@ function RowView({
         if (t.closest("[data-hide]")) return;
         if (t.closest("[data-restore]")) return;
         if (t.closest("[data-open]")) return;
+        if (t.closest("[data-report]")) return;
         onSelect();
       }}
       style={cascade}
@@ -1441,6 +1542,31 @@ function RowView({
       {/* actions — resume docker */}
       <div className="flex items-center gap-1.5 self-center">
         <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
+        {buildState === "built" && (
+          /* The report affordance: deliberately quiet next to the resume
+             button, announcing itself with a two-ring pulse right after a
+             build and sitting silent after that. */
+          <button
+            type="button"
+            data-report
+            title="Build report - what the tailor did"
+            onClick={(e) => {
+              blurOnPointerActivate(e);
+              onOpenReport();
+            }}
+            style={
+              reportPulse
+                ? { animation: "reportPulse 1s var(--ease-out-soft) 2" }
+                : undefined
+            }
+            className={cn(
+              "flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-accent",
+              FOCUS_RING
+            )}
+          >
+            <FileSearch className="size-3.5" />
+          </button>
+        )}
         {dismissed ? (
           <button
             type="button"
@@ -1492,6 +1618,7 @@ function MobileCard({
   buildState,
   buildError,
   onBuild,
+  onOpenReport,
 }: {
   row: TriageRow;
   cascade: CSSProperties;
@@ -1505,6 +1632,7 @@ function MobileCard({
   buildState: BuildState;
   buildError?: string;
   onBuild: () => void;
+  onOpenReport: () => void;
 }) {
   const [drag, setDrag] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -1669,6 +1797,19 @@ function MobileCard({
               Open
             </button>
             <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
+            {buildState === "built" && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenReport();
+                  setExpanded(false);
+                }}
+                className="rounded-md border border-line-2 bg-surface px-2.5 py-1.5 text-[12px] font-medium text-ink transition-colors hover:border-ink-2"
+              >
+                Report
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {

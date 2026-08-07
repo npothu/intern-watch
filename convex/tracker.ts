@@ -118,7 +118,53 @@ export const getLedger = query({
       history: r.history,
       snapshot: r.snapshot,
       createdAt: r.createdAt,
+      dueAt: r.dueAt,
+      snoozedUntil: r.snoozedUntil,
     }));
+  },
+});
+
+// Deadline + snooze writes live outside applyStatus on purpose: applyStatus
+// no-ops on a repeated status, which would swallow half of all deadline edits,
+// and neither field is a history event (src/ledger.py knows nothing of them).
+// Both require an existing ledger row - a deadline on a job you never applied
+// to has nowhere to live, and the caller treats {ok:false} as "tick applied
+// first".
+export const setDueAt = mutation({
+  args: {
+    user: v.string(),
+    short: v.string(),
+    dueAt: v.union(v.string(), v.null()),
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, short, dueAt, secret }) => {
+    checkSecret(secret);
+    const existing = await ctx.db
+      .query("applications")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!existing) return { ok: false as const, error: "application not found" };
+    await ctx.db.patch(existing._id, { dueAt: dueAt ?? undefined });
+    return { ok: true as const };
+  },
+});
+
+export const setSnooze = mutation({
+  args: {
+    user: v.string(),
+    short: v.string(),
+    snoozedUntil: v.union(v.string(), v.null()),
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, short, snoozedUntil, secret }) => {
+    checkSecret(secret);
+    const existing = await ctx.db
+      .query("applications")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!existing) return { ok: false as const, error: "application not found" };
+    await ctx.db.patch(existing._id, { snoozedUntil: snoozedUntil ?? undefined });
+    return { ok: true as const };
   },
 });
 
@@ -279,9 +325,11 @@ export const generateResumeUploadUrl = mutation({
   },
 });
 
-// Records a built resume's storage id on its (user, short) row, replacing any
-// earlier build: the old storage object is deleted so a rebuild never leaks
-// an orphaned file, and the row stays a single tuple per (user, short).
+// Records a built resume's storage id on its (user, short) row. Keep-N=2:
+// the previous build slides into the prev* fields (one-click restore in the
+// web app) and whatever prev* held before is the object that gets deleted, so
+// a rebuild still never leaks an orphaned file - it just orphans one build
+// later than it used to.
 export const attachResume = mutation({
   args: {
     user: v.string(),
@@ -299,11 +347,16 @@ export const attachResume = mutation({
       )
       .first();
     if (existing) {
-      await ctx.storage.delete(existing.storageId);
+      if (existing.prevStorageId) {
+        await ctx.storage.delete(existing.prevStorageId);
+      }
       await ctx.db.patch(existing._id, {
         filename,
         storageId,
         updatedAt: Date.now(),
+        prevStorageId: existing.storageId,
+        prevFilename: existing.filename,
+        prevUpdatedAt: existing.updatedAt,
       });
     } else {
       await ctx.db.insert("resumes", {
@@ -314,6 +367,34 @@ export const attachResume = mutation({
         updatedAt: Date.now(),
       });
     }
+  },
+});
+
+// Swap the current and previous builds back (the keep-N=2 restore). The
+// report follows the artifact it describes: after a restore the stored report
+// belongs to the now-previous build, so it swaps out to null rather than lie
+// about the restored file.
+export const restoreResume = mutation({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    const existing = await ctx.db
+      .query("resumes")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!existing || !existing.prevStorageId) {
+      return { ok: false as const, error: "no previous version to restore" };
+    }
+    await ctx.db.patch(existing._id, {
+      filename: existing.prevFilename ?? existing.filename,
+      storageId: existing.prevStorageId,
+      updatedAt: Date.now(),
+      prevStorageId: existing.storageId,
+      prevFilename: existing.filename,
+      prevUpdatedAt: existing.updatedAt,
+      report: undefined,
+    });
+    return { ok: true as const };
   },
 });
 
@@ -329,13 +410,86 @@ export const getResumeUrls = query({
       .query("resumes")
       .withIndex("by_user", (q) => q.eq("user", user))
       .collect();
-    const out: { short: string; url: string; filename: string }[] = [];
+    const out: {
+      short: string;
+      url: string;
+      filename: string;
+      updatedAt: number;
+      report: unknown;
+      prevUrl: string | null;
+      prevFilename: string | null;
+    }[] = [];
     for (const row of rows) {
       const url = await ctx.storage.getUrl(row.storageId);
       if (url) {
-        out.push({ short: row.short, url, filename: row.filename });
+        out.push({
+          short: row.short,
+          url,
+          filename: row.filename,
+          updatedAt: row.updatedAt,
+          report: row.report ?? null,
+          prevUrl: row.prevStorageId
+            ? await ctx.storage.getUrl(row.prevStorageId)
+            : null,
+          prevFilename: row.prevFilename ?? null,
+        });
       }
     }
     return out;
+  },
+});
+
+// -- pipeline health --------------------------------------------------------
+
+// One cheap aggregate for the header's health dot: watcher freshness (newest
+// matches push), mail-sync account state, pending inbox actions, and builds
+// stuck past a sane ceiling. Everything here is already in the tables the
+// page fetches - this just folds it server-side so the header costs one call.
+const STUCK_BUILD_MS = 15 * 60 * 1000;
+
+export const getHealth = query({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    const matches = await ctx.db
+      .query("matches")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .collect();
+    let watcherPushedAt: number | null = null;
+    for (const m of matches) {
+      if (watcherPushedAt === null || m.pushedAt > watcherPushedAt) {
+        watcherPushedAt = m.pushedAt;
+      }
+    }
+    const account = await ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    const pending = await ctx.db
+      .query("inboxActions")
+      .withIndex("by_user_state", (q) => q.eq("user", user).eq("state", "pending"))
+      .collect();
+    const builds = await ctx.db
+      .query("resumeBuilds")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .collect();
+    const now = Date.now();
+    const stuckBuilds = builds.filter(
+      (b) => b.status === "building" && now - b.startedAt > STUCK_BUILD_MS,
+    ).length;
+    return {
+      watcherPushedAt,
+      mail: account
+        ? {
+            email: account.email,
+            lastPushAt: account.lastPushAt ?? null,
+            lastSyncAt: account.lastSyncAt ?? null,
+            lastError: account.lastError ?? null,
+            watchExpiration: account.watchExpiration ?? null,
+          }
+        : null,
+      pendingInbox: pending.length,
+      stuckBuilds,
+    };
   },
 });

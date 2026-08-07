@@ -32,6 +32,8 @@ interface LedgerRec {
   title?: unknown;
   location?: unknown;
   url?: unknown;
+  dueAt?: unknown;
+  snoozedUntil?: unknown;
 }
 
 function entriesOf(ledger: RawLedger): Array<[string, LedgerRec]> {
@@ -139,7 +141,9 @@ export function buildTrackerRows(
       title,
       location,
       url,
-      resumeUrl: resumeUrls[short],
+      resumeUrl: resumeUrls[short]?.url,
+      dueAt: asStrings(rec.dueAt) || undefined,
+      snoozedUntil: asStrings(rec.snoozedUntil) || undefined,
     });
   }
 

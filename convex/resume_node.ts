@@ -27,9 +27,9 @@ import {
   parseRewrites,
   type ProjectPayload,
 } from "./resume_prompt";
-import { composeResumeDoc, resumeFilename, type Profile } from "./resume_docx";
+import { composeResumeDoc, resumeFilename, resumeOutline, type Profile } from "./resume_docx";
+import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
-const MAX_PROJECTS = 6; // src/resume/select.py MAX_PROJECTS
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
 const JD_MAX_CHARS = 6000; // generous cap for the tailor prompt excerpt
 
@@ -103,26 +103,69 @@ async function llmCall(system: string, user: string, apiKey: string): Promise<st
   return text;
 }
 
-// Select which projects surface on the resume: bank order, capped at
-// MAX_PROJECTS, base bullet variants. DIVERGENCE from Python (documented):
-// the Python build_plan scores projects against the JD, picks a per-project
-// variant, and page-fits; the Convex builder keeps bank order + base variants
-// and tailors only through the LLM rewrite pass (select.py profile/bank work
-// is out of scope here).
-function selectProjects(profile: Profile): ProjectPayload[] {
-  const entries = Object.entries(profile.projects ?? {}).slice(0, MAX_PROJECTS);
-  return buildProjectPayload(
-    entries.map(([name, p]) => ({
-      name,
-      tech: (p.tech ?? []).join(", "),
-      bullets: p.bullets.base ?? [],
-    })),
+// Select which projects surface on the resume: JD-scored via resume_select
+// (the select.py port - tags x3, tech x2, prose x1, top MAX_PROJECTS),
+// replacing the former bank-order slice, and per project the bullet VARIANT
+// whose text hits the most JD weight (pick_variant parity; ties go to base).
+// Scores and variants ride along into the build report so the user can see
+// why a project was picked, dropped, or shown in a non-base voice.
+function selectForBuild(
+  profile: Profile,
+  jdText: string,
+): {
+  payload: ProjectPayload[];
+  scores: Record<string, number>;
+  variants: Record<string, string>;
+} {
+  const { selected, scores } = scoreSelect(profile, jdText);
+  const jd = analyze(jdText);
+  const variants: Record<string, string> = {};
+  const payload = buildProjectPayload(
+    selected.map(([name, p]) => {
+      const variant = pickVariant(p, jd);
+      variants[name] = variant;
+      return {
+        name,
+        tech: (p.tech ?? []).join(", "),
+        bullets: p.bullets[variant] ?? p.bullets.base ?? [],
+      };
+    }),
   );
+  return { payload, scores, variants };
 }
+
+// What the tailor did, stored next to the artifact it describes (the
+// resumes.report column) and rendered by the web app's report dialog.
+type BuildReport = {
+  builtAt: number;
+  usedLlm: boolean;
+  llmError?: string;
+  jdSource: "manual" | "fetched" | "stub";
+  jdChars: number;
+  instructions?: string;
+  scores: Record<string, number>;
+  notes: string[];
+  projects: {
+    name: string;
+    variant: string;
+    before: string[];
+    after: string[];
+    llmRewritten: boolean;
+    overridden: boolean;
+  }[];
+  outline: string[];
+};
+
+type BuildOverride = { name: string; bullets: string[] };
 
 // The build's executable body. Shared by the runBuild action so the error
 // boundary lives in one place.
-async function performBuild(ctx: ActionCtx, user: string, short: string): Promise<void> {
+async function performBuild(
+  ctx: ActionCtx,
+  user: string,
+  short: string,
+  opts: { jdText?: string; instructions?: string; overrides?: BuildOverride[] } = {},
+): Promise<void> {
   const match = await ctx.runQuery(internal.resume.getMatchInternal, { user, short });
   if (!match) throw new Error("match not found");
   const item = (match.item ?? {}) as {
@@ -143,21 +186,35 @@ async function performBuild(ctx: ActionCtx, user: string, short: string): Promis
     typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data
   ) as Profile;
 
-  // JD text: the real page if we can get it; otherwise degrade to the match's
-  // title/company/location (the Python skips on no JD, but the task directs
-  // the Convex builder to fall back so the resume still builds).
-  let jdText = await fetchJdText(item.url ?? "");
-  if (!jdText) {
-    jdText = [company && `Company: ${company}`, title && `Title: ${title}`, location && `Location: ${location}`]
-      .filter(Boolean)
-      .join("\n");
+  // JD text, most trustworthy source first: user-pasted (a rebuild after the
+  // report said acquisition failed, or an override of a bad fetch), then the
+  // live page, then the title/company/location stub. The source is recorded in
+  // the report - the old builder proceeded on the stub silently, which was the
+  // single worst failure mode of the flagship feature.
+  let jdSource: BuildReport["jdSource"];
+  let jdText: string;
+  const manual = (opts.jdText ?? "").trim();
+  if (manual) {
+    jdSource = "manual";
+    jdText = manual.slice(0, JD_MAX_CHARS);
+  } else {
+    jdText = await fetchJdText(item.url ?? "");
+    jdSource = jdText ? "fetched" : "stub";
+    if (!jdText) {
+      jdText = [company && `Company: ${company}`, title && `Title: ${title}`, location && `Location: ${location}`]
+        .filter(Boolean)
+        .join("\n");
+    }
   }
 
   // Tailor the selected project bullets with the LLM (all failures fall back
   // to the deterministic bank text, exactly like tailor.py never raising).
-  const selected = selectProjects(profile);
+  const { payload: selected, scores, variants } = selectForBuild(profile, jdText);
   const projectDates = new Map(
     Object.entries(profile.projects ?? {}).map(([n, p]) => [n, p.date]),
+  );
+  const before = new Map(
+    selected.map((p) => [p.name, p.bullets.map((b) => b.text)]),
   );
   let content = {
     projects: selected.map((p) => ({
@@ -167,16 +224,30 @@ async function performBuild(ctx: ActionCtx, user: string, short: string): Promis
       bullets: p.bullets.map((b) => b.text),
     })),
   };
+  let usedLlm = false;
+  let llmError: string | undefined;
+  const rewritten = new Set<string>();
+  const notes: string[] = [];
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
     try {
-      const { system, user: userMsg } = assemblePrompt(jdText, selected);
+      // Free-form user guidance rides into the prompt alongside the JD, so
+      // "emphasize the Go work" steers the same rewrite pass a plain build
+      // runs - no separate edit pipeline to maintain.
+      const jdForPrompt = opts.instructions
+        ? `${jdText}\n\nAdditional instructions from the candidate (follow these):\n${opts.instructions.slice(0, 1000)}`
+        : jdText;
+      const { system, user: userMsg } = assemblePrompt(jdForPrompt, selected);
       const text = await llmCall(system, userMsg, apiKey);
       const rewrites = parseRewrites(text);
       const applied = applyRewrites(
         selected.map((p) => ({ name: p.name, bullets: p.bullets.map((b) => b.text) })),
         rewrites,
       );
+      notes.push(...applied.notes);
+      for (const p of applied.projects) {
+        if (p.llmRewritten) rewritten.add(p.name);
+      }
       const bulletsByName = new Map(applied.projects.map((p) => [p.name, p.bullets]));
       content = {
         projects: content.projects.map((p) => ({
@@ -184,8 +255,23 @@ async function performBuild(ctx: ActionCtx, user: string, short: string): Promis
           bullets: bulletsByName.get(p.name) ?? p.bullets,
         })),
       };
+      usedLlm = true;
     } catch (err) {
+      llmError = err instanceof Error ? err.message : String(err);
       console.warn("resume tailor fell back to bank text", err);
+    }
+  } else {
+    notes.push("GEMINI_API_KEY not set - bank text used verbatim");
+  }
+
+  // Hand-edited bullet text wins over everything: it is the user's literal
+  // words, applied after the LLM pass per project name.
+  const overridden = new Set<string>();
+  for (const o of opts.overrides ?? []) {
+    const target = content.projects.find((p) => p.name === o.name);
+    if (target && o.bullets.length) {
+      target.bullets = o.bullets;
+      overridden.add(o.name);
     }
   }
 
@@ -202,12 +288,33 @@ async function performBuild(ctx: ActionCtx, user: string, short: string): Promis
   const blob = new Blob([arrayBuffer], { type: DOCX_MIME });
   const storageId = await ctx.storage.store(blob);
 
-  // Attach replace-on-upsert, then clear the in-flight marker.
+  const report: BuildReport = {
+    builtAt: Date.now(),
+    usedLlm,
+    llmError,
+    jdSource,
+    jdChars: jdText.length,
+    instructions: opts.instructions,
+    scores,
+    notes,
+    projects: content.projects.map((p) => ({
+      name: p.name,
+      variant: variants[p.name] ?? "base",
+      before: before.get(p.name) ?? [],
+      after: p.bullets,
+      llmRewritten: rewritten.has(p.name),
+      overridden: overridden.has(p.name),
+    })),
+    outline: resumeOutline(profile, content),
+  };
+
+  // Attach (keep-N=2 upsert) with the report, then clear the marker.
   await ctx.runMutation(internal.resume.attachResumeInternal, {
     user,
     short,
     filename: resumeFilename(profile, company),
     storageId,
+    report,
   });
   await ctx.runMutation(internal.resume.clearBuild, { user, short });
 }
@@ -218,10 +325,18 @@ async function performBuild(ctx: ActionCtx, user: string, short: string): Promis
 // build never crash-loops the scheduler (same pattern as mail.ts sync).
 // ---------------------------------------------------------------------------
 export const runBuild = internalAction({
-  args: { user: v.string(), short: v.string() },
-  handler: async (ctx, { user, short }) => {
+  args: {
+    user: v.string(),
+    short: v.string(),
+    jdText: v.optional(v.string()),
+    instructions: v.optional(v.string()),
+    overrides: v.optional(
+      v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
+    ),
+  },
+  handler: async (ctx, { user, short, jdText, instructions, overrides }) => {
     try {
-      await performBuild(ctx, user, short);
+      await performBuild(ctx, user, short, { jdText, instructions, overrides });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("resume build failed", err);
