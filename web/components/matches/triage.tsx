@@ -36,6 +36,7 @@ import {
   LayoutList,
   ListChecks,
   Eraser,
+  Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -55,14 +56,20 @@ import {
   fetchBuildStatus,
   fetchResumeUrl,
 } from "@/app/(app)/matches-actions";
-import { CommandPalette, type PaletteAction } from "@/components/command-palette";
+import {
+  CommandPalette,
+  openCommandPalette,
+  type PaletteAction,
+} from "@/components/command-palette";
+import { StatusSelect, type StatusFilter } from "./status-select";
 import { FilterPills, type PillOption } from "@/components/filter-pills";
 import { RefreshControl } from "@/components/refresh-control";
 import { AddUrlDialog } from "./add-url-dialog";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TickWrite } from "@/lib/convex";
 
-type Filter = "all" | "applied" | "saved" | "resumes" | "hidden";
+/** The status filter, shared with the toolbar's select. */
+type Filter = StatusFilter;
 
 const TERM_ORDER = ["Fall 2026", "Spring 2027", "Summer 2027"];
 const UNKNOWN_TERM = "Unknown term";
@@ -127,6 +134,8 @@ function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRo
     } else if (r.dismissed) {
       return false;
     }
+    // "To apply" is the working queue: still open, not yet ticked.
+    if (filter === "todo" && r.applied) return false;
     if (filter === "applied" && !r.applied) return false;
     if (filter === "saved" && !r.saved) return false;
     if (filter === "resumes" && !r.resumeUrl) return false;
@@ -138,8 +147,19 @@ function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRo
   });
 }
 
+const STATUS_KEYS: readonly Filter[] = [
+  "all",
+  "todo",
+  "applied",
+  "saved",
+  "resumes",
+  "hidden",
+];
+
+// Accepts every status the select offers, not just the statline's subset, so
+// a ?filter= deep link to any of them survives.
 const isFilter = (v: string | undefined): v is Filter =>
-  FILTERS.some((f) => f.key === v);
+  STATUS_KEYS.includes(v as Filter);
 
 /** Display label for a term pill ("Unknown term" reads better as "Unknown"). */
 const termLabel = (term: string) =>
@@ -271,6 +291,27 @@ const FOCUS_RING =
  */
 function blurOnPointerActivate(e: React.MouseEvent<HTMLElement>) {
   if (e.detail > 0) e.currentTarget.blur();
+}
+
+/**
+ * Pointer affordance for the command palette, which was otherwise reachable
+ * only by knowing Ctrl/Cmd+K. Shows the shortcut so the keystroke gets learned
+ * rather than replaced.
+ */
+function PaletteButton() {
+  return (
+    <button
+      type="button"
+      onClick={openCommandPalette}
+      title="Command palette"
+      aria-label="Open command palette"
+      aria-keyshortcuts="Control+K Meta+K"
+      className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-line-2 bg-surface px-3 text-[13px] font-medium text-ink-2 transition-colors hover:border-ink-2 hover:text-ink focus-visible:border-accent focus-visible:outline-none"
+    >
+      <Search className="size-3.5" />
+      <span className="hidden font-mono text-[10.5px] sm:inline">⌘K</span>
+    </button>
+  );
 }
 
 function Divider({ className }: { className?: string }) {
@@ -913,9 +954,11 @@ export function Triage({
         <RefreshControl className="ml-auto" />
       </div>
 
-      {/* toolbar - search leads, the term pills sit alongside it, and Add URL
-          stays pinned to the right (wrapping under on narrow viewports) */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      {/* toolbar - the search spans the row with the status select docked at
+          its right end, and the term pills sit on their own line underneath.
+          Add URL and the palette trigger ride the pill row's right edge, which
+          keeps the search line uncluttered at every width. */}
+      <div className="mb-2 flex items-center gap-2">
         <input
           ref={searchRef}
           type="search"
@@ -924,15 +967,23 @@ export function Triage({
           placeholder="Search company, title, location…"
           autoComplete="off"
           aria-label="Search matches"
-          className="w-full min-w-[180px] rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none sm:w-[248px]"
+          className="h-[34px] min-w-0 flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
         />
+        <StatusSelect
+          value={filter}
+          onChange={(next) => setFilter(next)}
+          className="w-[132px]"
+        />
+      </div>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <FilterPills
           label="Filter by term"
           options={termPills}
           value={activeTerm}
           onChange={setTermFilter}
         />
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <PaletteButton />
           <AddUrlDialog />
         </div>
       </div>
