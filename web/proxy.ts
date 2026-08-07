@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
  */
 // Sign-in/up are catch-all routes: Clerk mounts subpaths under them (e.g.
 // /sign-in/sso-callback for OAuth), so the whole prefix must stay public.
-const PUBLIC_RE = /^\/(sign-(in|up)(\/.*)?|test-add-url(\/.*)?)$/;
+const PUBLIC_RE = /^\/sign-(in|up)(\/.*)?$/;
 
 export default clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
