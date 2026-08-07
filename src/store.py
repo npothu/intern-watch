@@ -641,6 +641,15 @@ class ConvexStore:
                     "storageId": storage_id, "secret": self.secret})
         return storage_id
 
+    def put_profile(self, user: str, data: dict) -> None:
+        """Upsert a user's resume profile (bank) JSON into the `profiles`
+        table, so the Convex-native resume builder can compose a tailored
+        .docx without reading the repo. Used by
+        scripts/migrate_profiles_to_convex.py to seed a deployment."""
+        self._post("mutation", "putProfile",
+                   {"user": user, "data": data, "secret": self.secret},
+                   module="resume")
+
     def get_resume_urls(self, user: str) -> dict[str, str]:
         """The deployment's serving URLs for the user's built resumes, one
         batched query (never one round-trip per row). Surfaces link these

@@ -158,4 +158,31 @@ export default defineSchema({
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),
+
+  // One resume profile (bank) JSON per user - the same shape as
+  // users/<user>_resume.json - so the Convex-native resume builder can
+  // compose a tailored .docx without reading the repo. `data` is the
+  // user's bank document (header/education/skills/work/projects/community).
+  // putProfile replaces it on upsert (the migration script seeds it).
+  profiles: defineTable({
+    user: v.string(),
+    data: v.any(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["user"]),
+
+  // In-flight on-demand resume builds. A row is upserted to "building" when
+  // requestBuild schedules runBuild; runBuild deletes it on success or patches
+  // it to "failed" (with a truncated error) on failure. The hosted web app
+  // polls this via getBuildStatus to show building/failed before the built
+  // resume shows up in `resumes`.
+  resumeBuilds: defineTable({
+    user: v.string(),
+    short: v.string(),
+    status: v.string(),                 // "building" | "failed"
+    error: v.optional(v.string()),
+    startedAt: v.number(),
+  })
+    .index("by_user_short", ["user", "short"])
+    .index("by_user", ["user"]),
 });

@@ -42,3 +42,5 @@ next-env.d.ts
 
 .vercel
 .env*
+# .env.example is the committed env-var reference (see web/README.md)
+!.env.example

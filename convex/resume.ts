@@ -1,0 +1,244 @@
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { v } from "convex/values";
+import { internal } from "./_generated/api";
+
+// Convex-native on-demand resume builder.
+//
+// The hosted web app's "build resume" button previously dispatched a GitHub
+// Actions workflow (src.resume.batch) to produce a tailored .docx and commit
+// it. This module replaces that backend entirely: the build runs inside a
+// Convex action against a resume profile stored in the `profiles` table, and
+// the finished .docx lands in Convex file storage via the existing `resumes`
+// table (the same one the Python `ConvexStore.put_resume` driver writes).
+//
+// Flow: requestBuild (fast, returns {ok:true}) upserts a `resumeBuilds` row to
+// "building" and schedules resume_node.runBuild (runAfter 0); runBuild fetches
+// the match's JD text, asks the configured LLM (Gemini, like the mail-sync
+// precedent) to rewrite the selected project bullets, composes the .docx,
+// stores its bytes in Convex storage, and attaches it to the resumes row
+// (replace-on-upsert). On success the resumeBuilds row is deleted; on failure
+// it is patched to "failed" with a truncated error so the web app's
+// getBuildStatus can show it.
+//
+// This file holds the default-runtime (V8 isolate) surface: the public
+// mutations/query plus the internal db-touching helpers the build action
+// needs. The build action itself (runBuild) lives in resume_node.ts under
+// "use node" - a "use node" file may only export actions, and the JD fetch ->
+// Gemini -> `docx` npm generation pipeline is kept there so it never risks a
+// runtime-only failure against the isolate's missing Node globals (see
+// mail.ts's atob/TextDecoder precedent). Actions have no ctx.db, so runBuild
+// reaches the database through the internal query/mutations below via
+// ctx.runQuery / ctx.runMutation.
+//
+// Every public endpoint is gated on the same TRACKER_SECRET as tracker.ts -
+// this builder is not public and reads/writes per-user data.
+
+// The TRACKER_SECRET env var set in the Convex dashboard.
+function checkSecret(secret: string) {
+  if (secret !== process.env.TRACKER_SECRET) {
+    throw new Error("bad secret");
+  }
+}
+
+const ERROR_MAX = 200; // truncated error message length for the status row
+
+// ---------------------------------------------------------------------------
+// Public mutation: kick off a build. Deliberately thin and synchronous so the
+// Vercel server action returns fast; the heavy lifting is offloaded to the
+// scheduled runBuild action.
+// ---------------------------------------------------------------------------
+export const requestBuild = mutation({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    // Validate the preconditions before spending a scheduler slot: the user
+    // must have a resume profile AND a matching match row to build from.
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (!profile) {
+      return { ok: false as const, error: "No resume profile on file for this user." };
+    }
+    const match = await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (!match) {
+      return { ok: false as const, error: "Match not found." };
+    }
+    // Upsert the in-flight marker to "building".
+    const existing = await ctx.db
+      .query("resumeBuilds")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    const row = {
+      user,
+      short,
+      status: "building" as const,
+      error: undefined,
+      startedAt: Date.now(),
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, row);
+    } else {
+      await ctx.db.insert("resumeBuilds", row);
+    }
+    await ctx.scheduler.runAfter(0, internal.resume_node.runBuild, { user, short });
+    return { ok: true as const };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Public query: current build status for one (user, short).
+// Returns "building" | {status:"failed", error} | null (null = not building;
+// a successful build deletes the row, so the caller then reads the resume URL).
+// ---------------------------------------------------------------------------
+export const getBuildStatus = query({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("resumeBuilds")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (!row) return null;
+    if (row.status === "failed") {
+      return { status: "failed" as const, error: row.error };
+    }
+    return "building" as const;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Public mutation: upsert a user's resume profile (bank) JSON. Used by the
+// migration script (scripts/migrate_profiles_to_convex.py) to seed Convex.
+// ---------------------------------------------------------------------------
+export const putProfile = mutation({
+  args: { user: v.string(), data: v.any(), secret: v.string() },
+  handler: async (ctx, { user, data, secret }) => {
+    checkSecret(secret);
+    const existing = await ctx.db
+      .query("profiles")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { data, updatedAt: Date.now() });
+    } else {
+      await ctx.db.insert("profiles", { user, data, updatedAt: Date.now() });
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Internal queries: db reads for the "use node" runBuild action, which has no
+// ctx.db of its own (no action does - only query/mutation functions do).
+// ---------------------------------------------------------------------------
+export const getMatchInternal = internalQuery({
+  args: { user: v.string(), short: v.string() },
+  handler: async (ctx, { user, short }) => {
+    return await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+  },
+});
+
+export const getProfileInternal = internalQuery({
+  args: { user: v.string() },
+  handler: async (ctx, { user }) => {
+    return await ctx.db
+      .query("profiles")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Internal mutation: attach a built resume's storage id to its (user, short)
+// row, replacing any earlier build and deleting the old storage object so a
+// rebuild never leaks orphaned files. This is the same replace-on-upsert the
+// public tracker.attachResume performs - extracted here as an internal
+// mutation so the action can reuse it without duplicating the logic.
+// ---------------------------------------------------------------------------
+export const attachResumeInternal = internalMutation({
+  args: {
+    user: v.string(),
+    short: v.string(),
+    filename: v.string(),
+    storageId: v.id("_storage"),
+  },
+  handler: async (ctx, { user, short, filename, storageId }) => {
+    const existing = await ctx.db
+      .query("resumes")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (existing) {
+      await ctx.storage.delete(existing.storageId);
+      await ctx.db.patch(existing._id, { filename, storageId, updatedAt: Date.now() });
+    } else {
+      await ctx.db.insert("resumes", {
+        user,
+        short,
+        filename,
+        storageId,
+        updatedAt: Date.now(),
+      });
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Internal mutation: patch a resumeBuilds row to "failed" (or insert one if a
+// build somehow runs without the marker). Error text is truncated.
+// ---------------------------------------------------------------------------
+export const markBuildFailed = internalMutation({
+  args: { user: v.string(), short: v.string(), error: v.string() },
+  handler: async (ctx, { user, short, error }) => {
+    const message =
+      error.length > ERROR_MAX ? `${error.slice(0, ERROR_MAX - 3)}...` : error;
+    const existing = await ctx.db
+      .query("resumeBuilds")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { status: "failed", error: message });
+    } else {
+      await ctx.db.insert("resumeBuilds", {
+        user,
+        short,
+        status: "failed",
+        error: message,
+        startedAt: Date.now(),
+      });
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Internal mutation: delete the in-flight marker on a successful build.
+// ---------------------------------------------------------------------------
+export const clearBuild = internalMutation({
+  args: { user: v.string(), short: v.string() },
+  handler: async (ctx, { user, short }) => {
+    const existing = await ctx.db
+      .query("resumeBuilds")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+  },
+});

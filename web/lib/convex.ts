@@ -27,7 +27,8 @@ type ConvexStatus = { status?: string; value?: unknown; errorMessage?: string };
 async function post(
   kind: "query" | "mutation",
   fn: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  module: string = "tracker"
 ): Promise<unknown> {
   if (!CONVEX_URL) {
     throw new ConvexError("CONVEX_URL is not set (see web/.env.example)");
@@ -42,7 +43,7 @@ async function post(
       headers: { "Content-Type": "application/json" },
       // Same shape as src/store.py ConvexStore._post.
       body: JSON.stringify({
-        path: `tracker:${fn}`,
+        path: `${module}:${fn}`,
         args: { ...args, secret: CONVEX_SECRET },
         format: "json",
       }),
@@ -171,4 +172,35 @@ export async function getTrackerUserData(user: string): Promise<TrackerUserData>
     getResumeUrls(user),
   ]);
   return { matches, ticks, ledger, resumes };
+}
+
+/** The response of the `resume:requestBuild` mutation: {ok:true} on accept,
+ * or {ok:false, error} when the profile/matches are missing. */
+export type ResumeBuildResponse = { ok: boolean; error?: string };
+
+/** Kick off an on-demand resume build for one match inside Convex. */
+export async function requestResumeBuild(
+  user: string,
+  short: string
+): Promise<ResumeBuildResponse> {
+  const value = await post("mutation", "requestBuild", { user, short }, "resume");
+  const res = value as ResumeBuildResponse | null;
+  return res && typeof res.ok === "boolean" ? res : { ok: true };
+}
+
+/** The live build status for one match, per `resume:getBuildStatus`: while the
+ * scheduled action is running -> "building"; after a failure -> the error; once
+ * the build row is deleted (success) or never requested -> null. */
+export type BuildStatus =
+  | "building"
+  | { status: "failed"; error: string }
+  | null;
+
+/** Poll a single match's resume-build status. */
+export async function fetchBuildStatus(
+  user: string,
+  short: string
+): Promise<BuildStatus> {
+  const value = await post("query", "getBuildStatus", { user, short }, "resume");
+  return value as BuildStatus;
 }

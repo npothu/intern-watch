@@ -8,10 +8,15 @@ import {
   useState,
   type TouchEvent as ReactTouchEvent,
 } from "react";
-import { Check, Star, X, Undo2, FileText } from "lucide-react";
+import { Check, Star, X, Undo2, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { writeTicks } from "@/app/(app)/matches-actions";
+import {
+  writeTicks,
+  requestResumeBuild,
+  fetchBuildStatus,
+  fetchResumeUrl,
+} from "@/app/(app)/matches-actions";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TickWrite } from "@/lib/convex";
 
@@ -44,6 +49,17 @@ const FLUSH_IDLE = 500;
 const FLUSH_CAP = 50;
 const BURST_MS = 6000;
 const SWIPE_THRESHOLD = 70;
+const BUILD_POLL_MS = 15000;
+// Client-side safety net only: with the build running inside Convex, the
+// server status (resume:getBuildStatus) is authoritative and the 8-minute
+// hard-stop is gone. Keep a generous 15-minute guard so a hung action still
+// surfaces as a failed row instead of spinning forever.
+const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** One per-row resume button's Study-4 state machine. */
+type BuildState = "idle" | "building" | "built" | "failed";
+/** In-flight trackers; a failed build carries its server error string. */
+type InFlight = "building" | { failed: string };
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "matches" },
@@ -164,6 +180,33 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
 
   const isMobile = useIsMobile();
 
+  // Per-row resume build state. Only in-flight (building) and failed rows are
+  // tracked here; `built` is derived from the row's resumeUrl, and a page
+  // reload drops the map (see the build-state machine notes). Timestamps live
+  // in a ref so polling survives effect re-runs without resetting the timeout.
+  const [builds, setBuilds] = useState<Record<string, InFlight>>({});
+  const buildStartedAt = useRef<Record<string, number>>({});
+
+  const buildStateFor = useCallback(
+    (row: TriageRow): BuildState => {
+      if (row.resumeUrl) return "built";
+      const s = builds[row.short];
+      if (s === "building") return "building";
+      if (typeof s === "object" && s?.failed !== undefined) return "failed";
+      return "idle";
+    },
+    [builds]
+  );
+
+  /** The server error message for a failed build (title attr on the button). */
+  const buildErrorFor = useCallback(
+    (row: TriageRow): string | undefined => {
+      const s = builds[row.short];
+      return typeof s === "object" && s?.failed !== undefined ? s.failed : undefined;
+    },
+    [builds]
+  );
+
   const updateRow = useCallback((short: string, patch: Partial<TriageRow>) => {
     setRows((prev) =>
       prev.map((r) => (r.short === short ? { ...r, ...patch } : r))
@@ -192,13 +235,6 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
 
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
-
-  // Scroll the cursor row into view whenever it changes.
-  useEffect(() => {
-    if (!cursor) return;
-    const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
-    el?.scrollIntoView?.({ block: "nearest" });
-  }, [cursor]);
 
   function sealBurst() {
     if (burstTimer.current) {
@@ -337,6 +373,108 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     if (r?.url) window.open(r.url, "_blank", "noopener");
   }
 
+  // Study-4 build trigger: optimistic "building", then a server-side dispatch.
+  // A rejected dispatch (e.g. token missing, HTTP error) flips the row to the
+  // failed/retry state immediately.
+  function startBuild(short: string) {
+    const row = rows.find((x) => x.short === short);
+    if (!row || row.resumeUrl) return;
+    if (builds[short] === "building") return;
+    // Drop any stale timestamp so the poller re-stamps a fresh one on its
+    // first tick (a retry must not inherit a failed run's deadline).
+    delete buildStartedAt.current[short];
+    setBuilds((prev) => ({ ...prev, [short]: "building" }));
+    void requestResumeBuild(short).then((res) => {
+      if (res.ok) return;
+      setBuilds((prev) => ({ ...prev, [short]: { failed: res.error || "Couldn't start the resume build." } }));
+      toast.error(res.error || "Couldn't start the resume build.");
+    });
+  }
+
+  // Dock/keyboard `b` acts on the cursor row, mirroring its button state:
+  // built opens the resume, building is a no-op (button disabled), otherwise
+  // it dispatches. No auto-advance.
+  function dockBuild() {
+    if (!currentRow) return;
+    if (currentRow.resumeUrl) {
+      window.open(currentRow.resumeUrl, "_blank", "noopener");
+      return;
+    }
+    startBuild(currentRow.short);
+  }
+
+  useEffect(() => {
+    if (!cursor) return;
+    const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [cursor]);
+
+  // While any build is in flight, poll every 15s. The server's build status
+  // (resume:getBuildStatus) is checked FIRST: still "building" -> keep the
+  // spinner; the action patched to "failed" -> drop the row to the failed
+  // state, surfacing the server error. Only when the status row is gone
+  // (null, i.e. the build succeeded and cleared it, or a client reload) do we
+  // fall through to the resume URL to move the row to "built". A 15-minute
+  // client safety net catches a hung action. Re-arms whenever `builds`
+  // changes, so a completed/failed build stops polling right away. Start
+  // timestamps are stamped lazily on the first tick (async interval callbacks
+  // keep Date.now out of the component's pure render scope).
+  useEffect(() => {
+    const building = Object.entries(builds)
+      .filter(([, s]) => s === "building")
+      .map(([k]) => k);
+    if (!building.length) return;
+    const timer = window.setInterval(() => {
+      for (const s of [...building]) {
+        if (buildStartedAt.current[s] === undefined) {
+          buildStartedAt.current[s] = Date.now();
+        }
+        if (Date.now() - buildStartedAt.current[s] > BUILD_TIMEOUT_MS) {
+          setBuilds((prev) =>
+            prev[s] === "building"
+              ? { ...prev, [s]: { failed: "Build timed out after 15 minutes." } }
+              : prev
+          );
+          continue;
+        }
+        void (async () => {
+          let status;
+          try {
+            status = await fetchBuildStatus(s);
+          } catch {
+            return; // transient error - keep polling
+          }
+          if (status === "building") return; // still running
+          if (status && typeof status === "object" && status.status === "failed") {
+            // The action patched the build row to failed with its error.
+            setBuilds((prev) =>
+              prev[s] === "building"
+                ? { ...prev, [s]: { failed: status.error || "Build failed." } }
+                : prev
+            );
+            return;
+          }
+          // status is null: the build row was cleared (success) or this client
+          // missed the request - check whether the resume URL has landed.
+          let url: string | null = null;
+          try {
+            url = await fetchResumeUrl(s);
+          } catch {
+            return;
+          }
+          if (!url) return;
+          updateRow(s, { resumeUrl: url });
+          setBuilds((prev) => {
+            const next = { ...prev };
+            delete next[s];
+            return next;
+          });
+        })();
+      }
+    }, BUILD_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [builds, updateRow]);
+
   function actOnCurrent(kind: "applied" | "saved" | "hide") {
     if (!currentRow) return;
     if (kind === "applied") {
@@ -381,6 +519,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
       } else if (k === "u") {
         e.preventDefault();
         undoBurst();
+      } else if (k === "b") {
+        e.preventDefault();
+        dockBuild();
       } else if (k === "Enter") {
         e.preventDefault();
         openRow();
@@ -489,6 +630,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                     onToggleSaved={() => toggleSaved(r.short)}
                     onHide={() => hideShort(r.short)}
                     onRestore={() => restoreShort(r.short)}
+                    buildState={buildStateFor(r)}
+                    buildError={buildErrorFor(r)}
+                    onBuild={() => startBuild(r.short)}
                   />
                 ))}
               </div>
@@ -504,6 +648,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                     onToggleSaved={() => toggleSaved(r.short)}
                     onHide={() => hideShort(r.short)}
                     onRestore={() => restoreShort(r.short)}
+                    buildState={buildStateFor(r)}
+                    buildError={buildErrorFor(r)}
+                    onBuild={() => startBuild(r.short)}
                   />
                 ))}
               </div>
@@ -516,6 +663,8 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
         onNav={(d) => move(d)}
         onAct={(kind) => actOnCurrent(kind)}
         onOpen={() => openRow()}
+        onBuild={dockBuild}
+        buildState={currentRow ? buildStateFor(currentRow) : "idle"}
       />
 
       {burst.visible && (
@@ -545,6 +694,91 @@ function EmptyState({ title, hint }: { title: string; hint: string }) {
   );
 }
 
+/**
+ * Study-4 build-resume state machine: idle -> building -> built -> failed.
+ * One button, four states, near-constant footprint (min-width + centered
+ * content) so the row's hide ✕ never shifts while a build runs.
+ */
+function ResumeButton({
+  state,
+  href,
+  onBuild,
+  error,
+}: {
+  state: BuildState;
+  href: string | null;
+  onBuild: () => void;
+  error?: string;
+}) {
+  const base =
+    "inline-flex min-w-[98px] items-center justify-center gap-1.5 rounded-[5px] border px-2 py-[5px] text-[12px] font-medium whitespace-nowrap transition-colors select-none";
+  if (state === "built") {
+    return (
+      <a
+        data-open
+        href={href ?? "#"}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          base,
+          "border-[color-mix(in_srgb,var(--color-accent)_42%,transparent)] bg-surface text-accent hover:border-ink-2"
+        )}
+      >
+        <FileText className="size-3.5" /> resume
+      </a>
+    );
+  }
+  if (state === "building") {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-busy="true"
+        className={cn(
+          base,
+          "cursor-default border-line-2 bg-surface text-ink-2"
+        )}
+      >
+        <Loader2 className="size-3.5 animate-spin" /> building…
+      </button>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <button
+        type="button"
+        title={error}
+        onClick={(e) => {
+          e.stopPropagation();
+          onBuild();
+        }}
+        className={cn(
+          base,
+          "cursor-pointer border-[color-mix(in_srgb,var(--color-red)_42%,transparent)] bg-surface text-red hover:border-ink-2"
+        )}
+      >
+        retry build
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onBuild();
+      }}
+      className={cn(
+        base,
+        "cursor-pointer border-[color-mix(in_srgb,var(--color-accent)_42%,transparent)] bg-surface text-accent hover:border-ink-2"
+      )}
+    >
+      <FileText className="size-3.5" /> build resume
+    </button>
+  );
+}
+
 function RowView({
   row,
   isCursor,
@@ -553,6 +787,9 @@ function RowView({
   onToggleSaved,
   onHide,
   onRestore,
+  buildState,
+  buildError,
+  onBuild,
 }: {
   row: TriageRow;
   isCursor: boolean;
@@ -561,6 +798,9 @@ function RowView({
   onToggleSaved: () => void;
   onHide: () => void;
   onRestore: () => void;
+  buildState: BuildState;
+  buildError?: string;
+  onBuild: () => void;
 }) {
   const { short, company, title, location, salary, added, applied, saved, dismissed } = row;
   return (
@@ -639,18 +879,7 @@ function RowView({
 
       {/* actions */}
       <div className="flex items-center gap-1.5 self-center">
-        {row.resumeUrl && (
-          <a
-            data-open
-            href={row.resumeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1.5 rounded-[5px] border border-[color-mix(in_srgb,var(--color-accent)_42%,transparent)] bg-surface px-2 py-[5px] text-[12px] font-medium whitespace-nowrap text-accent transition-colors hover:border-ink-2"
-          >
-            <FileText className="size-3.5" /> resume
-          </a>
-        )}
+        <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
         {dismissed ? (
           <button
             type="button"
@@ -686,6 +915,9 @@ function MobileCard({
   onToggleSaved,
   onHide,
   onRestore,
+  buildState,
+  buildError,
+  onBuild,
 }: {
   row: TriageRow;
   isCursor: boolean;
@@ -695,6 +927,9 @@ function MobileCard({
   onToggleSaved: () => void;
   onHide: () => void;
   onRestore: () => void;
+  buildState: BuildState;
+  buildError?: string;
+  onBuild: () => void;
 }) {
   const [drag, setDrag] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -854,17 +1089,7 @@ function MobileCard({
             >
               Open
             </button>
-            {row.resumeUrl && (
-              <a
-                href={row.resumeUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="inline-flex items-center gap-1 rounded-md border border-[color-mix(in_srgb,var(--color-accent)_42%,transparent)] bg-surface px-2.5 py-1.5 text-[12px] font-medium text-accent transition-colors hover:border-ink-2"
-              >
-                <FileText className="size-3" /> Resume
-              </a>
-            )}
+            <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
             <button
               type="button"
               onClick={(e) => {
@@ -916,10 +1141,14 @@ function Dock({
   onNav,
   onAct,
   onOpen,
+  onBuild,
+  buildState,
 }: {
   onNav: (d: number) => void;
   onAct: (kind: "applied" | "saved" | "hide") => void;
   onOpen: () => void;
+  onBuild: () => void;
+  buildState: BuildState;
 }) {
   const kbd =
     "rounded border border-line-2 bg-surface px-1 py-px font-mono text-[10.5px] font-medium text-ink-2";
@@ -938,9 +1167,11 @@ function Dock({
           | "applied"
           | "saved"
           | "hide"
+          | "build"
           | "open"
           | undefined;
         if (act === "up" || act === "down") onNav(act === "up" ? -1 : 1);
+        else if (act === "build") onBuild();
         else if (act === "open") onOpen();
         else if (act) onAct(act);
       }}
@@ -962,6 +1193,20 @@ function Dock({
         <span className={kbd}>h</span> <span className={label}>hide</span>
       </button>
       <Divider />
+      <button
+        type="button"
+        data-act="build"
+        disabled={buildState === "building"}
+        title={buildState === "built" ? "open resume" : "build resume"}
+        className={cn(db, "disabled:opacity-70")}
+      >
+        <span className={kbd}>b</span>{" "}
+        {buildState === "building" ? (
+          <Loader2 className="size-3.5 animate-spin text-ink-2" />
+        ) : (
+          <span className={label}>build resume</span>
+        )}
+      </button>
       <button type="button" data-act="open" className={db}>
         <span className={kbd}>↵</span> <span className={label}>open</span>
       </button>
