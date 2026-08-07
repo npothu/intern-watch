@@ -517,6 +517,29 @@ def test_get_resume_urls_empty_on_api_error(monkeypatch, tmp_path):
     assert _make_store(monkeypatch, tmp_path).get_resume_urls("example") == {}
 
 
+def test_put_profile_sends_data_as_a_json_string(monkeypatch, tmp_path):
+    """Convex field names must be non-control ASCII, so a profile dict (which
+    can carry user-authored dict keys, e.g. a project name with an em dash)
+    is sent as a JSON string, not the raw object - inserting such an object
+    server-side fails with an opaque "Server Error"."""
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        return _success(None)
+
+    _mock_client(monkeypatch, handler)
+    data = {"header": {"name": "Alex"},
+            "projects": {"Sys-savesync — Save Sync": {"tech": ["C"]}}}
+    _make_store(monkeypatch, tmp_path).put_profile("example", data)
+    assert calls[0]["path"] == "resume:putProfile"
+    assert calls[0]["args"]["user"] == "example"
+    assert calls[0]["args"]["secret"] == "secret"
+    assert isinstance(calls[0]["args"]["data"], str)
+    assert json.loads(calls[0]["args"]["data"]) == data
+
+
 # -- constructor + factory -------------------------------------------------
 
 def test_constructor_raises_without_env(monkeypatch, tmp_path):

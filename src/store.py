@@ -645,9 +645,16 @@ class ConvexStore:
         """Upsert a user's resume profile (bank) JSON into the `profiles`
         table, so the Convex-native resume builder can compose a tailored
         .docx without reading the repo. Used by
-        scripts/migrate_profiles_to_convex.py to seed a deployment."""
+        scripts/migrate_profiles_to_convex.py to seed a deployment.
+
+        Sent as a JSON string, not the raw dict: Convex field names must be
+        non-control ASCII, and profile JSON can carry user-authored dict keys
+        (e.g. a project name with an em dash) that fail as object fields with
+        an opaque "Server Error". putProfile validates and stores the string
+        as-is; the build's reader parses it back out."""
         self._post("mutation", "putProfile",
-                   {"user": user, "data": data, "secret": self.secret},
+                   {"user": user, "data": json.dumps(data),
+                    "secret": self.secret},
                    module="resume")
 
     def get_resume_urls(self, user: str) -> dict[str, str]:

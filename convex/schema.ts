@@ -161,9 +161,15 @@ export default defineSchema({
 
   // One resume profile (bank) JSON per user - the same shape as
   // users/<user>_resume.json - so the Convex-native resume builder can
-  // compose a tailored .docx without reading the repo. `data` is the
-  // user's bank document (header/education/skills/work/projects/community).
-  // putProfile replaces it on upsert (the migration script seeds it).
+  // compose a tailored .docx without reading the repo. `data` holds the
+  // user's bank document (header/education/skills/work/projects/community)
+  // serialized as a JSON string, not a raw object: Convex field names must
+  // be non-control ASCII, and profile JSON can carry user-authored dict keys
+  // (e.g. a project name with an em dash) that fail as object fields.
+  // putProfile validates + stores the string; older rows written before this
+  // fix may still hold a raw object, and getProfileInternal's reader
+  // tolerates both. putProfile replaces the row on upsert (the migration
+  // script seeds it).
   profiles: defineTable({
     user: v.string(),
     data: v.any(),

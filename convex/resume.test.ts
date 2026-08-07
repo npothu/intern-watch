@@ -1,5 +1,8 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import { convexTest } from "convex-test";
 import { Document } from "docx";
+import schema from "./schema";
+import * as resume from "./resume";
 import {
   applyRewrites,
   assemblePrompt,
@@ -13,6 +16,12 @@ import {
   resumeOutline,
   type Profile,
 } from "./resume_docx";
+
+const SECRET = "test-tracker-secret";
+
+beforeAll(() => {
+  process.env.TRACKER_SECRET = SECRET;
+});
 
 // Pure-part tests for the Convex-native resume builder: the LLM prompt
 // assembly (port of src/resume/tailor.py) and the .docx section composition
@@ -194,5 +203,115 @@ describe("resume_docx: section composition (render.py port)", () => {
     };
     const lines = resumeOutline(noWork, CONTENT);
     expect(lines).not.toContain("Work Experience");
+  });
+});
+
+describe("resume.ts: putProfile stores an opaque JSON string", () => {
+  // Convex field names must be non-control ASCII, so profile JSON (which can
+  // carry user-authored dict keys, e.g. a project name with an em dash) is
+  // stored as a JSON string rather than a raw object - inserting such an
+  // object fails with an opaque "Server Error". These tests cover the string
+  // contract across putProfile and the runBuild read path (getProfileInternal
+  // + the same typeof-string normalizer performBuild uses).
+
+  test("putProfile stores data as a string and getProfileInternal round-trips it", async () => {
+    const t = convexTest(schema);
+    const data = { header: { name: "Alex Example" }, projects: {} };
+    await t.mutation(resume.putProfile, {
+      user: "u1",
+      data: JSON.stringify(data),
+      secret: SECRET,
+    });
+    const row = await t.run(async (ctx) =>
+      ctx.db.query("profiles").withIndex("by_user", (q) => q.eq("user", "u1")).first(),
+    );
+    expect(typeof row!.data).toBe("string");
+    expect(JSON.parse(row!.data as string)).toEqual(data);
+  });
+
+  test("putProfile upserts (replaces, does not duplicate) on a second call", async () => {
+    const t = convexTest(schema);
+    await t.mutation(resume.putProfile, {
+      user: "u1",
+      data: JSON.stringify({ v: 1 }),
+      secret: SECRET,
+    });
+    await t.mutation(resume.putProfile, {
+      user: "u1",
+      data: JSON.stringify({ v: 2 }),
+      secret: SECRET,
+    });
+    const rows = await t.run(async (ctx) => ctx.db.query("profiles").collect());
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].data as string)).toEqual({ v: 2 });
+  });
+
+  test("putProfile rejects invalid JSON", async () => {
+    const t = convexTest(schema);
+    await expect(
+      t.mutation(resume.putProfile, {
+        user: "u1",
+        data: "{not valid json",
+        secret: SECRET,
+      }),
+    ).rejects.toThrow("profile data must be valid JSON");
+  });
+
+  test("putProfile rejects a bad secret", async () => {
+    const t = convexTest(schema);
+    await expect(
+      t.mutation(resume.putProfile, {
+        user: "u1",
+        data: JSON.stringify({}),
+        secret: "wrong",
+      }),
+    ).rejects.toThrow("bad secret");
+  });
+
+  test("a non-ASCII (em dash) dict key round-trips through putProfile and the runBuild read path", async () => {
+    const t = convexTest(schema);
+    const projectName = "Sys-savesync — Background Save Sync Sysmodule";
+    const data = {
+      header: { name: "Alex Example" },
+      projects: {
+        [projectName]: {
+          tech: ["C"],
+          date: "2026",
+          bullets: { base: ["Wrote a save-sync sysmodule."] },
+        },
+      },
+    };
+    // The bug: inserting `data` as a raw object (with the em-dash key) fails
+    // with an opaque Server Error. Sending it as a JSON string sidesteps
+    // that field-name constraint entirely.
+    await t.mutation(resume.putProfile, {
+      user: "u1",
+      data: JSON.stringify(data),
+      secret: SECRET,
+    });
+    const row = await t.query(resume.getProfileInternal, { user: "u1" });
+    // Same normalizer performBuild applies before treating profileRow.data as
+    // a Profile.
+    const profile =
+      typeof row!.data === "string" ? JSON.parse(row!.data as string) : row!.data;
+    expect(Object.keys(profile.projects)).toEqual([projectName]);
+    expect(profile.projects[projectName].bullets.base[0]).toBe(
+      "Wrote a save-sync sysmodule.",
+    );
+  });
+
+  test("legacy object-shaped rows (written before this fix) are tolerated by the read-path normalizer", async () => {
+    const t = convexTest(schema);
+    const data = { header: { name: "Legacy User" }, projects: {} };
+    // Bypass putProfile to simulate a row written before the string contract
+    // (schema keeps `data: v.any()` for exactly this reason).
+    await t.run(async (ctx) => {
+      await ctx.db.insert("profiles", { user: "u1", data, updatedAt: Date.now() });
+    });
+    const row = await t.query(resume.getProfileInternal, { user: "u1" });
+    expect(typeof row!.data).toBe("object");
+    const profile =
+      typeof row!.data === "string" ? JSON.parse(row!.data as string) : row!.data;
+    expect(profile).toEqual(data);
   });
 });

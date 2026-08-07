@@ -119,11 +119,23 @@ export const getBuildStatus = query({
 // ---------------------------------------------------------------------------
 // Public mutation: upsert a user's resume profile (bank) JSON. Used by the
 // migration script (scripts/migrate_profiles_to_convex.py) to seed Convex.
+//
+// `data` is the profile's JSON serialized as a string, not stored as a raw
+// object: Convex field names must be non-control ASCII, and profile JSON can
+// carry user-authored dict keys (e.g. a project name with an em dash) that
+// fail as object field names with an opaque "Server Error". Storing the
+// already-serialized string sidesteps the constraint entirely; the reader
+// (resume_node.ts's runBuild, via getProfileInternal) parses it back out.
 // ---------------------------------------------------------------------------
 export const putProfile = mutation({
-  args: { user: v.string(), data: v.any(), secret: v.string() },
+  args: { user: v.string(), data: v.string(), secret: v.string() },
   handler: async (ctx, { user, data, secret }) => {
     checkSecret(secret);
+    try {
+      JSON.parse(data);
+    } catch {
+      throw new Error("profile data must be valid JSON");
+    }
     const existing = await ctx.db
       .query("profiles")
       .withIndex("by_user", (q) => q.eq("user", user))

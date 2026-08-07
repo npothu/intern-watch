@@ -137,7 +137,11 @@ async function performBuild(ctx: ActionCtx, user: string, short: string): Promis
 
   const profileRow = await ctx.runQuery(internal.resume.getProfileInternal, { user });
   if (!profileRow) throw new Error("profile not found");
-  const profile = profileRow.data as Profile;
+  // `data` is a JSON string (putProfile's contract - object storage rejects
+  // non-ASCII dict keys); tolerate legacy rows written as a raw object.
+  const profile = (
+    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data
+  ) as Profile;
 
   // JD text: the real page if we can get it; otherwise degrade to the match's
   // title/company/location (the Python skips on no JD, but the task directs
