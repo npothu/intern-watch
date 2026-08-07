@@ -469,3 +469,138 @@ describe("manual rows survive the watcher's snapshot prune", () => {
     expect(left).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// deleteMatch + stale ingest cleanup: removing a job must be re-addable
+// ---------------------------------------------------------------------------
+describe("deleteMatch and stale ingest records", () => {
+  const URL_A = "https://jobs.ashbyhq.com/acme/abc-123/application";
+
+  /** Drive a URL all the way to a done ingest with a match row. */
+  async function addJob(t: any, url: string) {
+    const req = await t.mutation(ingest.requestIngest, { user: "u1", url, secret: SECRET });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          `<script type="application/ld+json">{"@type":"JobPosting","title":"SWE Intern","hiringOrganization":{"name":"Acme"}}</script>`,
+          { status: 200 }
+        )
+      )
+    );
+    const { runIngest } = await import("./ingest_node");
+    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
+    vi.unstubAllGlobals();
+    return req;
+  }
+
+  test("a deleted job can be added again", async () => {
+    const t = convexTest(schema);
+    const tracker = await import("./tracker");
+
+    const first = await addJob(t, URL_A);
+    expect(
+      (await t.query(ingest.getIngestStatus, { user: "u1", ingestId: first.ingestId as any, secret: SECRET }))?.status
+    ).toBe("done");
+
+    // Re-adding while it is present is correctly refused.
+    const dup = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    expect(dup.status).toBe("already_exists");
+
+    const del = await t.mutation(tracker.deleteMatch, {
+      user: "u1",
+      short: first.short,
+      secret: SECRET,
+    });
+    expect(del.deleted).toBe(true);
+    expect(del.willReturn).toBe(false); // manual rows stay gone
+    expect(del.ingestsRemoved).toBeGreaterThan(0);
+
+    // ...and now it can be added again rather than being refused forever.
+    const again = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    expect(again.status).toBe("fetching");
+    expect(again.short).toBe(first.short);
+  });
+
+  test("an orphaned ingest record does not block a re-add", async () => {
+    const t = convexTest(schema);
+    const first = await addJob(t, URL_A);
+    // Delete only the match, leaving the ingest record behind (what the old
+    // code left after any out-of-band removal).
+    await t.run(async (ctx: any) => {
+      const m = await ctx.db.query("matches").first();
+      await ctx.db.delete(m._id);
+    });
+    const again = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    expect(again.status).toBe("fetching");
+    // The stale record is cleared out rather than accumulating.
+    const rows = await t.run(async (ctx: any) =>
+      await ctx.db.query("manualIngests").collect()
+    );
+    expect(rows.filter((r: any) => r._id === first.ingestId)).toHaveLength(0);
+  });
+
+  test("an in-flight ingest still blocks a second submit", async () => {
+    const t = convexTest(schema);
+    const first = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    expect(first.status).toBe("fetching"); // no match row yet
+    const second = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    expect(second.status).toBe("already_exists");
+    expect(second.ingestId).toBe(first.ingestId);
+  });
+
+  test("deleting a watcher row reports that the watcher will re-push it", async () => {
+    const t = convexTest(schema);
+    const tracker = await import("./tracker");
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("matches", {
+        user: "u1",
+        short: "watcher00001",
+        item: { key: "jr:aaa", title: "Watcher Job" },
+        pushedAt: Date.now(),
+      });
+    });
+    const del = await t.mutation(tracker.deleteMatch, {
+      user: "u1",
+      short: "watcher00001",
+      secret: SECRET,
+    });
+    expect(del).toMatchObject({ deleted: true, willReturn: true });
+  });
+
+  test("deleting an unknown short is a no-op, not an error", async () => {
+    const t = convexTest(schema);
+    const tracker = await import("./tracker");
+    const del = await t.mutation(tracker.deleteMatch, {
+      user: "u1",
+      short: "nosuchshort1",
+      secret: SECRET,
+    });
+    expect(del).toMatchObject({ deleted: false });
+  });
+
+  test("deleteMatch requires the secret and is scoped to one user", async () => {
+    const t = convexTest(schema);
+    const tracker = await import("./tracker");
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("matches", {
+        user: "u1",
+        short: "shared000001",
+        item: { key: "manual:x", source: "manual" },
+        pushedAt: Date.now(),
+      });
+    });
+    await expect(
+      t.mutation(tracker.deleteMatch, { user: "u1", short: "shared000001", secret: "wrong" })
+    ).rejects.toThrow("bad secret");
+    // u2 deleting the same short must not touch u1's row.
+    const other = await t.mutation(tracker.deleteMatch, {
+      user: "u2",
+      short: "shared000001",
+      secret: SECRET,
+    });
+    expect(other.deleted).toBe(false);
+    const left = await t.run(async (ctx: any) => await ctx.db.query("matches").collect());
+    expect(left).toHaveLength(1);
+  });
+});

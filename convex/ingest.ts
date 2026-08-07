@@ -1,5 +1,6 @@
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canonicalUrl, validateUrl } from "./ingest_extract";
 
@@ -136,19 +137,39 @@ export const requestIngest = mutation({
     await checkRateLimit(ctx, user);
 
     // Dedup checks:
-    // 1. Existing manualIngests for same canonicalUrl (any status except failed)
+    // 1. A prior ingest of the same URL (or the same dedup identity).
+    //
+    // A finished ingest record only proves the job is already here for as long
+    // as the match it produced still exists. These records are never otherwise
+    // cleaned up, so once a match is deleted its ingest row would refuse the
+    // re-add forever - the job could never be added again. A record whose
+    // match is gone is stale: drop it and let this request proceed.
     const existingManual = await ctx.db
       .query("manualIngests")
       .withIndex("by_user", (q: any) => q.eq("user", user))
       .collect();
+    const stale: Id<"manualIngests">[] = [];
     for (const row of existingManual) {
-      if (row.canonicalUrl === canonical && row.status !== "failed") {
+      const sameJob = row.canonicalUrl === canonical || row.short === short;
+      if (!sameJob || row.status === "failed") continue;
+
+      // An in-flight ingest always blocks: it has no match yet by definition,
+      // and a second submit would race the first.
+      if (row.status === "fetching" || row.status === "extracting") {
         return { status: "already_exists" as const, short: row.short, ingestId: row._id };
       }
-      // Also check by short (same dedupKey)
-      if (row.short === short && row.status !== "failed") {
+
+      const match = await ctx.db
+        .query("matches")
+        .withIndex("by_user_short", (q: any) => q.eq("user", user).eq("short", row.short))
+        .first();
+      if (match) {
         return { status: "already_exists" as const, short: row.short, ingestId: row._id };
       }
+      stale.push(row._id);
+    }
+    for (const id of stale) {
+      await ctx.db.delete(id);
     }
 
     // 2. Existing matches (by short or canonical url)

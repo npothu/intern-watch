@@ -186,6 +186,56 @@ export const pruneMatches = mutation({
   },
 });
 
+/**
+ * Remove a single match, permanently for hand-added jobs.
+ *
+ * Distinct from hiding, which only sets the `dismissed` tick and leaves the row
+ * in place under the Hidden filter. Until this existed the only thing that ever
+ * deleted a match was the watcher's snapshot prune, so a manually added job -
+ * which that prune deliberately skips - could never be removed at all.
+ *
+ * The ingest records for the job go with it, otherwise the next attempt to add
+ * the same URL is refused by a record whose match no longer exists.
+ *
+ * Deliberately untouched:
+ *  - the applications ledger, which is the permanent record of an application
+ *    and is never pruned;
+ *  - the ticks row, so re-adding the same job restores its applied/saved state
+ *    rather than silently losing it.
+ *
+ * `willReturn` reports that this row came from the watcher rather than a manual
+ * add, so deleting it only lasts until the next watcher run re-pushes it. The
+ * caller decides what to do about that; hiding is usually what was wanted.
+ */
+export const deleteMatch = mutation({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!row) return { deleted: false, willReturn: false, ingestsRemoved: 0 };
+
+    const isManual = row.item?.source === "manual";
+    await ctx.db.delete(row._id);
+
+    const ingests = await ctx.db
+      .query("manualIngests")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .collect();
+    for (const ing of ingests) {
+      await ctx.db.delete(ing._id);
+    }
+
+    return {
+      deleted: true,
+      willReturn: !isManual,
+      ingestsRemoved: ingests.length,
+    };
+  },
+});
+
 export const getMatches = query({
   args: { user: v.string(), secret: v.string() },
   handler: async (ctx, { user, secret }) => {
