@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { applyStatus } from "./ledger";
+import { applyStatus, removeIfUnprogressed } from "./ledger";
 
 // Query/mutation functions backing the ConvexStore TrackerStore driver
 // (src/store.py). Every endpoint - reads and writes - checks the secret
@@ -63,6 +63,21 @@ export const setTicks = mutation({
           q.eq("user", user).eq("short", w.short),
         )
         .first();
+      // Ticking applied is what creates the application. Until this existed
+      // the ledger was only ever written by the watcher, which mirrors
+      // item["applied"] out of its own run state: a tick made in the web UI
+      // did not reach the tracker until the next cron (up to 2h), and a
+      // manually ingested job - which lives only in this table and never in
+      // that run state - could never reach it at all. Writing here makes both
+      // immediate. applyStatus backfills the display snapshot from `matches`,
+      // so manual rows render properly too.
+      if (w.field === "applied") {
+        if (w.value) {
+          await applyStatus(ctx.db, { user, short: w.short, status: "applied" });
+        } else {
+          await removeIfUnprogressed(ctx.db, { user, short: w.short });
+        }
+      }
       if (existing) {
         await ctx.db.patch(existing._id, {
           [w.field]: w.value,

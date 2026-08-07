@@ -14,6 +14,28 @@ import type { DatabaseWriter } from "./_generated/server";
 // display snapshot, the matches table is consulted for the (user, short) item
 // so a record created by mail-sync (or the webui status path) never renders
 // blank in the tracker.
+/**
+ * Undo a ledger record created by an applied tick, mirroring
+ * src/ledger.py remove_if_unprogressed: the record is dropped only while it
+ * never moved past that first "applied" entry. Once it has real tracker
+ * history - an OA, an interview, a rejection - a stray untick must not destroy
+ * it, because the ledger is the permanent record and is never pruned.
+ */
+export async function removeIfUnprogressed(
+  db: DatabaseWriter,
+  { user, short }: { user: string; short: string },
+): Promise<boolean> {
+  const existing = await db
+    .query("applications")
+    .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+    .first();
+  if (!existing) return false;
+  if (existing.status !== "applied") return false;
+  if ((existing.history ?? []).length > 1) return false;
+  await db.delete(existing._id);
+  return true;
+}
+
 export async function applyStatus(
   db: DatabaseWriter,
   {
