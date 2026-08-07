@@ -21,6 +21,8 @@ env:
   CONVEX_URL: https://YOUR_DEPLOYMENT.convex.site
   CONVEX_SECRET: dummy-convex-secret
   TRACKER_USER_MAP: '{"you@example.com":"example"}'
+  GITHUB_TOKEN: dummy-github-token
+  GITHUB_REPOSITORY: your-org/your-repo
 
 jobs:
   web:

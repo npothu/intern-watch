@@ -1,0 +1,89 @@
+# On-demand resume build triggered from the hosted web app ("build resume"
+# button on a match row). The web server action POSTs a workflow_dispatch with
+# a tracker user + one (or more) 12-hex short keys; this builds a tailored
+# .docx for each short via src.resume.batch -- the same module the dashboard's
+# batch trigger uses -- and commits the resulting state.
+#
+# src.resume.batch selects rows by parsing an issue body for its "Build
+# selected resumes" trigger + per-row ticked boxes, so this workflow assembles
+# a minimal body for the shorts passed as inputs and feeds it through ISSUE_BODY
+# (the module's default source, exactly how resume-batch.yml passes the real
+# issue body). No repaint is needed here: the hosted client polls the Convex
+# store for the built resume URL.
+#
+# Dedicated `resume-build` concurrency group (cancel-in-progress: false) lets
+# parallel builds serialize against each other so they never race on the same
+# state commit, while staying independent of the `watch` group -- a long LLM
+# build must not delay or cancel the cron runs, and they must not cancel it.
+
+name: resume-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      user:
+        description: "tracker user key (users/<name>.yaml)"
+        required: true
+        type: string
+      shorts:
+        description: "12-hex dashboard short keys, space/comma-separated"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # commit resumes/ + state/seen.json
+
+concurrency:
+  group: resume-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Build resume(s)
+        id: build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # JD reacquisition (jobright)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TrackerStore driver -- repo Actions variable, defaults to the
+          # zero-infra GitHub driver; set to `convex` to read/write a hosted
+          # store (plus the two secrets) so the .docx lands in Convex storage
+          STORE: ${{ vars.STORE || 'github' }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_SECRET: ${{ secrets.CONVEX_SECRET }}
+        run: |
+          : > /tmp/resume_body.md
+          printf '%s\n' "- [x] **Build selected resumes** <!--iw:build-->" >> /tmp/resume_body.md
+          shorts=$(printf '%s' "${{ inputs.shorts }}" | tr ',' ' ')
+          for s in $shorts; do
+            s=$(printf '%s' "$s" | tr -d '[:space:]')
+            [ -z "$s" ] && continue
+            printf '%s\n' "- [x] $s <!--iwb:$s-->" >> /tmp/resume_body.md
+          done
+          ISSUE_BODY=$(cat /tmp/resume_body.md) python -m src.resume.batch \
+            --user "${{ inputs.user }}"
+
+      - name: Commit built resumes + state
+        if: steps.build.outputs.built != '0' && steps.build.outputs.built != ''
+        run: |
+          git config user.name "intern-watch[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          [ -d resumes ] && git add resumes/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "resume: web resume build"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi

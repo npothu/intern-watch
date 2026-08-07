@@ -42,6 +42,21 @@ to the browser.
 | `CONVEX_URL` | Convex deployment origin (server only) |
 | `CONVEX_SECRET` | Secret matching the deployment's `TRACKER_SECRET` (server only) |
 | `TRACKER_USER_MAP` | JSON email -> tracker user key mapping (server only) |
+| `GITHUB_TOKEN` | Fine-grained PAT with "Actions: write" on `GITHUB_REPOSITORY` (server only) |
+| `GITHUB_REPOSITORY` | `owner/repo` the web app dispatches builds against (server only) |
+| `GITHUB_API_URL` | Optional GitHub Enterprise API origin (defaults to github.com) |
+
+## On-demand resume build
+
+Rows without a built resume show a "build resume" button (idle -> building ->
+built -> failed/retry, per Study 4 of `web-design/approved-spec.html`).
+Clicking it dispatches the repo's `resume-build` GitHub Actions workflow, which
+runs `src.resume.batch` for that row's short key; the client polls
+`fetchResumeUrl` until the URL appears in the Convex store (15s intervals, 8
+minute timeout). The dispatch needs `GITHUB_TOKEN` (a fine-grained PAT with
+"Actions: write" on the fork you deploy from) and `GITHUB_REPOSITORY`. Because
+state is committed by that workflow, tools like the dashboard issue pick the
+build up on their next run.
 
 ## Scripts
 
