@@ -5,13 +5,15 @@ import { NextResponse } from "next/server";
  * Protects the whole app except the Clerk sign-in/sign-up routes. Runs only
  * at request time (never at build), so dummy env keys can't break `next build`.
  */
-const PUBLIC_PATHS = new Set(["/sign-in", "/sign-up"]);
+// Sign-in/up are catch-all routes: Clerk mounts subpaths under them (e.g.
+// /sign-in/sso-callback for OAuth), so the whole prefix must stay public.
+const PUBLIC_RE = /^\/sign-(in|up)(\/.*)?$/;
 
 export default clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
   const { pathname } = req.nextUrl;
 
-  if (!userId && !PUBLIC_PATHS.has(pathname)) {
+  if (!userId && !PUBLIC_RE.test(pathname)) {
     const signIn = new URL("/sign-in", req.url);
     signIn.searchParams.set("redirect_url", pathname);
     return NextResponse.redirect(signIn);
