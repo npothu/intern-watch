@@ -192,6 +192,10 @@
   --ease-rail: cubic-bezier(0.2, 0.9, 0.25, 1.06);
   /* Back-out: pops. */
   --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Gentler back-out for the header's sliding tab indicator, which animates
+     width as well as position - the pop curve overshoots both at once and the
+     chip visibly bulges past the tab it is landing on. */
+  --ease-spring: cubic-bezier(0.3, 1.4, 0.4, 1);
 
   --rail-ms: 150ms;
 }
