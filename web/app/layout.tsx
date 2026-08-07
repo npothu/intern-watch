@@ -2,12 +2,7 @@ import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
-
-// Everything in this app is live, per-user data served from Convex behind
-// auth, so every route stays dynamic. This also keeps ClerkProvider (which
-// needs a real publishable key) from being prerendered at build time with
-// dummy env values. Theming is driven purely by `prefers-color-scheme` in
-// globals.css (the approved spec's approach), so no ThemeProvider is needed.
+import { ThemeProvider } from "@/components/theme-provider";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
@@ -26,8 +21,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className="min-h-full flex flex-col bg-bg text-ink">
-        <ClerkProvider>{children}</ClerkProvider>
-        <Toaster />
+        <ThemeProvider>
+          <ClerkProvider>{children}</ClerkProvider>
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   );
