@@ -32,9 +32,17 @@ export type TriageRow = {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-export default async function MatchesPage() {
+export default async function MatchesPage({
+  searchParams,
+}: {
+  // `?filter=hidden` opens the list on that filter, which is how the command
+  // palette's "Show hidden" reaches this page from the tracker.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await resolveTrackerUser();
   if (!user) return null;
+
+  const filterParam = (await searchParams).filter;
 
   const data = await getTrackerUserData(user);
 
@@ -65,5 +73,10 @@ export default async function MatchesPage() {
     };
   });
 
-  return <Triage rows={rows} />;
+  return (
+    <Triage
+      rows={rows}
+      initialFilter={typeof filterParam === "string" ? filterParam : undefined}
+    />
+  );
 }

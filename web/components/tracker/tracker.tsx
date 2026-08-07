@@ -1,14 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
+  Eraser as EraserIcon,
   ExternalLink as ExternalLinkIcon,
   FileText as FileTextIcon,
+  Ghost as GhostIcon,
+  LayoutList as LayoutListIcon,
+  ListChecks as ListChecksIcon,
   Plus as PlusIcon,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import {
+  CommandPalette,
+  type PaletteAction,
+} from "@/components/command-palette";
+import { FilterPills, type PillOption } from "@/components/filter-pills";
+import { RefreshControl } from "@/components/refresh-control";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -73,6 +84,34 @@ const SELECT_TONE: Record<string, string> = {
 
 function labelLower(status: string): string {
   return (STATUS_LABELS[status as TrackerStatus] ?? status).toLowerCase();
+}
+
+/** The status-pill value meaning "no status filter". */
+const ALL_STATUSES = "__all__";
+
+/**
+ * All seven ledger statuses, always, in the progression order src/ledger.py
+ * defines - the pill row doubles as the funnel's legend, so a status the user
+ * has not reached yet still has to be visible (and clickable) rather than
+ * appearing only once something lands in it. Empty ones are dimmed by
+ * FilterPills.
+ */
+function statusPills(rows: TrackerRow[]): PillOption[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
+  return [
+    { key: ALL_STATUSES, label: "All", count: rows.length },
+    ...STATUS_ORDER.map((s) => ({
+      key: s,
+      label: STATUS_LABELS[s],
+      count: counts.get(s) ?? 0,
+    })),
+  ];
+}
+
+function matchesQuery(row: TrackerRow, q: string): boolean {
+  if (!q) return true;
+  return `${row.company} ${row.title} ${row.location}`.toLowerCase().includes(q);
 }
 
 function Funnel({ rows }: { rows: TrackerRow[] }) {
@@ -172,17 +211,26 @@ function WaitingChip({ row }: { row: TrackerRow }) {
 
 function TrackerRowView({
   row,
+  focused,
   onStatus,
   onNote,
   onHistory,
 }: {
   row: TrackerRow;
+  /** The row a command-palette jump landed on - washed until the next jump. */
+  focused: boolean;
   onStatus: (s: string) => void;
   onNote: () => void;
   onHistory: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-2 border-t border-line px-3 py-2.5 first:border-t-0 md:grid md:grid-cols-[128px_minmax(0,1fr)_auto] md:items-start md:gap-x-3">
+    <div
+      data-short={row.short}
+      className={cn(
+        "flex flex-col gap-2 border-t border-line px-3 py-2.5 transition-colors first:border-t-0 md:grid md:grid-cols-[128px_minmax(0,1fr)_auto] md:items-start md:gap-x-3",
+        focused && "bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)]"
+      )}
+    >
       {/* Company (600), ellipsized title, meta - the approved row anatomy.
           On mobile this leads the row; on desktop it sits in the middle
           column (the status pill is col 1). */}
@@ -367,9 +415,95 @@ function EmptyState() {
 }
 
 export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
+  const router = useRouter();
   const [rows, setRows] = useState(initialRows);
   const [historyRow, setHistoryRow] = useState<TrackerRow | null>(null);
+
+  // Re-seed from the server whenever it hands over a new array (a refresh, an
+  // ingest landing). Without this the optimistic copy taken at mount would
+  // outlive every router.refresh() and the page would look frozen. Adjusting
+  // state during render, which React allows for exactly this case.
+  const [seed, setSeed] = useState(initialRows);
+  if (initialRows !== seed) {
+    setSeed(initialRows);
+    setRows(initialRows);
+  }
+
   const [noteRow, setNoteRow] = useState<TrackerRow | null>(null);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<string>(ALL_STATUSES);
+  const [focused, setFocused] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const q = query.trim().toLowerCase();
+  // Search first, then pills: each pill counts what it would show given the
+  // current search, so the row never advertises results the search excludes.
+  const searched = useMemo(
+    () => rows.filter((r) => matchesQuery(r, q)),
+    [rows, q]
+  );
+  const pills = useMemo(() => statusPills(searched), [searched]);
+
+  const shown = useMemo(
+    () =>
+      status === ALL_STATUSES
+        ? searched
+        : searched.filter((r) => r.status === status),
+    [searched, status]
+  );
+
+  // Bring a palette jump's row into view once it is actually rendered.
+  useEffect(() => {
+    if (!focused) return;
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-short="${CSS.escape(focused)}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focused, shown]);
+
+  function clearFilters() {
+    setQuery("");
+    setStatus(ALL_STATUSES);
+  }
+
+  const paletteJumps = useMemo(
+    () =>
+      rows.map((r) => ({ id: r.short, title: r.company, subtitle: r.title })),
+    [rows]
+  );
+
+  const paletteActions: PaletteAction[] = [
+    {
+      id: "matches",
+      label: "Go to Matches",
+      icon: <LayoutListIcon className="size-4" />,
+      run: () => router.push("/"),
+    },
+    {
+      id: "tracker",
+      label: "Go to Tracker",
+      icon: <ListChecksIcon className="size-4" />,
+      run: clearFilters,
+    },
+    {
+      id: "hidden",
+      label: "Show hidden",
+      icon: <GhostIcon className="size-4" />,
+      // The hidden list lives on the matches surface, which opens on whatever
+      // `?filter=` says - so from here it is a navigation, not a local toggle.
+      run: () => router.push("/?filter=hidden"),
+    },
+    {
+      id: "clear",
+      label: "Clear filters",
+      icon: <EraserIcon className="size-4" />,
+      run: clearFilters,
+    },
+  ];
+
+  function paletteJump(short: string) {
+    if (!shown.some((r) => r.short === short)) clearFilters();
+    setFocused(short);
+  }
 
   function applyChange(short: string, status: string, note: string) {
     const today = new Date().toISOString();
@@ -423,14 +557,50 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
     <div>
       <Funnel rows={rows} />
 
+      <div className="mb-3 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search applications..."
+            autoComplete="off"
+            aria-label="Search applications"
+            className="w-full min-w-[180px] rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none sm:w-[280px]"
+          />
+          <RefreshControl className="ml-auto" />
+        </div>
+        <FilterPills
+          label="Filter by status"
+          options={pills}
+          value={status}
+          onChange={setStatus}
+        />
+      </div>
+
       {rows.length === 0 ? (
         <EmptyState />
+      ) : shown.length === 0 ? (
+        <div className="rounded-md border border-line bg-surface px-4 py-7 text-center text-[13px] text-ink-2">
+          Nothing matches the current filters.
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="ml-2 cursor-pointer font-medium text-accent underline decoration-dashed underline-offset-2"
+          >
+            clear filters
+          </button>
+        </div>
       ) : (
-        <div className="overflow-hidden rounded-md border border-line bg-surface">
-          {rows.map((r) => (
+        <div
+          ref={listRef}
+          className="overflow-hidden rounded-md border border-line bg-surface"
+        >
+          {shown.map((r) => (
             <TrackerRowView
               key={r.short}
               row={r}
+              focused={r.short === focused}
               onStatus={(s) => commitStatus(r.short, s)}
               onNote={() => setNoteRow(r)}
               onHistory={() => setHistoryRow(r)}
@@ -438,6 +608,12 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
           ))}
         </div>
       )}
+
+      <CommandPalette
+        jumps={paletteJumps}
+        onJump={paletteJump}
+        actions={paletteActions}
+      />
 
       <HistoryDialog
         row={historyRow}

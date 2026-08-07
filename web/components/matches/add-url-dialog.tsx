@@ -66,6 +66,10 @@ export function AddUrlDialog() {
       toast.info("Already in your matches.");
       setOpen(false);
       setUrl("");
+      // Refresh anyway: the row exists but may be sitting behind a filter, or
+      // may have landed since this page was rendered. Without it "already in
+      // your matches" points at a list that might not show it.
+      router.refresh();
       return;
     }
     // polling
@@ -98,6 +102,8 @@ export function AddUrlDialog() {
         toast.info("Already in your matches.");
         setOpen(false);
         setUrl("");
+        setPhase("done");
+        router.refresh();
       }
     }, POLL_INTERVAL);
 

@@ -24,7 +24,19 @@ import {
   type CSSProperties,
   type TouchEvent as ReactTouchEvent,
 } from "react";
-import { Check, Star, X, Undo2, FileText, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  Check,
+  Star,
+  X,
+  Undo2,
+  FileText,
+  Loader2,
+  Ghost,
+  LayoutList,
+  ListChecks,
+  Eraser,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -35,6 +47,7 @@ import {
   CHECK_DRAW_OPTS,
   keypressFrames,
   KEYPRESS_OPTS,
+  prefersReducedMotion,
 } from "@/lib/motion";
 import {
   writeTicks,
@@ -42,6 +55,9 @@ import {
   fetchBuildStatus,
   fetchResumeUrl,
 } from "@/app/(app)/matches-actions";
+import { CommandPalette, type PaletteAction } from "@/components/command-palette";
+import { FilterPills, type PillOption } from "@/components/filter-pills";
+import { RefreshControl } from "@/components/refresh-control";
 import { AddUrlDialog } from "./add-url-dialog";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TickWrite } from "@/lib/convex";
@@ -50,6 +66,12 @@ type Filter = "all" | "applied" | "saved" | "resumes" | "hidden";
 
 const TERM_ORDER = ["Fall 2026", "Spring 2027", "Summer 2027"];
 const UNKNOWN_TERM = "Unknown term";
+
+/** The term-pill value meaning "no term filter". */
+const ALL_TERMS = "__all__";
+
+/** Page scroll increment when j/k runs off the end of the list (item 5). */
+const EDGE_SCROLL_PX = 180;
 
 const FLUSH_IDLE = 500;
 const FLUSH_CAP = 50;
@@ -115,6 +137,13 @@ function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRo
     return true;
   });
 }
+
+const isFilter = (v: string | undefined): v is Filter =>
+  FILTERS.some((f) => f.key === v);
+
+/** Display label for a term pill ("Unknown term" reads better as "Unknown"). */
+const termLabel = (term: string) =>
+  term === UNKNOWN_TERM ? "Unknown" : term;
 
 function groupByTerm(rows: TriageRow[]): { term: string; rows: TriageRow[] }[] {
   const groups = new Map<string, TriageRow[]>();
@@ -222,6 +251,28 @@ function Tags({ tag }: { tag: string }) {
   );
 }
 
+/* Ring that only a keyboard focus can earn, in the house accent. It replaces
+   Chrome's UA `:focus-visible { outline: auto }`, which the base layer's
+   `outline-ring/50` tints accent - that pairing is what painted the stuck
+   "thick light border" on a clicked tick. */
+const FOCUS_RING =
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+
+/**
+ * Drops DOM focus after a pointer-driven activation.
+ *
+ * A clicked button keeps focus, and Chrome promotes a merely-focused element
+ * to `:focus-visible` the moment the user touches the keyboard - which on this
+ * surface is immediately, since the next thing they do is press j/k/x. The ring
+ * then paints long after the click and reads as a highlight stuck on that one
+ * tick. Keyboard activation (Enter/Space) reports `detail === 0`, so it keeps
+ * focus and keeps the ring; only a real click gives it up. Nothing is lost -
+ * the triage shortcuts are bound on window, not on the focused element.
+ */
+function blurOnPointerActivate(e: React.MouseEvent<HTMLElement>) {
+  if (e.detail > 0) e.currentTarget.blur();
+}
+
 function Divider({ className }: { className?: string }) {
   return <span className={cn("h-5 w-px self-center bg-line", className)} />;
 }
@@ -229,6 +280,7 @@ function Divider({ className }: { className?: string }) {
 export function Triage({
   rows: initialRows,
   demo = false,
+  initialFilter,
 }: {
   rows: TriageRow[];
   /**
@@ -238,9 +290,32 @@ export function Triage({
    * passes this.
    */
   demo?: boolean;
+  /**
+   * Filter to open on, from the page's `?filter=` search param. It exists so
+   * the command palette's "Show hidden" can reach the hidden list from the
+   * tracker page, which has no filter state of its own to set.
+   */
+  initialFilter?: string;
 }) {
+  const router = useRouter();
   const [rows, setRows] = useState<TriageRow[]>(initialRows);
-  const [filter, setFilter] = useState<Filter>("all");
+
+  /* Re-seed from the server whenever it hands over a new array - a refresh, or
+     an Add URL ingest landing. Without this the copy taken at mount survives
+     every router.refresh() and newly ingested rows never appear. Adjusting
+     state during render, which React allows for exactly this case. Any tick
+     not yet flushed is superseded by the server's answer, which is the right
+     way round: the server is authoritative about what a row is. */
+  const [seed, setSeed] = useState(initialRows);
+  if (initialRows !== seed) {
+    setSeed(initialRows);
+    setRows(initialRows);
+  }
+
+  const [filter, setFilter] = useState<Filter>(() =>
+    isFilter(initialFilter) ? initialFilter : "all"
+  );
+  const [termFilter, setTermFilter] = useState<string>(ALL_TERMS);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState<string | null>(null);
   const [burst, setBurst] = useState<{ visible: boolean; count: number }>({
@@ -310,7 +385,44 @@ export function Triage({
     () => visibleRows(rows, filter, query),
     [rows, filter, query]
   );
-  const groups = useMemo(() => groupByTerm(visible), [visible]);
+  // Grouped before the term pill is applied, so each pill can carry the count
+  // it would show and the pill row itself never changes shape as you click it.
+  const allGroups = useMemo(() => groupByTerm(visible), [visible]);
+
+  /* Term pills. The known terms are always offered (they are the terms the
+     watcher is configured to want, so an empty one is information); anything
+     else the data happens to carry - a stray term, or the unknown bucket -
+     only earns a pill when rows actually sit in it. */
+  const termPills = useMemo<PillOption[]>(() => {
+    const counts = new Map(allGroups.map((g) => [g.term, g.rows.length]));
+    const extras = allGroups
+      .map((g) => g.term)
+      .filter((t) => !TERM_ORDER.includes(t));
+    return [
+      { key: ALL_TERMS, label: "All", count: visible.length },
+      ...[...TERM_ORDER, ...extras].map((t) => ({
+        key: t,
+        label: termLabel(t),
+        count: counts.get(t) ?? 0,
+      })),
+    ];
+  }, [allGroups, visible.length]);
+
+  /* A pill for a stray term stops being offered once the search or filter
+     narrows its group away. Rather than writing the selection back to "all"
+     from an effect, the stored value is read through this guard, so a stale
+     pick simply stops applying (and comes back if its group returns). */
+  const activeTerm = termPills.some((p) => p.key === termFilter)
+    ? termFilter
+    : ALL_TERMS;
+
+  const groups = useMemo(
+    () =>
+      activeTerm === ALL_TERMS
+        ? allGroups
+        : allGroups.filter((g) => g.term === activeTerm),
+    [allGroups, activeTerm]
+  );
   const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
 
   const stats = useMemo(() => {
@@ -327,10 +439,14 @@ export function Triage({
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
 
+  /* Normal cursor moves keep the row just in view ("nearest"); a palette jump
+     may land far off screen, so that one asks for the centre instead. */
+  const scrollBlock = useRef<ScrollLogicalPosition>("nearest");
   useEffect(() => {
     if (!cursor) return;
     const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
-    el?.scrollIntoView?.({ block: "nearest" });
+    el?.scrollIntoView?.({ block: scrollBlock.current });
+    scrollBlock.current = "nearest";
   }, [cursor]);
 
   // 1b: replay the cascade when the filter changes or the search settles
@@ -343,7 +459,7 @@ export function Triage({
     }
     const id = window.setTimeout(() => setEpoch((e) => e + 1), 150);
     return () => window.clearTimeout(id);
-  }, [filter, query]);
+  }, [filter, termFilter, query]);
 
   function flashDock(key: string) {
     setPressed((p) => ({ key, n: p.n + 1 }));
@@ -582,15 +698,35 @@ export function Triage({
     return () => window.clearInterval(timer);
   }, [builds, updateRow, demo]);
 
-  function move(delta: number) {
-    if (!ordered.length) return;
+  /** Moves the cursor by `delta`, returning false when it was already at that
+   *  end of the list (which is the caller's cue to scroll the page instead). */
+  function move(delta: number): boolean {
+    if (!ordered.length) return false;
     let i = cursorIndex;
     if (i < 0) {
       i = delta > 0 ? 0 : ordered.length - 1;
     } else {
       i = Math.max(0, Math.min(ordered.length - 1, i + delta));
+      if (i === cursorIndex) return false;
     }
     setCursor(ordered[i].short);
+    return true;
+  }
+
+  /* Item 5: at the ends of the list the cursor has nowhere to go, so j/k and
+     the arrows hand off to the page. This is why the key handler can keep
+     calling preventDefault() unconditionally - the browser's native arrow
+     scrolling is not lost, it is taken over, so `j` and ArrowDown behave
+     identically and a held key never fights a native scroll mid-list. */
+  function edgeScroll(delta: number) {
+    window.scrollBy({
+      top: delta * EDGE_SCROLL_PX,
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }
+
+  function navigate(delta: number) {
+    if (!move(delta)) edgeScroll(delta);
   }
 
   function openRow(row?: TriageRow) {
@@ -629,11 +765,11 @@ export function Triage({
       if (kl === "j" || k === "ArrowDown") {
         e.preventDefault();
         flashDock("down");
-        move(1);
+        navigate(1);
       } else if (kl === "k" || k === "ArrowUp") {
         e.preventDefault();
         flashDock("up");
-        move(-1);
+        navigate(-1);
       } else if (k === "/") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -673,6 +809,61 @@ export function Triage({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  function clearFilters() {
+    setFilter("all");
+    setTermFilter(ALL_TERMS);
+    setQuery("");
+  }
+
+  /* Command palette. Jump targets are every live match, not just the visible
+     ones, so the palette is a way out of a filter rather than a prisoner of
+     it - jumping to a row the current filters hide clears them first. */
+  const paletteJumps = useMemo(
+    () =>
+      rows
+        .filter((r) => !r.dismissed)
+        .map((r) => ({ id: r.short, title: r.company, subtitle: r.title })),
+    [rows]
+  );
+
+  const paletteActions: PaletteAction[] = [
+    {
+      id: "matches",
+      label: "Go to Matches",
+      icon: <LayoutList className="size-4" />,
+      run: () => clearFilters(),
+    },
+    {
+      id: "tracker",
+      label: "Go to Tracker",
+      icon: <ListChecks className="size-4" />,
+      run: () => router.push("/tracker"),
+    },
+    {
+      id: "hidden",
+      label: "Show hidden",
+      icon: <Ghost className="size-4" />,
+      run: () => {
+        setTermFilter(ALL_TERMS);
+        setFilter("hidden");
+      },
+    },
+    {
+      id: "clear",
+      label: "Clear filters",
+      icon: <Eraser className="size-4" />,
+      run: clearFilters,
+    },
+  ];
+
+  function paletteJump(short: string) {
+    const row = rows.find((r) => r.short === short);
+    if (!row) return;
+    if (!ordered.some((r) => r.short === short)) clearFilters();
+    scrollBlock.current = "center";
+    setCursor(short);
+  }
+
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && groups.length === 0;
 
@@ -684,8 +875,9 @@ export function Triage({
       ref={rootRef}
       className="mx-auto w-full max-w-[1060px] px-5 py-5 pb-32"
     >
-      {/* statline */}
-      <div className="mb-3 text-[13px] text-ink-2 tabular-nums">
+      {/* statline, with the freshness readout riding its right edge */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-ink-2 tabular-nums">
+        <div>
         {FILTERS.map((s, i) => {
           const n =
             s.key === "all"
@@ -717,10 +909,13 @@ export function Triage({
             </span>
           );
         })}
+        </div>
+        <RefreshControl className="ml-auto" />
       </div>
 
-      {/* toolbar */}
-      <div className="mb-4 flex items-center gap-2">
+      {/* toolbar - search leads, the term pills sit alongside it, and Add URL
+          stays pinned to the right (wrapping under on narrow viewports) */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <input
           ref={searchRef}
           type="search"
@@ -729,9 +924,17 @@ export function Triage({
           placeholder="Search company, title, location…"
           autoComplete="off"
           aria-label="Search matches"
-          className="flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
+          className="w-full min-w-[180px] rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none sm:w-[248px]"
         />
-        <AddUrlDialog />
+        <FilterPills
+          label="Filter by term"
+          options={termPills}
+          value={activeTerm}
+          onChange={setTermFilter}
+        />
+        <div className="ml-auto">
+          <AddUrlDialog />
+        </div>
       </div>
 
       {!hasAnyRows ? (
@@ -746,10 +949,7 @@ export function Triage({
             Nothing matches the current filters.
             <button
               type="button"
-              onClick={() => {
-                setFilter("all");
-                setQuery("");
-              }}
+              onClick={clearFilters}
               className="ml-2 font-medium text-accent underline decoration-dashed underline-offset-2"
             >
               clear filters
@@ -841,11 +1041,17 @@ export function Triage({
         </div>
       )}
 
+      <CommandPalette
+        jumps={paletteJumps}
+        onJump={paletteJump}
+        actions={paletteActions}
+      />
+
       <Dock
         pressed={pressed}
         onNav={(d) => {
           flashDock(d > 0 ? "down" : "up");
-          move(d);
+          navigate(d);
         }}
         onAct={(kind) => {
           flashDock(kind);
@@ -1149,9 +1355,13 @@ function RowView({
           data-applied-tick
           aria-label={applied ? "Mark as not applied" : "Mark as applied"}
           aria-pressed={applied}
-          onClick={onToggleApplied}
+          onClick={(e) => {
+            blurOnPointerActivate(e);
+            onToggleApplied();
+          }}
           className={cn(
             "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-[background-color,border-color,box-shadow] duration-150 active:scale-90",
+            FOCUS_RING,
             applied
               ? "border-accent bg-accent text-accent-ink"
               : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
@@ -1180,9 +1390,13 @@ function RowView({
           data-saved-tick
           aria-label={saved ? "Unsave" : "Save"}
           aria-pressed={saved}
-          onClick={onToggleSaved}
+          onClick={(e) => {
+            blurOnPointerActivate(e);
+            onToggleSaved();
+          }}
           className={cn(
             "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-[background-color,border-color,box-shadow] duration-150 active:scale-90",
+            FOCUS_RING,
             saved
               ? "border-amber bg-[color-mix(in_srgb,var(--color-amber)_16%,var(--color-surface))] text-amber"
               : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
@@ -1205,7 +1419,7 @@ function RowView({
         <Tags tag={row.tag} />
         <div
           className={cn(
-            "truncate text-[12.5px] text-ink-2 transition-opacity duration-[250ms]",
+            "truncate text-[12.5px] text-ink transition-opacity duration-[250ms]",
             applied && "opacity-55"
           )}
           title={title}
@@ -1227,8 +1441,14 @@ function RowView({
             type="button"
             data-restore
             title="restore to the matches list"
-            onClick={onRestore}
-            className="flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] hover:text-amber"
+            onClick={(e) => {
+              blurOnPointerActivate(e);
+              onRestore();
+            }}
+            className={cn(
+              "flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] hover:text-amber",
+              FOCUS_RING
+            )}
           >
             <Undo2 className="size-3.5" />
           </button>
@@ -1237,8 +1457,14 @@ function RowView({
             type="button"
             data-hide
             title="hide - moves to Hidden"
-            onClick={onHide}
-            className="flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-red)_12%,transparent)] hover:text-red"
+            onClick={(e) => {
+              blurOnPointerActivate(e);
+              onHide();
+            }}
+            className={cn(
+              "flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-red)_12%,transparent)] hover:text-red",
+              FOCUS_RING
+            )}
           >
             <X className="size-3.5" />
           </button>
@@ -1358,10 +1584,12 @@ function MobileCard({
             aria-pressed={applied}
             onClick={(e) => {
               e.stopPropagation();
+              blurOnPointerActivate(e);
               onToggleApplied();
             }}
             className={cn(
               "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-[1.5px] transition-colors",
+              FOCUS_RING,
               applied ? "border-accent bg-accent text-accent-ink" : "border-line-2 text-transparent"
             )}
           >
@@ -1381,7 +1609,7 @@ function MobileCard({
             </div>
             <div
               className={cn(
-                "mt-0.5 line-clamp-2 text-[12px] text-ink-2 transition-opacity duration-[250ms]",
+                "mt-0.5 line-clamp-2 text-[12px] text-ink transition-opacity duration-[250ms]",
                 applied && "opacity-55"
               )}
             >
