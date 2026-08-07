@@ -1,10 +1,14 @@
 "use client";
 
 // Sliding chip indicator behind the nav tabs, plus a one-pass sync sweep along
-// the header's bottom edge on route change. Also carries the two smallest
-// pieces of app chrome: the inbox pending badge and the pipeline-health dot
-// (one dot + two words; everything else lives in a click popover so a
-// degraded pipeline never costs more header space than a healthy one).
+// the header's bottom edge each time the server hands over fresh data. Also
+// carries the two smallest pieces of app chrome: the inbox pending badge and
+// the pipeline-health dot (one dot + two words; everything else lives in a
+// click popover so a degraded pipeline never costs more header space than a
+// healthy one).
+//
+// Matches and Tracker are two views of the app route (lib/view.ts) - their
+// tabs switch in place. Inbox and Resume are real routes and navigate.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -13,11 +17,17 @@ import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UserChip } from "@/components/user-chip";
+import { useAppView, viewHref, type AppView } from "@/lib/view";
+import { useSyncPulse } from "@/lib/sync-pulse";
 import type { TrackerHealth } from "@/lib/convex";
 
-const NAV = [
-  { href: "/", label: "Matches" },
-  { href: "/tracker", label: "Tracker" },
+type NavEntry =
+  | { view: AppView; label: string }
+  | { href: string; label: string };
+
+const NAV: NavEntry[] = [
+  { view: "matches", label: "Matches" },
+  { view: "tracker", label: "Tracker" },
   { href: "/inbox", label: "Inbox" },
   { href: "/profile", label: "Resume" },
 ];
@@ -188,6 +198,8 @@ export function SiteHeader({
   health?: TrackerHealth | null;
 }) {
   const pathname = usePathname();
+  const { view, show } = useAppView();
+  const syncPulse = useSyncPulse();
   const navRef = useRef<HTMLElement>(null);
   const [ind, setInd] = useState<{ x: number; w: number } | null>(null);
   // No slide on first paint: transitions enable only after the first measure.
@@ -201,7 +213,7 @@ export function SiteHeader({
     else setInd(null);
     const id = requestAnimationFrame(() => setAnimate(true));
     return () => cancelAnimationFrame(id);
-  }, [pathname]);
+  }, [pathname, view]);
 
   return (
     <header className="bg-surface">
@@ -228,20 +240,34 @@ export function SiteHeader({
             }}
           />
           {NAV.map((n) => {
-            const active =
-              n.href === "/" ? pathname === "/" : pathname.startsWith(n.href);
+            const isView = "view" in n;
+            // Both views live on "/", so neither view tab is active anywhere
+            // else; route tabs match on their own path prefix.
+            const active = isView
+              ? pathname === "/" && view === n.view
+              : pathname.startsWith(n.href);
             return (
               <Link
-                key={n.href}
-                href={n.href}
+                key={n.label}
+                href={isView ? viewHref(n.view) : n.href}
                 data-active={active ? "1" : undefined}
+                onClick={(e) => {
+                  // View tabs switch in place; let the browser have modified
+                  // clicks (new tab, new window), and let Link do a real
+                  // navigation from anywhere that isn't the app route.
+                  if (!isView) return;
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  if (pathname !== "/") return;
+                  e.preventDefault();
+                  show(n.view);
+                }}
                 className={cn(
                   "relative rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors",
                   active ? "text-ink" : "text-ink-2 hover:text-ink"
                 )}
               >
                 {n.label}
-                {n.href === "/inbox" && inboxCount > 0 && (
+                {!isView && n.href === "/inbox" && inboxCount > 0 && (
                   <span
                     className="ml-1.5 inline-block min-w-[16px] rounded-full bg-accent px-1 text-center align-[1px] text-[10px] font-bold leading-[15px] text-accent-ink tabular-nums"
                     aria-label={`${inboxCount} pending inbox actions`}
@@ -260,11 +286,12 @@ export function SiteHeader({
         </div>
       </div>
       {/* Sync sweep: a 2px track standing in for the header's border-b, keyed
-          by pathname so one pass runs per route change and then it sits still
-          as a plain rule. */}
+          by the sync counter so one pass runs per data load - the first paint
+          and every refresh after it - and then it sits still as a plain rule.
+          Swapping views syncs nothing, so it no longer replays there. */}
       <div className="relative h-[2px] overflow-hidden bg-line">
         <span
-          key={pathname}
+          key={syncPulse}
           aria-hidden
           className="absolute inset-y-0 left-0 w-[18%]"
           style={{

@@ -79,5 +79,9 @@ and does not need GitHub access.
   hover fills use `muted` (chip) instead.
 - `lib/convex.ts` and `lib/user.ts` are server-only (`server-only` import) -
   never import them into client components.
-- Pages: `/` = matches triage, `/tracker` = applications ledger. Both live in
-  the `app/(app)` route group, which is where the auth/provision gate lives.
+- One page, two views: `/` = matches triage, `/?view=tracker` = applications
+  ledger. Both datasets load in the single server render of `app/(app)/page.tsx`
+  and `components/app-views.tsx` picks the surface, so switching is client-side
+  and instant (see `lib/view.ts`). `/tracker` redirects to `/?view=tracker` so
+  old links keep working. The `app/(app)` route group is where the
+  auth/provision gate lives.
