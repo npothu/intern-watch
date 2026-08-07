@@ -7,17 +7,14 @@
  */
 
 import { resolveTrackerUser } from "@/lib/user";
-import { setTicks, getResumeUrls, type TickWrite } from "@/lib/convex";
-
-// Server-side resume build dispatch. GITHUB_TOKEN is a fine-grained PAT with
-// `actions: write` on the repository (GITHUB_REPOSITORY = "owner/repo"); the
-// token and repo are server-only and never sent to the client. When either is
-// unset the dispatch is refused with a clear error rather than silently
-// swallowed. GITHUB_API_URL is respected for GitHub Enterprise deployments and
-// defaulted to github.com.
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? "";
-const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY ?? "";
-const GITHUB_API_URL = process.env.GITHUB_API_URL ?? "https://api.github.com";
+import {
+  setTicks,
+  getResumeUrls,
+  requestResumeBuild as convexRequestBuild,
+  fetchBuildStatus as convexFetchBuildStatus,
+  type TickWrite,
+  type BuildStatus,
+} from "@/lib/convex";
 
 // The first 12 hex chars of a match key's sha1 (see lib/shortkey.ts).
 const SHORT_RE = /^[0-9a-f]{12}$/i;
@@ -58,11 +55,12 @@ export async function writeTicks(
 export type ResumeBuildResult = { ok: true } | { ok: false; error: string };
 
 /**
- * Kick off an on-demand resume build for one match by dispatching the
- * `resume-build` workflow. The tracker user is re-resolved server-side (never
- * trusted from the client), and the short is validated as 12 hex chars before
- * anything leaves the server. Returns {ok:true} once GitHub has accepted the
- * dispatch; the caller then polls fetchResumeUrl until the URL appears.
+ * Kick off an on-demand resume build for one match by calling the Convex
+ * `resume:requestBuild` mutation (which schedules the internal build action).
+ * The tracker user is re-resolved server-side (never trusted from the client),
+ * and the short is validated as 12 hex chars before anything leaves the server.
+ * Returns {ok:true} once the mutation has accepted the build; the caller then
+ * polls fetchBuildStatus until the resume URL appears.
  */
 export async function requestResumeBuild(
   short: string
@@ -77,46 +75,35 @@ export async function requestResumeBuild(
   if (typeof short !== "string" || !SHORT_RE.test(short)) {
     return { ok: false, error: "Invalid short key." };
   }
-  if (!GITHUB_TOKEN || !GITHUB_REPOSITORY) {
-    return {
-      ok: false,
-      error:
-        "Resume building isn't configured (GITHUB_TOKEN / GITHUB_REPOSITORY).",
-    };
-  }
   try {
-    const resp = await fetch(
-      `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/resume-build.yml/dispatches`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${GITHUB_TOKEN}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-        body: JSON.stringify({
-          ref: "main",
-          inputs: { user, shorts: short },
-        }),
-        cache: "no-store",
-      }
-    );
-    if (!resp.ok) {
-      return {
-        ok: false,
-        error: `Build dispatch failed (HTTP ${resp.status}).`,
-      };
+    const res = await convexRequestBuild(user, short);
+    if (!res.ok) {
+      return { ok: false, error: res.error ?? "Couldn't start the resume build." };
     }
     return { ok: true };
-  } catch {
-    return { ok: false, error: "Build dispatch request failed." };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || "Build request failed." };
   }
 }
 
 /**
+ * Re-resolve the user and return the live build status for one short (per the
+ * `resume:getBuildStatus` query): "building" while the action runs, the failure
+ * payload once it patched to "failed", or null once the build row is cleared
+ * (success or never requested). Polled by the client while a build is in the
+ * air. Returns null on any unprovidable condition (no user, bad short).
+ */
+export async function fetchBuildStatus(short: string): Promise<BuildStatus> {
+  const user = await resolveTrackerUser();
+  if (!user) return null;
+  if (typeof short !== "string" || !SHORT_RE.test(short)) return null;
+  return convexFetchBuildStatus(user, short);
+}
+
+/**
  * Re-resolve the user and return the built resume URL for one short, or null
- * when it isn't built yet. Polled by the client while a build is in flight.
+ * when it isn't built yet. Polled by the client once the build status row is
+ * cleared, to surface the finished docx.
  */
 export async function fetchResumeUrl(short: string): Promise<string | null> {
   const user = await resolveTrackerUser();

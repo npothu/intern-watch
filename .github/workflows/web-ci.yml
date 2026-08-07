@@ -21,8 +21,9 @@ env:
   CONVEX_URL: https://YOUR_DEPLOYMENT.convex.site
   CONVEX_SECRET: dummy-convex-secret
   TRACKER_USER_MAP: '{"you@example.com":"example"}'
-  GITHUB_TOKEN: dummy-github-token
-  GITHUB_REPOSITORY: your-org/your-repo
+  # Resume builds run inside Convex (convex/resume.ts); the web server needs
+  # no GitHub token or repo. GEMINI_API_KEY is a Convex deployment env var.
+  GEMINI_API_KEY: dummy-gemini-key
 
 jobs:
   web:

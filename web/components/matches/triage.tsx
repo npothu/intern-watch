@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   writeTicks,
   requestResumeBuild,
+  fetchBuildStatus,
   fetchResumeUrl,
 } from "@/app/(app)/matches-actions";
 import type { TriageRow } from "@/app/(app)/page";
@@ -49,11 +50,16 @@ const FLUSH_CAP = 50;
 const BURST_MS = 6000;
 const SWIPE_THRESHOLD = 70;
 const BUILD_POLL_MS = 15000;
-const BUILD_TIMEOUT_MS = 8 * 60 * 1000;
+// Client-side safety net only: with the build running inside Convex, the
+// server status (resume:getBuildStatus) is authoritative and the 8-minute
+// hard-stop is gone. Keep a generous 15-minute guard so a hung action still
+// surfaces as a failed row instead of spinning forever.
+const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
 /** One per-row resume button's Study-4 state machine. */
 type BuildState = "idle" | "building" | "built" | "failed";
-type InFlight = "building" | "failed";
+/** In-flight trackers; a failed build carries its server error string. */
+type InFlight = "building" | { failed: string };
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "matches" },
@@ -186,8 +192,17 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
       if (row.resumeUrl) return "built";
       const s = builds[row.short];
       if (s === "building") return "building";
-      if (s === "failed") return "failed";
+      if (typeof s === "object" && s?.failed !== undefined) return "failed";
       return "idle";
+    },
+    [builds]
+  );
+
+  /** The server error message for a failed build (title attr on the button). */
+  const buildErrorFor = useCallback(
+    (row: TriageRow): string | undefined => {
+      const s = builds[row.short];
+      return typeof s === "object" && s?.failed !== undefined ? s.failed : undefined;
     },
     [builds]
   );
@@ -371,7 +386,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     setBuilds((prev) => ({ ...prev, [short]: "building" }));
     void requestResumeBuild(short).then((res) => {
       if (res.ok) return;
-      setBuilds((prev) => ({ ...prev, [short]: "failed" }));
+      setBuilds((prev) => ({ ...prev, [short]: { failed: res.error || "Couldn't start the resume build." } }));
       toast.error(res.error || "Couldn't start the resume build.");
     });
   }
@@ -394,8 +409,13 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     el?.scrollIntoView?.({ block: "nearest" });
   }, [cursor]);
 
-  // While any build is in flight, poll the store every 15s for the resume URL;
-  // declare the build failed after 8 minutes. Re-arms whenever `builds`
+  // While any build is in flight, poll every 15s. The server's build status
+  // (resume:getBuildStatus) is checked FIRST: still "building" -> keep the
+  // spinner; the action patched to "failed" -> drop the row to the failed
+  // state, surfacing the server error. Only when the status row is gone
+  // (null, i.e. the build succeeded and cleared it, or a client reload) do we
+  // fall through to the resume URL to move the row to "built". A 15-minute
+  // client safety net catches a hung action. Re-arms whenever `builds`
   // changes, so a completed/failed build stops polling right away. Start
   // timestamps are stamped lazily on the first tick (async interval callbacks
   // keep Date.now out of the component's pure render scope).
@@ -411,11 +431,37 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
         }
         if (Date.now() - buildStartedAt.current[s] > BUILD_TIMEOUT_MS) {
           setBuilds((prev) =>
-            prev[s] === "building" ? { ...prev, [s]: "failed" } : prev
+            prev[s] === "building"
+              ? { ...prev, [s]: { failed: "Build timed out after 15 minutes." } }
+              : prev
           );
           continue;
         }
-        void fetchResumeUrl(s).then((url) => {
+        void (async () => {
+          let status;
+          try {
+            status = await fetchBuildStatus(s);
+          } catch {
+            return; // transient error - keep polling
+          }
+          if (status === "building") return; // still running
+          if (status && typeof status === "object" && status.status === "failed") {
+            // The action patched the build row to failed with its error.
+            setBuilds((prev) =>
+              prev[s] === "building"
+                ? { ...prev, [s]: { failed: status.error || "Build failed." } }
+                : prev
+            );
+            return;
+          }
+          // status is null: the build row was cleared (success) or this client
+          // missed the request - check whether the resume URL has landed.
+          let url: string | null = null;
+          try {
+            url = await fetchResumeUrl(s);
+          } catch {
+            return;
+          }
           if (!url) return;
           updateRow(s, { resumeUrl: url });
           setBuilds((prev) => {
@@ -423,7 +469,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
             delete next[s];
             return next;
           });
-        });
+        })();
       }
     }, BUILD_POLL_MS);
     return () => window.clearInterval(timer);
@@ -585,6 +631,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                     onHide={() => hideShort(r.short)}
                     onRestore={() => restoreShort(r.short)}
                     buildState={buildStateFor(r)}
+                    buildError={buildErrorFor(r)}
                     onBuild={() => startBuild(r.short)}
                   />
                 ))}
@@ -602,6 +649,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                     onHide={() => hideShort(r.short)}
                     onRestore={() => restoreShort(r.short)}
                     buildState={buildStateFor(r)}
+                    buildError={buildErrorFor(r)}
                     onBuild={() => startBuild(r.short)}
                   />
                 ))}
@@ -655,10 +703,12 @@ function ResumeButton({
   state,
   href,
   onBuild,
+  error,
 }: {
   state: BuildState;
   href: string | null;
   onBuild: () => void;
+  error?: string;
 }) {
   const base =
     "inline-flex min-w-[98px] items-center justify-center gap-1.5 rounded-[5px] border px-2 py-[5px] text-[12px] font-medium whitespace-nowrap transition-colors select-none";
@@ -698,6 +748,7 @@ function ResumeButton({
     return (
       <button
         type="button"
+        title={error}
         onClick={(e) => {
           e.stopPropagation();
           onBuild();
@@ -737,6 +788,7 @@ function RowView({
   onHide,
   onRestore,
   buildState,
+  buildError,
   onBuild,
 }: {
   row: TriageRow;
@@ -747,6 +799,7 @@ function RowView({
   onHide: () => void;
   onRestore: () => void;
   buildState: BuildState;
+  buildError?: string;
   onBuild: () => void;
 }) {
   const { short, company, title, location, salary, added, applied, saved, dismissed } = row;
@@ -826,7 +879,7 @@ function RowView({
 
       {/* actions */}
       <div className="flex items-center gap-1.5 self-center">
-        <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} />
+        <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
         {dismissed ? (
           <button
             type="button"
@@ -863,6 +916,7 @@ function MobileCard({
   onHide,
   onRestore,
   buildState,
+  buildError,
   onBuild,
 }: {
   row: TriageRow;
@@ -874,6 +928,7 @@ function MobileCard({
   onHide: () => void;
   onRestore: () => void;
   buildState: BuildState;
+  buildError?: string;
   onBuild: () => void;
 }) {
   const [drag, setDrag] = useState(0);
@@ -1034,7 +1089,7 @@ function MobileCard({
             >
               Open
             </button>
-            <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} />
+            <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
             <button
               type="button"
               onClick={(e) => {
