@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { applyStatus } from "./ledger";
+import { applyStatus, removeIfUnprogressed } from "./ledger";
 
 // Query/mutation functions backing the ConvexStore TrackerStore driver
 // (src/store.py). Every endpoint - reads and writes - checks the secret
@@ -63,6 +63,21 @@ export const setTicks = mutation({
           q.eq("user", user).eq("short", w.short),
         )
         .first();
+      // Ticking applied is what creates the application. Until this existed
+      // the ledger was only ever written by the watcher, which mirrors
+      // item["applied"] out of its own run state: a tick made in the web UI
+      // did not reach the tracker until the next cron (up to 2h), and a
+      // manually ingested job - which lives only in this table and never in
+      // that run state - could never reach it at all. Writing here makes both
+      // immediate. applyStatus backfills the display snapshot from `matches`,
+      // so manual rows render properly too.
+      if (w.field === "applied") {
+        if (w.value) {
+          await applyStatus(ctx.db, { user, short: w.short, status: "applied" });
+        } else {
+          await removeIfUnprogressed(ctx.db, { user, short: w.short });
+        }
+      }
       if (existing) {
         await ctx.db.patch(existing._id, {
           [w.field]: w.value,
@@ -183,6 +198,56 @@ export const pruneMatches = mutation({
         await ctx.db.delete(row._id);
       }
     }
+  },
+});
+
+/**
+ * Remove a single match, permanently for hand-added jobs.
+ *
+ * Distinct from hiding, which only sets the `dismissed` tick and leaves the row
+ * in place under the Hidden filter. Until this existed the only thing that ever
+ * deleted a match was the watcher's snapshot prune, so a manually added job -
+ * which that prune deliberately skips - could never be removed at all.
+ *
+ * The ingest records for the job go with it, otherwise the next attempt to add
+ * the same URL is refused by a record whose match no longer exists.
+ *
+ * Deliberately untouched:
+ *  - the applications ledger, which is the permanent record of an application
+ *    and is never pruned;
+ *  - the ticks row, so re-adding the same job restores its applied/saved state
+ *    rather than silently losing it.
+ *
+ * `willReturn` reports that this row came from the watcher rather than a manual
+ * add, so deleting it only lasts until the next watcher run re-pushes it. The
+ * caller decides what to do about that; hiding is usually what was wanted.
+ */
+export const deleteMatch = mutation({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!row) return { deleted: false, willReturn: false, ingestsRemoved: 0 };
+
+    const isManual = row.item?.source === "manual";
+    await ctx.db.delete(row._id);
+
+    const ingests = await ctx.db
+      .query("manualIngests")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .collect();
+    for (const ing of ingests) {
+      await ctx.db.delete(ing._id);
+    }
+
+    return {
+      deleted: true,
+      willReturn: !isManual,
+      ingestsRemoved: ingests.length,
+    };
   },
 });
 
