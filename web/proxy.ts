@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
  */
 // Sign-in/up are catch-all routes: Clerk mounts subpaths under them (e.g.
 // /sign-in/sso-callback for OAuth), so the whole prefix must stay public.
-const PUBLIC_RE = /^(\/sign-(in|up)(\/.*)?|\/lavish(\/.*)?)$/;
+const PUBLIC_RE = /^\/sign-(in|up)(\/.*)?$/;
 
 export default clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
@@ -25,5 +25,5 @@ export const config = {
   // Match all app routes except Next internals and files with a dot in the
   // path (static assets), so sign-in/sign-up are still caught and whitelisted
   // inside the handler.
-  matcher: ["/((?!_next|lavish|.*\\..*).*)"],
+  matcher: ["/((?!_next|.*\\..*).*)"],
 };
