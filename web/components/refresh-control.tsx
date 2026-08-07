@@ -1,17 +1,18 @@
 "use client";
 
 import { useState, useSyncExternalStore, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSyncRefresh } from "@/lib/sync-pulse";
 
 /**
  * "as of 10:39 AM ⟳ refresh" - the freshness readout and manual reload,
  * carried over from the Python webui (src/webui/static/index.html).
  *
- * Both pages are server components that read Convex at request time, so a
+ * The page is a server component that reads Convex at request time, so a
  * refresh is `router.refresh()` inside a transition: the icon spins and the
- * button is disabled until the server component has re-rendered.
+ * button is disabled until the server component has re-rendered. It goes
+ * through `useSyncRefresh`, which also pulses the header's sync sweep.
  *
  * The watcher cron runs every two hours, so data that outlives one cycle is
  * genuinely stale - past that the timestamp goes amber and carries a tooltip,
@@ -46,7 +47,7 @@ function formatTime(ms: number): string {
 }
 
 export function RefreshControl({ className }: { className?: string }) {
-  const router = useRouter();
+  const syncRefresh = useSyncRefresh();
   const [pending, startTransition] = useTransition();
   // When this page's data was last loaded on the client: mount, then every
   // refresh. Stamped as the refresh starts rather than as it lands - the
@@ -60,7 +61,7 @@ export function RefreshControl({ className }: { className?: string }) {
 
   function refresh() {
     setLoadedAt(Date.now());
-    startTransition(() => router.refresh());
+    startTransition(() => syncRefresh());
   }
 
   return (

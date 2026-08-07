@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Eraser as EraserIcon,
@@ -35,7 +34,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { updateStatus } from "@/app/(app)/tracker/tracker-actions";
+import { updateStatus } from "@/app/(app)/tracker-actions";
+import { useAppView } from "@/lib/view";
 import {
   GHOST_DAYS,
   STATUS_LABELS,
@@ -415,7 +415,7 @@ function EmptyState() {
 }
 
 export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
-  const router = useRouter();
+  const { show } = useAppView();
   const [rows, setRows] = useState(initialRows);
   const [historyRow, setHistoryRow] = useState<TrackerRow | null>(null);
 
@@ -476,7 +476,7 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
       id: "matches",
       label: "Go to Matches",
       icon: <LayoutListIcon className="size-4" />,
-      run: () => router.push("/"),
+      run: () => show("matches"),
     },
     {
       id: "tracker",
@@ -489,8 +489,8 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
       label: "Show hidden",
       icon: <GhostIcon className="size-4" />,
       // The hidden list lives on the matches surface, which opens on whatever
-      // `?filter=` says - so from here it is a navigation, not a local toggle.
-      run: () => router.push("/?filter=hidden"),
+      // `?filter=` says - so from here it is a view switch, not a local toggle.
+      run: () => show("matches", "hidden"),
     },
     {
       id: "clear",
