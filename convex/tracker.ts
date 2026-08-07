@@ -174,6 +174,11 @@ export const pruneMatches = mutation({
       .withIndex("by_user", (q) => q.eq("user", user))
       .collect();
     for (const row of rows) {
+      // Manually ingested rows are outside the watcher's snapshot: they live
+      // only in this table, never in the run state that builds `keep`. Pruning
+      // them would delete every hand-added job on the next watcher run (the
+      // cron is every 2h), so the snapshot only governs the rows it owns.
+      if (row.item?.source === "manual") continue;
       if (!kept.has(row.short)) {
         await ctx.db.delete(row._id);
       }

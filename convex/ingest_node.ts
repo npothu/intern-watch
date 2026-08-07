@@ -4,7 +4,7 @@ import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { canonicalUrl, detectAts, extractForAts } from "./ingest_extract";
+import { canonicalUrl, detectAts, extractForAts, inferTerm } from "./ingest_extract";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const FETCH_MAX_BYTES = 200 * 1024; // 200KB cap
@@ -25,6 +25,15 @@ async function fetchWithLimits(url: string): Promise<string> {
     });
     if (!resp.ok) throw new Error(`fetch failed: HTTP ${resp.status}`);
     const text = await resp.text();
+    // A 2xx with nothing in it is not a success. Avature answers automated
+    // requests with HTTP 202 and a zero-length body, which passed `resp.ok`
+    // and left the extractor parsing an empty string - producing a match row
+    // with a hostname for a company and a placeholder title.
+    if (!text.trim()) {
+      throw new Error(
+        `empty response (HTTP ${resp.status}) - this page likely renders with JavaScript or blocks automated fetches`
+      );
+    }
     if (text.length > FETCH_MAX_BYTES) return text.slice(0, FETCH_MAX_BYTES);
     return text;
   } finally {
@@ -73,12 +82,13 @@ export const runIngest = internalAction({
         console.warn("llm enrich failed", e);
       }
 
-      // If extraction yielded placeholder Unknown and we have no data, still proceed with fallback
-      if (!extracted.company || extracted.company === "Unknown") {
-        // Try to fallback to generic host-derived company (already done)
-      }
+      // A row whose title is a placeholder is worse than no row: it looks like
+      // a real match in the list and gives no clue that extraction failed.
+      // Fail the ingest instead, so the dialog can say so.
       if (!extracted.title || extracted.title === "Unknown") {
-        extracted.title = "Manual Ingest";
+        throw new Error(
+          "couldn't read a job title from this page - it may require JavaScript or a login"
+        );
       }
 
       // Build MatchItem
@@ -91,7 +101,7 @@ export const runIngest = internalAction({
         company: extracted.company,
         title: extracted.title,
         location: extracted.location || "",
-        term: "",
+        term: inferTerm(extracted.title, ingest.url),
         added: today,
         tag: "[MANUAL]",
         salary: "",

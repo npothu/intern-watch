@@ -227,7 +227,8 @@ export function extractGeneric(html: string, url: string): ExtractedJob {
     }
     if (title || company) {
       return {
-        company: decodeEntities(company) || hostFallback(url),
+        company:
+          decodeEntities(company) || companyFromUrl(url) || hostFallback(url),
         title: decodeEntities(title) || titleFallback(html),
         location: decodeEntities(location),
       };
@@ -246,14 +247,21 @@ export function extractGeneric(html: string, url: string): ExtractedJob {
 
   const siteName = metaContent(html, "property", "og:site_name") || "";
   let company = decodeEntities(siteName).trim();
+  // Check the " at <employer>" phrase across every title-ish string, not just
+  // the one chosen as the job title: boards commonly put the role in the <h1>
+  // and "<role> at <employer>" in the <title>, so keying off the chosen title
+  // alone misses the employer entirely.
   if (!company) {
-    // Try to infer from title separator " at "
-    const atIdx = title.toLowerCase().lastIndexOf(" at ");
-    if (atIdx !== -1) {
-      const maybe = title.slice(atIdx + 4).trim().split(/[|–—\-\n]/)[0].trim();
-      if (maybe.length >= 2 && maybe.length <= 60) company = maybe;
+    for (const candidate of [titleTag, ogTitle, h1]) {
+      if (!candidate) continue;
+      const found = companyFromAtPhrase(decodeEntities(candidate));
+      if (found) {
+        company = found;
+        break;
+      }
     }
   }
+  if (!company) company = companyFromUrl(url);
   if (!company) company = hostFallback(url);
 
   // Location: try meta or location-ish text
@@ -266,6 +274,71 @@ export function extractGeneric(html: string, url: string): ExtractedJob {
     title: title || titleFallback(html) || "Unknown",
     location,
   };
+}
+
+/**
+ * The employer name carried in an ATS URL. More reliable than the hostname on
+ * shared boards: job-boards.greenhouse.io yields "Job-boards" from the host but
+ * names the employer in `?for=`, and Ashby/Lever put it in the first path
+ * segment.
+ */
+export function companyFromUrl(raw: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return "";
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  const seg = u.pathname.split("/").filter(Boolean);
+  const pretty = (s: string) =>
+    s
+      .replace(/[-_]+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  if (host.includes("greenhouse.io")) {
+    const forParam = u.searchParams.get("for");
+    if (forParam) return pretty(forParam);
+    const first = seg.find((s) => s !== "embed" && s !== "job_app");
+    if (first) return pretty(first);
+  }
+  if (host.includes("ashbyhq.com") || host.includes("lever.co")) {
+    if (seg.length) return pretty(seg[0]);
+  }
+  return "";
+}
+
+/**
+ * "Job Application for Maps Intern (Fall 2026) at Zipline" -> "Zipline".
+ * Job boards put the employer after the last " at " in the page title far more
+ * often than they expose og:site_name.
+ */
+function companyFromAtPhrase(text: string): string {
+  const atIdx = text.toLowerCase().lastIndexOf(" at ");
+  if (atIdx === -1) return "";
+  const maybe = text
+    .slice(atIdx + 4)
+    .trim()
+    .split(/[|–—\n]/)[0]
+    .trim();
+  return maybe.length >= 2 && maybe.length <= 60 ? maybe : "";
+}
+
+/**
+ * Pull a "Fall 2026"-style term out of whichever text carries it. Manual adds
+ * otherwise land under "Unknown term" even when the title spells the term out.
+ */
+export function inferTerm(...texts: (string | undefined)[]): string {
+  const re = /\b(fall|spring|summer|winter)\s*'?\s*(20\d{2})\b/i;
+  for (const t of texts) {
+    if (!t) continue;
+    const m = re.exec(t);
+    if (m) {
+      const season = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+      return `${season} ${m[2]}`;
+    }
+  }
+  return "";
 }
 
 function hostFallback(url: string): string {
