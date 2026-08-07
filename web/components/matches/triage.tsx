@@ -1,11 +1,29 @@
 "use client";
 
+// web/components/matches/triage.tsx — full replacement implementing the
+// approved motion set on top of the existing component, unchanged in data
+// flow (writeTicks batching, burst semantics, filters, mobile swipe):
+//
+//   1a  sliding cursor rail + wash (one element per term group, measured,
+//       springs between rows) and spring ticks (check draws itself, star
+//       pops) — animations fire only on user toggle, never on first paint
+//   1b  entrance cascade on mount / filter change / settled search change
+//       (list remounts via `epoch` key; stagger capped at 12 rows)
+//   1d  glass dock with keycap press ripple, fired from BOTH clicks and
+//       keyboard shortcuts, plus a one-time entrance rise
+//   1g  hide = 320ms grid-row collapse, THEN the optimistic dismiss commits;
+//       undo/restore plays the reverse; ink slab count pulses per hide
+//
+// Requires the "motion block" appended to app/globals.css.
+
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import { Check, Star, X, Undo2, FileText, Loader2 } from "lucide-react";
@@ -20,26 +38,6 @@ import {
 import type { TriageRow } from "@/app/(app)/page";
 import type { TickWrite } from "@/lib/convex";
 
-/**
- * The matches triage surface - a faithful React port of the approved mock's
- * "master demo" (web-design/approved-spec.html):
- *
- *   - statline (matches / applied / saved / resumes / hidden) - each segment
- *     is a clickable filter
- *   - search input (case-insensitive substring over company+title+location)
- *   - term-grouped sections, configured terms first then anything else
- *   - rows: applied/saved tick pair, company + tags, ellipsized title, tabular
- *     meta line, built-resume link, red-tinted hide. Cursor row = inset accent
- *     rail + 4% accent wash. Applied rows dim company/title.
- *   - the clustered dock: nav (k/j) | triage (x/s/h) | open (Enter), labelled
- *     buttons that collapse to keycaps under 700px
- *   - keyboard j/k/↑/↓ move, x/s/h triage, Enter open, u undo last hide burst
- *   - batch hide coalesced ~500ms into one setTicks call, with an ink-slab
- *     aggregate undo toast (count updates in place per burst)
- *   - under 700px rows become swipe cards (left = hide, right = save, tap =
- *     expand applied/open/resume)
- */
-
 type Filter = "all" | "applied" | "saved" | "resumes" | "hidden";
 
 const TERM_ORDER = ["Fall 2026", "Spring 2027", "Summer 2027"];
@@ -49,16 +47,12 @@ const FLUSH_IDLE = 500;
 const FLUSH_CAP = 50;
 const BURST_MS = 6000;
 const SWIPE_THRESHOLD = 70;
+const HIDE_MS = 340; // collapse duration + a frame; dismiss commits after this
+const CASCADE_CAP = 12; // rows past this share the final delay
 const BUILD_POLL_MS = 15000;
-// Client-side safety net only: with the build running inside Convex, the
-// server status (resume:getBuildStatus) is authoritative and the 8-minute
-// hard-stop is gone. Keep a generous 15-minute guard so a hung action still
-// surfaces as a failed row instead of spinning forever.
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
-/** One per-row resume button's Study-4 state machine. */
 type BuildState = "idle" | "building" | "built" | "failed";
-/** In-flight trackers; a failed build carries its server error string. */
 type InFlight = "building" | { failed: string };
 
 const FILTERS: { key: Filter; label: string }[] = [
@@ -68,6 +62,23 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "resumes", label: "resumes" },
   { key: "hidden", label: "hidden" },
 ];
+
+/* A user-action flash: which element should replay its pop animation.
+   `n` increments per flash; its parity alternates the A/B keyframe name so
+   the same element can restart the animation on consecutive triggers. */
+type FlashState = { key: string; n: number };
+
+const popAnim = (n: number) =>
+  `${n % 2 ? "tickpopB" : "tickpopA"} .32s var(--ease-pop)`;
+const pressAnim = (n: number) =>
+  `${n % 2 ? "keypressB" : "keypressA"} .36s var(--ease-pop)`;
+
+function cascadeStyle(i: number): CSSProperties {
+  return {
+    animation: "cascade .5s var(--ease-out-soft) both",
+    animationDelay: `${Math.min(i, CASCADE_CAP) * 70}ms`,
+  };
+}
 
 function fmtDate(iso?: string): string {
   if (!iso) return "";
@@ -134,6 +145,50 @@ function useIsMobile(): boolean {
   return mobile;
 }
 
+/* 1g — collapse shell. `open=false` collapses the row (grid-template-rows
+   0fr + fade); `enter` mounts closed and opens on the next frame (restore /
+   undo reverse animation). Class `collapse-shell` drives the first-child
+   border/padding rules in globals.css. */
+function CollapseShell({
+  open,
+  enter = false,
+  children,
+}: {
+  open: boolean;
+  enter?: boolean;
+  children: React.ReactNode;
+}) {
+  const [ready, setReady] = useState(!enter);
+  useEffect(() => {
+    if (!ready) {
+      const id = requestAnimationFrame(() => setReady(true));
+      return () => cancelAnimationFrame(id);
+    }
+  }, [ready]);
+  const expanded = open && ready;
+  return (
+    <div
+      className="collapse-shell"
+      style={{
+        display: "grid",
+        gridTemplateRows: expanded ? "1fr" : "0fr",
+        transition: "grid-template-rows .32s var(--ease-out-soft)",
+      }}
+    >
+      <div
+        style={{
+          overflow: "hidden",
+          minHeight: 0,
+          opacity: expanded ? 1 : 0,
+          transition: "opacity .25s",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function Tags({ tag }: { tag: string }) {
   if (!tag) return null;
   const raw = tag.replace(/[\[\]*]/g, "").toLowerCase();
@@ -169,6 +224,18 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     count: 0,
   });
 
+  // Motion state -----------------------------------------------------------
+  // 1b: bumping `epoch` remounts the list container, replaying the cascade.
+  const [epoch, setEpoch] = useState(0);
+  // 1a: which tick just got toggled ON ("<short>:a" | "<short>:s").
+  const [tickFlash, setTickFlash] = useState<FlashState>({ key: "", n: 0 });
+  // 1d: which dock action just fired.
+  const [pressed, setPressed] = useState<FlashState>({ key: "", n: 0 });
+  // 1g: rows mid-collapse (still rendered, dismiss not yet committed) and
+  // rows that should enter with the reverse animation.
+  const [hiding, setHiding] = useState<ReadonlySet<string>>(new Set());
+  const [entering, setEntering] = useState<ReadonlySet<string>>(new Set());
+
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -177,16 +244,13 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   const flushBusy = useRef(false);
   const burstShorts = useRef<Set<string>>(new Set());
   const burstTimer = useRef<number | null>(null);
+  const hideTimers = useRef<Map<string, number>>(new Map());
 
   const isMobile = useIsMobile();
 
-  // Per-row resume build state. Only in-flight (building) and failed rows are
-  // tracked here; `built` is derived from the row's resumeUrl, and a page
-  // reload drops the map (see the build-state machine notes). Timestamps live
-  // in a ref so polling survives effect re-runs without resetting the timeout.
+  // Per-row resume build state (Convex-native)
   const [builds, setBuilds] = useState<Record<string, InFlight>>({});
   const buildStartedAt = useRef<Record<string, number>>({});
-
   const buildStateFor = useCallback(
     (row: TriageRow): BuildState => {
       if (row.resumeUrl) return "built";
@@ -197,8 +261,6 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     },
     [builds]
   );
-
-  /** The server error message for a failed build (title attr on the button). */
   const buildErrorFor = useCallback(
     (row: TriageRow): string | undefined => {
       const s = builds[row.short];
@@ -218,8 +280,6 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     [rows, filter, query]
   );
   const groups = useMemo(() => groupByTerm(visible), [visible]);
-  // Navigation must follow the RENDERED order (term groups, sorted within
-  // each group), not the server's row order - j/k walks what the eye sees.
   const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
 
   const stats = useMemo(() => {
@@ -236,6 +296,35 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
 
+  useEffect(() => {
+    if (!cursor) return;
+    const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [cursor]);
+
+  // 1b: replay the cascade when the filter changes or the search settles
+  // (150ms after the last keystroke). Never on tick/hide mutations.
+  const skipFirstEpoch = useRef(true);
+  useEffect(() => {
+    if (skipFirstEpoch.current) {
+      skipFirstEpoch.current = false;
+      return;
+    }
+    const id = window.setTimeout(() => setEpoch((e) => e + 1), 150);
+    return () => window.clearTimeout(id);
+  }, [filter, query]);
+
+  function flashDock(key: string) {
+    setPressed((p) => ({ key, n: p.n + 1 }));
+  }
+  function flashTick(short: string, field: "a" | "s") {
+    setTickFlash((p) => ({ key: `${short}:${field}`, n: p.n + 1 }));
+  }
+  function markEntering(shorts: string[]) {
+    setEntering(new Set(shorts));
+    window.setTimeout(() => setEntering(new Set()), 400);
+  }
+
   function sealBurst() {
     if (burstTimer.current) {
       window.clearTimeout(burstTimer.current);
@@ -250,16 +339,28 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     const shorts = [...burstShorts.current];
     let needsFlush = false;
     for (const s of shorts) {
+      // A row still mid-collapse hasn't been dismissed yet - just cancel it.
+      const t = hideTimers.current.get(s);
+      if (t) {
+        window.clearTimeout(t);
+        hideTimers.current.delete(s);
+      }
       const v = pendingDismiss.current.get(s);
       if (v === true) pendingDismiss.current.delete(s);
       else if (v === false) {
         // restore already queued - leave it
-      } else {
+      } else if (!t) {
         pendingDismiss.current.set(s, false);
         needsFlush = true;
       }
       updateRow(s, { dismissed: false });
     }
+    setHiding((prev) => {
+      const next = new Set(prev);
+      for (const s of shorts) next.delete(s);
+      return next;
+    });
+    markEntering(shorts); // reverse animation for rows re-entering the list
     sealBurst();
     if (needsFlush) scheduleFlush();
   }
@@ -282,7 +383,6 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
         if (queue.get(w.short) === w.value) queue.delete(w.short);
       }
     } catch {
-      // Roll back exactly the flushed shorts to their pre-burst state.
       for (const w of writes) {
         if (queue.get(w.short) === w.value) queue.delete(w.short);
         updateRow(w.short, { dismissed: !w.value });
@@ -315,30 +415,46 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     if (queue.get(short) === dismissed) return;
     queue.set(short, dismissed);
     updateRow(short, { dismissed });
-    if (dismissed) {
-      burstShorts.current.add(short);
-      setBurst({ visible: true, count: burstShorts.current.size });
-      if (burstTimer.current) window.clearTimeout(burstTimer.current);
-      burstTimer.current = window.setTimeout(sealBurst, BURST_MS);
-    }
     scheduleFlush();
   }
 
+  /* 1g: hide = collapse first, commit after. Burst bookkeeping (slab count,
+     seal timer) starts immediately so the slab reads "Hidden N" in real time,
+     but the row stays rendered (collapsing) until HIDE_MS elapses. */
   function hideShort(short: string) {
+    if (hiding.has(short)) return;
     const i = ordered.findIndex((r) => r.short === short);
     const next = ordered[i + 1] || ordered[i - 1];
     setCursor(next ? next.short : null);
-    queueDismiss(short, true);
+
+    setHiding((prev) => new Set(prev).add(short));
+    burstShorts.current.add(short);
+    setBurst({ visible: true, count: burstShorts.current.size });
+    if (burstTimer.current) window.clearTimeout(burstTimer.current);
+    burstTimer.current = window.setTimeout(sealBurst, BURST_MS);
+
+    const t = window.setTimeout(() => {
+      hideTimers.current.delete(short);
+      setHiding((prev) => {
+        const next2 = new Set(prev);
+        next2.delete(short);
+        return next2;
+      });
+      queueDismiss(short, true);
+    }, HIDE_MS);
+    hideTimers.current.set(short, t);
   }
 
   function restoreShort(short: string) {
     queueDismiss(short, false);
+    markEntering([short]);
   }
 
   function toggleApplied(short: string) {
     const r = rows.find((x) => x.short === short);
     if (!r) return;
     const value = !r.applied;
+    if (value) flashTick(short, "a"); // 1a: pop + checkdraw only on toggle-ON
     updateRow(short, { applied: value });
     void writeTicks([{ short, field: "applied", value }]).catch(() => {
       updateRow(short, { applied: r.applied });
@@ -350,50 +466,25 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     const r = rows.find((x) => x.short === short);
     if (!r) return;
     const value = !r.saved;
+    if (value) flashTick(short, "s");
     updateRow(short, { saved: value });
     void writeTicks([{ short, field: "saved", value }]).catch(() => {
       updateRow(short, { saved: r.saved });
       toast.error("Couldn't sync saved state.");
     });
   }
-
-  function move(delta: number) {
-    if (!ordered.length) return;
-    let i = cursorIndex;
-    if (i < 0) {
-      i = delta > 0 ? 0 : ordered.length - 1;
-    } else {
-      i = Math.max(0, Math.min(ordered.length - 1, i + delta));
-    }
-    setCursor(ordered[i].short);
-  }
-
-  function openRow(row?: TriageRow) {
-    const r = row ?? currentRow;
-    if (r?.url) window.open(r.url, "_blank", "noopener");
-  }
-
-  // Study-4 build trigger: optimistic "building", then a server-side dispatch.
-  // A rejected dispatch (e.g. token missing, HTTP error) flips the row to the
-  // failed/retry state immediately.
   function startBuild(short: string) {
     const row = rows.find((x) => x.short === short);
     if (!row || row.resumeUrl) return;
     if (builds[short] === "building") return;
-    // Drop any stale timestamp so the poller re-stamps a fresh one on its
-    // first tick (a retry must not inherit a failed run's deadline).
     delete buildStartedAt.current[short];
-    setBuilds((prev) => ({ ...prev, [short]: "building" }));
+    setBuilds((prev) => ({ ...prev, [short]: "building" as const }));
     void requestResumeBuild(short).then((res) => {
       if (res.ok) return;
       setBuilds((prev) => ({ ...prev, [short]: { failed: res.error || "Couldn't start the resume build." } }));
       toast.error(res.error || "Couldn't start the resume build.");
     });
   }
-
-  // Dock/keyboard `b` acts on the cursor row, mirroring its button state:
-  // built opens the resume, building is a no-op (button disabled), otherwise
-  // it dispatches. No auto-advance.
   function dockBuild() {
     if (!currentRow) return;
     if (currentRow.resumeUrl) {
@@ -402,23 +493,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     }
     startBuild(currentRow.short);
   }
-
-  useEffect(() => {
-    if (!cursor) return;
-    const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
-    el?.scrollIntoView?.({ block: "nearest" });
-  }, [cursor]);
-
-  // While any build is in flight, poll every 15s. The server's build status
-  // (resume:getBuildStatus) is checked FIRST: still "building" -> keep the
-  // spinner; the action patched to "failed" -> drop the row to the failed
-  // state, surfacing the server error. Only when the status row is gone
-  // (null, i.e. the build succeeded and cleared it, or a client reload) do we
-  // fall through to the resume URL to move the row to "built". A 15-minute
-  // client safety net catches a hung action. Re-arms whenever `builds`
-  // changes, so a completed/failed build stops polling right away. Start
-  // timestamps are stamped lazily on the first tick (async interval callbacks
-  // keep Date.now out of the component's pure render scope).
+  // Polling for Convex resume builds
   useEffect(() => {
     const building = Object.entries(builds)
       .filter(([, s]) => s === "building")
@@ -426,15 +501,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     if (!building.length) return;
     const timer = window.setInterval(() => {
       for (const s of [...building]) {
-        if (buildStartedAt.current[s] === undefined) {
-          buildStartedAt.current[s] = Date.now();
-        }
+        if (buildStartedAt.current[s] === undefined) buildStartedAt.current[s] = Date.now();
         if (Date.now() - buildStartedAt.current[s] > BUILD_TIMEOUT_MS) {
-          setBuilds((prev) =>
-            prev[s] === "building"
-              ? { ...prev, [s]: { failed: "Build timed out after 15 minutes." } }
-              : prev
-          );
+          setBuilds((prev) => (prev[s] === "building" ? { ...prev, [s]: { failed: "Build timed out after 15 minutes." } } : prev));
           continue;
         }
         void (async () => {
@@ -442,20 +511,13 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
           try {
             status = await fetchBuildStatus(s);
           } catch {
-            return; // transient error - keep polling
-          }
-          if (status === "building") return; // still running
-          if (status && typeof status === "object" && status.status === "failed") {
-            // The action patched the build row to failed with its error.
-            setBuilds((prev) =>
-              prev[s] === "building"
-                ? { ...prev, [s]: { failed: status.error || "Build failed." } }
-                : prev
-            );
             return;
           }
-          // status is null: the build row was cleared (success) or this client
-          // missed the request - check whether the resume URL has landed.
+          if (status === "building") return;
+          if (status && typeof status === "object" && status.status === "failed") {
+            setBuilds((prev) => (prev[s] === "building" ? { ...prev, [s]: { failed: status.error || "Build failed." } } : prev));
+            return;
+          }
           let url: string | null = null;
           try {
             url = await fetchResumeUrl(s);
@@ -475,11 +537,26 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     return () => window.clearInterval(timer);
   }, [builds, updateRow]);
 
+  function move(delta: number) {
+    if (!ordered.length) return;
+    let i = cursorIndex;
+    if (i < 0) {
+      i = delta > 0 ? 0 : ordered.length - 1;
+    } else {
+      i = Math.max(0, Math.min(ordered.length - 1, i + delta));
+    }
+    setCursor(ordered[i].short);
+  }
+
+  function openRow(row?: TriageRow) {
+    const r = row ?? currentRow;
+    if (r?.url) window.open(r.url, "_blank", "noopener");
+  }
+
   function actOnCurrent(kind: "applied" | "saved" | "hide") {
     if (!currentRow) return;
     if (kind === "applied") {
       toggleApplied(currentRow.short);
-      move(1);
     } else if (kind === "saved") {
       toggleSaved(currentRow.short);
       move(1);
@@ -488,42 +565,58 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     }
   }
 
-  // Keep the latest keydown handler in a ref, refreshed after every render
-  // (inside an effect, not during render), so a single mount-time listener
-  // always sees the current cursor/state closures.
   const keyboardActions = useRef<(e: KeyboardEvent) => void>(() => {});
   useEffect(() => {
     keyboardActions.current = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key;
-      if (k === "j" || k === "ArrowDown") {
+      if (k === "Escape") return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      const kl = k.toLowerCase();
+      if (isInput) {
+        if (kl === "z" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          undoBurst();
+        }
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey || e.altKey) && !(kl === "z")) return;
+      if (kl === "j" || k === "ArrowDown") {
         e.preventDefault();
+        flashDock("down");
         move(1);
-      } else if (k === "k" || k === "ArrowUp") {
+      } else if (kl === "k" || k === "ArrowUp") {
         e.preventDefault();
+        flashDock("up");
         move(-1);
       } else if (k === "/") {
         e.preventDefault();
         searchRef.current?.focus();
-      } else if (k === "x") {
+      } else if (kl === "x") {
         e.preventDefault();
+        flashDock("applied");
         actOnCurrent("applied");
-      } else if (k === "s") {
+      } else if (kl === "s") {
         e.preventDefault();
+        flashDock("saved");
         actOnCurrent("saved");
-      } else if (k === "h") {
+      } else if (kl === "h") {
         e.preventDefault();
+        flashDock("hide");
         actOnCurrent("hide");
-      } else if (k === "u") {
+      } else if (kl === "u") {
         e.preventDefault();
         undoBurst();
-      } else if (k === "b") {
+      } else if (kl === "z" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
+        undoBurst();
+      } else if (kl === "b") {
+        e.preventDefault();
+        flashDock("build");
         dockBuild();
       } else if (k === "Enter") {
         e.preventDefault();
+        flashDock("open");
         openRow();
       }
     };
@@ -537,6 +630,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
 
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && groups.length === 0;
+
+  // Flat render index per row for the cascade stagger.
+  let flatIndex = 0;
 
   return (
     <div
@@ -609,67 +705,131 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
           </div>
         </div>
       ) : (
-        groups.map((g) => (
-          <section key={g.term} className="mb-5 last:mb-0">
-            <h2 className="mb-1.5 flex items-baseline gap-1.5 text-[11.5px] font-semibold tracking-[0.09em] text-ink-2 uppercase">
-              {g.term}
-              <span className="font-normal not-italic tracking-normal normal-case text-ink-2/80">
-                · {g.rows.length}
-              </span>
-            </h2>
-            {isMobile ? (
-              <div className="space-y-2">
-                {g.rows.map((r) => (
-                  <MobileCard
-                    key={r.short}
-                    row={r}
-                    isCursor={r.short === cursor}
-                    onSelect={() => setCursor(r.short)}
-                    onOpen={() => openRow(r)}
-                    onToggleApplied={() => toggleApplied(r.short)}
-                    onToggleSaved={() => toggleSaved(r.short)}
-                    onHide={() => hideShort(r.short)}
-                    onRestore={() => restoreShort(r.short)}
-                    buildState={buildStateFor(r)}
-                    buildError={buildErrorFor(r)}
-                    onBuild={() => startBuild(r.short)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-md border border-line bg-surface">
-                {g.rows.map((r) => (
-                  <RowView
-                    key={r.short}
-                    row={r}
-                    isCursor={r.short === cursor}
-                    onSelect={() => setCursor(r.short)}
-                    onToggleApplied={() => toggleApplied(r.short)}
-                    onToggleSaved={() => toggleSaved(r.short)}
-                    onHide={() => hideShort(r.short)}
-                    onRestore={() => restoreShort(r.short)}
-                    buildState={buildStateFor(r)}
-                    buildError={buildErrorFor(r)}
-                    onBuild={() => startBuild(r.short)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        ))
+        /* 1b: key={epoch} remounts the whole list so the cascade replays */
+        <div key={epoch}>
+          {groups.map((g) => {
+            const headerIndex = flatIndex;
+            return (
+              <section key={g.term} className="mb-5 last:mb-0">
+                <h2
+                  className="mb-1.5 flex items-baseline gap-1.5 text-[11.5px] font-semibold tracking-[0.09em] text-ink-2 uppercase"
+                  style={{
+                    ...cascadeStyle(headerIndex),
+                    animationDelay: `${Math.max(0, Math.min(headerIndex, CASCADE_CAP) * 70 - 40)}ms`,
+                  }}
+                >
+                  {g.term}
+                  <span className="font-normal not-italic tracking-normal normal-case text-ink-2/80">
+                    · {g.rows.length}
+                  </span>
+                </h2>
+                {isMobile ? (
+                  <div>
+                    {g.rows.map((r) => {
+                      const i = flatIndex++;
+                      return (
+                        <CollapseShell
+                          key={r.short}
+                          open={!hiding.has(r.short)}
+                          enter={entering.has(r.short)}
+                        >
+                          <div data-card-pad className="pt-2">
+                            <MobileCard
+                              row={r}
+                              cascade={cascadeStyle(i)}
+                              isCursor={r.short === cursor}
+                              onSelect={() => setCursor(r.short)}
+                              onOpen={() => openRow(r)}
+                              onToggleApplied={() => toggleApplied(r.short)}
+                              onToggleSaved={() => toggleSaved(r.short)}
+                              onHide={() => hideShort(r.short)}
+                              onRestore={() => restoreShort(r.short)}
+                              buildState={buildStateFor(r)}
+                              buildError={buildErrorFor(r)}
+                              onBuild={() => startBuild(r.short)}
+                            />
+                          </div>
+                        </CollapseShell>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <DesktopGroup cursor={cursor} rows={g.rows}>
+                    {g.rows.map((r) => {
+                      const i = flatIndex++;
+                      return (
+                        <CollapseShell
+                          key={r.short}
+                          open={!hiding.has(r.short)}
+                          enter={entering.has(r.short)}
+                        >
+                          <RowView
+                            row={r}
+                            cascade={cascadeStyle(i)}
+                            isCursor={r.short === cursor}
+                            appliedFlash={
+                              tickFlash.key === `${r.short}:a` ? tickFlash.n : null
+                            }
+                            savedFlash={
+                              tickFlash.key === `${r.short}:s` ? tickFlash.n : null
+                            }
+                            buildState={buildStateFor(r)}
+                            buildError={buildErrorFor(r)}
+                            onSelect={() => setCursor(r.short)}
+                            onToggleApplied={() => toggleApplied(r.short)}
+                            onToggleSaved={() => toggleSaved(r.short)}
+                            onHide={() => hideShort(r.short)}
+                            onRestore={() => restoreShort(r.short)}
+                            onBuild={() => startBuild(r.short)}
+                          />
+                        </CollapseShell>
+                      );
+                    })}
+                  </DesktopGroup>
+                )}
+              </section>
+            );
+          })}
+        </div>
       )}
 
       <Dock
-        onNav={(d) => move(d)}
-        onAct={(kind) => actOnCurrent(kind)}
-        onOpen={() => openRow()}
-        onBuild={dockBuild}
+        pressed={pressed}
+        onNav={(d) => {
+          flashDock(d > 0 ? "down" : "up");
+          move(d);
+        }}
+        onAct={(kind) => {
+          flashDock(kind);
+          actOnCurrent(kind);
+        }}
+        onOpen={() => {
+          flashDock("open");
+          openRow();
+        }}
+        onBuild={() => {
+          flashDock("build");
+          dockBuild();
+        }}
         buildState={currentRow ? buildStateFor(currentRow) : "idle"}
       />
 
       {burst.visible && (
-        <div className="fixed right-4 bottom-[76px] z-[60] flex items-center gap-3 rounded-md bg-ink px-3.5 py-2.5 text-[13px] text-bg shadow-[0_4px_16px_color-mix(in_srgb,var(--color-ink)_22%,transparent)]">
-          Hidden {burst.count}
+        <div
+          className="fixed right-4 bottom-[76px] z-[60] flex items-center gap-3 rounded-md bg-ink px-3.5 py-2.5 text-[13px] text-bg shadow-[0_4px_16px_color-mix(in_srgb,var(--color-ink)_22%,transparent)]"
+          style={{ animation: "toastin .22s var(--ease-out-soft) both" }}
+        >
+          <span>
+            Hidden{" "}
+            {/* count pulses on each increment (keyed remount restarts it) */}
+            <span
+              key={burst.count}
+              className="inline-block font-semibold tabular-nums"
+              style={{ animation: popAnim(burst.count) }}
+            >
+              {burst.count}
+            </span>
+          </span>
           <button
             type="button"
             onClick={undoBurst}
@@ -679,6 +839,60 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* 1a — desktop term-group container owning the sliding rail + wash. Measures
+   the cursor row ([data-cursor="1"]) inside itself; when the cursor is in
+   another group the rail fades out (each group has its own). */
+function DesktopGroup({
+  cursor,
+  rows,
+  children,
+}: {
+  cursor: string | null;
+  rows: TriageRow[];
+  children: React.ReactNode;
+}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [rail, setRail] = useState<{ y: number; h: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const el = box.querySelector<HTMLElement>('[data-cursor="1"]');
+    if (el) setRail({ y: el.offsetTop, h: el.offsetHeight });
+    else setRail(null);
+  }, [cursor, rows]);
+
+  const railStyle: CSSProperties = {
+    transform: `translateY(${rail ? rail.y : 0}px)`,
+    height: rail ? `${rail.h}px` : 0,
+    opacity: rail ? 1 : 0,
+    transition:
+      "transform .26s var(--ease-spring), height .26s var(--ease-spring), opacity .15s",
+    pointerEvents: "none",
+  };
+
+  return (
+    <div
+      ref={boxRef}
+      className="relative overflow-hidden rounded-md border border-line bg-surface"
+    >
+      {/* wash behind the rows (rows have no background of their own) */}
+      <span
+        aria-hidden
+        className="absolute left-0 top-0 w-full bg-[color-mix(in_srgb,var(--color-accent)_4%,transparent)]"
+        style={railStyle}
+      />
+      {/* the rail */}
+      <span
+        aria-hidden
+        className="absolute left-0 top-0 z-10 w-[3px] rounded-r-[2px] bg-accent"
+        style={railStyle}
+      />
+      {children}
     </div>
   );
 }
@@ -694,11 +908,6 @@ function EmptyState({ title, hint }: { title: string; hint: string }) {
   );
 }
 
-/**
- * Study-4 build-resume state machine: idle -> building -> built -> failed.
- * One button, four states, near-constant footprint (min-width + centered
- * content) so the row's hide ✕ never shifts while a build runs.
- */
 function ResumeButton({
   state,
   href,
@@ -735,10 +944,7 @@ function ResumeButton({
         type="button"
         disabled
         aria-busy="true"
-        className={cn(
-          base,
-          "cursor-default border-line-2 bg-surface text-ink-2"
-        )}
+        className={cn(base, "cursor-default border-line-2 bg-surface text-ink-2")}
       >
         <Loader2 className="size-3.5 animate-spin" /> building…
       </button>
@@ -781,31 +987,38 @@ function ResumeButton({
 
 function RowView({
   row,
+  cascade,
   isCursor,
+  appliedFlash,
+  savedFlash,
+  buildState,
+  buildError,
   onSelect,
   onToggleApplied,
   onToggleSaved,
   onHide,
   onRestore,
-  buildState,
-  buildError,
   onBuild,
 }: {
   row: TriageRow;
+  cascade: CSSProperties;
   isCursor: boolean;
+  appliedFlash: number | null;
+  savedFlash: number | null;
+  buildState: BuildState;
+  buildError?: string;
   onSelect: () => void;
   onToggleApplied: () => void;
   onToggleSaved: () => void;
   onHide: () => void;
   onRestore: () => void;
-  buildState: BuildState;
-  buildError?: string;
   onBuild: () => void;
 }) {
   const { short, company, title, location, salary, added, applied, saved, dismissed } = row;
   return (
     <div
       data-cursor={isCursor ? "1" : undefined}
+      data-row-line
       onClick={(e) => {
         const t = e.target as HTMLElement;
         if (t.closest("[data-applied-tick]")) return;
@@ -815,11 +1028,10 @@ function RowView({
         if (t.closest("[data-open]")) return;
         onSelect();
       }}
-      className={cn(
-        "grid cursor-default grid-cols-[46px_minmax(0,1fr)_auto] items-start gap-x-3 border-t border-line px-3 py-2.5 first:border-t-0 transition-colors select-none",
-        isCursor &&
-          "bg-[color-mix(in_srgb,var(--color-accent)_4%,transparent)] shadow-[inset_3px_0_0_var(--color-accent)]"
-      )}
+      style={cascade}
+      /* cursor bg/inset-shadow classes removed - DesktopGroup's rail + wash
+         layers replace them */
+      className="grid cursor-default grid-cols-[46px_minmax(0,1fr)_auto] items-start gap-x-3 border-t border-line px-3 py-2.5 transition-colors select-none"
     >
       {/* ticks */}
       <div className="flex gap-1.5 pt-0.5">
@@ -829,6 +1041,11 @@ function RowView({
           aria-label={applied ? "Mark as not applied" : "Mark as applied"}
           aria-pressed={applied}
           onClick={onToggleApplied}
+          style={
+            appliedFlash !== null
+              ? { animation: popAnim(appliedFlash) }
+              : undefined
+          }
           className={cn(
             "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-all active:scale-90",
             applied
@@ -836,7 +1053,28 @@ function RowView({
               : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
           )}
         >
-          <Check className="size-3" strokeWidth={3.5} />
+          {/* inline check path (replaces <Check/>) so the stroke can draw */}
+          <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden>
+            <path
+              d="M3 8.5 L6.5 12 L13 4.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray="20"
+              style={
+                applied
+                  ? appliedFlash !== null
+                    ? {
+                        strokeDashoffset: 0,
+                        animation: "checkdraw .3s ease .05s both",
+                      }
+                    : { strokeDashoffset: 0 } // ticked at load: static, no draw
+                  : { strokeDashoffset: 20 }
+              }
+            />
+          </svg>
         </button>
         <button
           type="button"
@@ -844,6 +1082,9 @@ function RowView({
           aria-label={saved ? "Unsave" : "Save"}
           aria-pressed={saved}
           onClick={onToggleSaved}
+          style={
+            savedFlash !== null ? { animation: popAnim(savedFlash) } : undefined
+          }
           className={cn(
             "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-all active:scale-90",
             saved
@@ -855,15 +1096,20 @@ function RowView({
         </button>
       </div>
 
-      {/* company / title / meta */}
+      {/* company / title / meta - applied dim now transitions */}
       <div className="min-w-0">
-        <span className={cn("text-[13.5px] font-semibold", applied && "opacity-55")}>
+        <span
+          className={cn(
+            "text-[13.5px] font-semibold transition-opacity duration-[250ms]",
+            applied && "opacity-55"
+          )}
+        >
           {company}
         </span>
         <Tags tag={row.tag} />
         <div
           className={cn(
-            "truncate text-[12.5px] text-ink-2",
+            "truncate text-[12.5px] text-ink-2 transition-opacity duration-[250ms]",
             applied && "opacity-55"
           )}
           title={title}
@@ -877,7 +1123,7 @@ function RowView({
         </div>
       </div>
 
-      {/* actions */}
+      {/* actions — resume docker */}
       <div className="flex items-center gap-1.5 self-center">
         <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
         {dismissed ? (
@@ -908,6 +1154,7 @@ function RowView({
 
 function MobileCard({
   row,
+  cascade,
   isCursor,
   onSelect,
   onOpen,
@@ -920,6 +1167,7 @@ function MobileCard({
   onBuild,
 }: {
   row: TriageRow;
+  cascade: CSSProperties;
   isCursor: boolean;
   onSelect: () => void;
   onOpen: () => void;
@@ -969,6 +1217,7 @@ function MobileCard({
   return (
     <div
       data-cursor={isCursor ? "1" : undefined}
+      style={cascade}
       className={cn(
         "relative overflow-hidden rounded-lg border bg-surface transition-shadow",
         isCursor ? "border-accent/60" : "border-line"
@@ -1026,7 +1275,7 @@ function MobileCard({
             <div className="flex items-baseline gap-1">
               <span
                 className={cn(
-                  "truncate text-[13px] font-semibold",
+                  "truncate text-[13px] font-semibold transition-opacity duration-[250ms]",
                   applied && "opacity-55"
                 )}
               >
@@ -1036,7 +1285,7 @@ function MobileCard({
             </div>
             <div
               className={cn(
-                "mt-0.5 line-clamp-2 text-[12px] text-ink-2",
+                "mt-0.5 line-clamp-2 text-[12px] text-ink-2 transition-opacity duration-[250ms]",
                 applied && "opacity-55"
               )}
             >
@@ -1137,13 +1386,17 @@ function MobileCard({
   );
 }
 
+/* 1d — glass dock: translucent surface + blur, entrance rise on mount, and a
+   keycap press ripple on whichever action fired (click or shortcut). */
 function Dock({
+  pressed,
   onNav,
   onAct,
   onOpen,
   onBuild,
   buildState,
 }: {
+  pressed: FlashState;
   onNav: (d: number) => void;
   onAct: (kind: "applied" | "saved" | "hide") => void;
   onOpen: () => void;
@@ -1153,11 +1406,18 @@ function Dock({
   const kbd =
     "rounded border border-line-2 bg-surface px-1 py-px font-mono text-[10.5px] font-medium text-ink-2";
   const db =
-    "inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-[12.5px] font-medium text-ink transition-colors select-none active:translate-y-px hover:bg-chip";
+    "inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-[12.5px] font-medium text-ink transition-colors select-none active:translate-y-px hover:bg-chip hover:border-line-2";
   const label = "hidden min-[701px]:inline";
+  const press = (act: string): CSSProperties | undefined =>
+    pressed.key === act ? { animation: pressAnim(pressed.n) } : undefined;
   return (
     <div
-      className="fixed bottom-4 left-1/2 z-50 flex max-w-[calc(100vw-24px)] translate-x-[-50%] items-center gap-1 rounded-[9px] border border-line-2 bg-surface px-1.5 py-1 shadow-[0_6px_24px_color-mix(in_srgb,var(--color-ink)_16%,transparent)]"
+      className="fixed bottom-4 left-1/2 z-50 flex max-w-[calc(100vw-24px)] translate-x-[-50%] items-center gap-1 rounded-[11px] border border-line-2 px-1.5 py-1 shadow-[0_6px_24px_color-mix(in_srgb,var(--color-ink)_16%,transparent)] backdrop-blur-[8px]"
+      style={{
+        background:
+          "color-mix(in srgb, var(--color-surface) 72%, transparent)",
+        animation: "dockup .4s var(--ease-out-soft) .25s both",
+      }}
       onClick={(e) => {
         const t = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
         if (!t) return;
@@ -1173,23 +1433,48 @@ function Dock({
         if (act === "up" || act === "down") onNav(act === "up" ? -1 : 1);
         else if (act === "build") onBuild();
         else if (act === "open") onOpen();
-        else if (act) onAct(act);
+        else if (act) onAct(act as "applied" | "saved" | "hide");
       }}
     >
-      <button type="button" data-act="up" className={cn(db, "text-ink-2")}>
-        <span className={kbd}>k</span>
+      <button
+        type="button"
+        data-act="up"
+        style={press("up")}
+        className={cn(db, "text-ink-2 hover:border-amber hover:bg-[color-mix(in_srgb,var(--color-amber)_10%,transparent)]")}
+      >
+        <span className={cn(kbd, "group-hover:border-amber")}>k</span>
       </button>
-      <button type="button" data-act="down" className={cn(db, "text-ink-2")}>
+      <button
+        type="button"
+        data-act="down"
+        style={press("down")}
+        className={cn(db, "text-ink-2 hover:border-amber hover:bg-[color-mix(in_srgb,var(--color-amber)_10%,transparent)]")}
+      >
         <span className={kbd}>j</span>
       </button>
       <Divider />
-      <button type="button" data-act="applied" className={cn(db, "text-accent")}>
+      <button
+        type="button"
+        data-act="applied"
+        style={press("applied")}
+        className={cn(db, "text-accent hover:border-accent hover:bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]")}
+      >
         <span className={kbd}>x</span> <span className={label}>applied</span>
       </button>
-      <button type="button" data-act="saved" className={cn(db, "text-amber")}>
+      <button
+        type="button"
+        data-act="saved"
+        style={press("saved")}
+        className={cn(db, "text-amber hover:border-amber hover:bg-[color-mix(in_srgb,var(--color-amber)_10%,transparent)]")}
+      >
         <span className={kbd}>s</span> <span className={label}>save</span>
       </button>
-      <button type="button" data-act="hide" className={cn(db, "text-red")}>
+      <button
+        type="button"
+        data-act="hide"
+        style={press("hide")}
+        className={cn(db, "text-red hover:border-red hover:bg-[color-mix(in_srgb,var(--color-red)_10%,transparent)]")}
+      >
         <span className={kbd}>h</span> <span className={label}>hide</span>
       </button>
       <Divider />
@@ -1198,6 +1483,7 @@ function Dock({
         data-act="build"
         disabled={buildState === "building"}
         title={buildState === "built" ? "open resume" : "build resume"}
+        style={press("build")}
         className={cn(db, "disabled:opacity-70")}
       >
         <span className={kbd}>b</span>{" "}
@@ -1207,7 +1493,7 @@ function Dock({
           <span className={label}>build resume</span>
         )}
       </button>
-      <button type="button" data-act="open" className={db}>
+      <button type="button" data-act="open" style={press("open")} className={db}>
         <span className={kbd}>↵</span> <span className={label}>open</span>
       </button>
     </div>
