@@ -1,6 +1,7 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { SiteHeader } from "@/components/site-header";
 import { NotProvisioned } from "@/components/not-provisioned";
+import { MotionPreviewInit } from "@/components/motion-preview";
 
 /**
  * Auth-gated app shell for / and /tracker (everything except the Clerk
@@ -19,6 +20,9 @@ export default async function AppLayout({
   }
   return (
     <>
+      {/* Dev-only: carries the "force motion" preview override across pages so
+          the motion can be reviewed on a reduced-motion machine. */}
+      {process.env.NODE_ENV !== "production" && <MotionPreviewInit />}
       <SiteHeader trackerUser={trackerUser} />
       <main className="flex-1">{children}</main>
     </>

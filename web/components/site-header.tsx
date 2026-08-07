@@ -1,8 +1,7 @@
 "use client";
 
-// web/components/site-header.tsx — full replacement.
-// 1h: sliding chip indicator behind the nav tabs + one-pass sync sweep on
-// route change. Everything else identical to the original.
+// Sliding chip indicator behind the nav tabs, plus a one-pass sync sweep along
+// the header's bottom edge on route change.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -78,8 +77,9 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
           <UserChip trackerUser={trackerUser} />
         </div>
       </div>
-      {/* 1h sync sweep: 2px track replaces the header's border-b. Keyed by
-          pathname so it runs one pass per route change. */}
+      {/* Sync sweep: a 2px track standing in for the header's border-b, keyed
+          by pathname so one pass runs per route change and then it sits still
+          as a plain rule. */}
       <div className="relative h-[2px] overflow-hidden bg-line">
         <span
           key={pathname}
@@ -91,16 +91,6 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
             animation: "sweep 1.4s ease-in-out .1s 1 both",
           }}
         />
-      </div>
-      {/* watcher bar — matches screenshot: second row below header */}
-      <div className="border-t border-line bg-[#f0ece0] dark:bg-[#1e1c17]">
-        <div className="mx-auto flex w-full max-w-[1060px] items-center justify-between px-5 py-1.5 text-[12px] leading-none tabular-nums">
-          <span className="text-ink-2">watcher synced 2m ago</span>
-          <span className="text-ink-2">
-            <b className="font-semibold text-ink">128</b> matches ·{" "}
-            <b className="font-semibold text-ink">37</b> applied
-          </span>
-        </div>
       </div>
     </header>
   );

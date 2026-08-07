@@ -1,20 +1,18 @@
 "use client";
 
-// web/components/matches/triage.tsx — full replacement implementing the
-// approved motion set on top of the existing component, unchanged in data
-// flow (writeTicks batching, burst semantics, filters, mobile swipe):
+// The matches triage surface. Data flow (writeTicks batching, burst undo
+// semantics, filters, mobile swipe) is independent of the motion layer:
 //
-//   1a  sliding cursor rail + wash (one element per term group, measured,
-//       springs between rows) and spring ticks (check draws itself, star
-//       pops) — animations fire only on user toggle, never on first paint
-//   1b  entrance cascade on mount / filter change / settled search change
-//       (list remounts via `epoch` key; stagger capped at 12 rows)
-//   1d  glass dock with keycap press ripple, fired from BOTH clicks and
-//       keyboard shortcuts, plus a one-time entrance rise
-//   1g  hide = 320ms grid-row collapse, THEN the optimistic dismiss commits;
-//       undo/restore plays the reverse; ink slab count pulses per hide
+//   cursor rail  one measured rail + wash per term group, sliding between
+//                rows in 150ms so a held j/k never outruns it
+//   ticks        the applied check draws its own stroke, both ticks pop -
+//                only on a user toggle, never on mount or hydration
+//   cascade      rows rise in on mount, filter change and settled search
+//   dock         keycap press ring in the pressed action's own colour,
+//                fired from clicks and keyboard shortcuts alike
+//   hide         the row collapses first, and the dismiss commits after
 //
-// Requires the "motion block" appended to app/globals.css.
+// Keyframes live in app/globals.css; the replayable one-shots in lib/motion.ts.
 
 import {
   useCallback,
@@ -29,6 +27,15 @@ import {
 import { Check, Star, X, Undo2, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  useReplay,
+  TICK_POP,
+  TICK_POP_OPTS,
+  CHECK_DRAW,
+  CHECK_DRAW_OPTS,
+  keypressFrames,
+  KEYPRESS_OPTS,
+} from "@/lib/motion";
 import {
   writeTicks,
   requestResumeBuild,
@@ -47,8 +54,10 @@ const FLUSH_IDLE = 500;
 const FLUSH_CAP = 50;
 const BURST_MS = 6000;
 const SWIPE_THRESHOLD = 70;
-const HIDE_MS = 340; // collapse duration + a frame; dismiss commits after this
-const CASCADE_CAP = 12; // rows past this share the final delay
+const COLLAPSE_MS = 300; // row collapse
+const HIDE_MS = COLLAPSE_MS + 20; // ...then the dismiss commits
+const CASCADE_STEP = 55; // per-row stagger
+const CASCADE_CAP = 10; // rows past this share the final delay
 const BUILD_POLL_MS = 15000;
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -63,20 +72,20 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "hidden", label: "hidden" },
 ];
 
-/* A user-action flash: which element should replay its pop animation.
-   `n` increments per flash; its parity alternates the A/B keyframe name so
-   the same element can restart the animation on consecutive triggers. */
+/* Which element should replay a one-shot animation, and how many times it has
+   been asked to. `n` is the replay token handed to useReplay; `key` names the
+   single element the flash belongs to, so every other element gets null and
+   stays static. */
 type FlashState = { key: string; n: number };
 
-const popAnim = (n: number) =>
-  `${n % 2 ? "tickpopB" : "tickpopA"} .32s var(--ease-pop)`;
-const pressAnim = (n: number) =>
-  `${n % 2 ? "keypressB" : "keypressA"} .36s var(--ease-pop)`;
+/** The replay token for `key`, or null when this element isn't the one. */
+const tokenFor = (flash: FlashState, key: string) =>
+  flash.key === key ? flash.n : null;
 
 function cascadeStyle(i: number): CSSProperties {
   return {
-    animation: "cascade .5s var(--ease-out-soft) both",
-    animationDelay: `${Math.min(i, CASCADE_CAP) * 70}ms`,
+    animation: "cascade .42s var(--ease-out-soft) both",
+    animationDelay: `${Math.min(i, CASCADE_CAP) * CASCADE_STEP}ms`,
   };
 }
 
@@ -172,7 +181,7 @@ function CollapseShell({
       style={{
         display: "grid",
         gridTemplateRows: expanded ? "1fr" : "0fr",
-        transition: "grid-template-rows .32s var(--ease-out-soft)",
+        transition: `grid-template-rows ${COLLAPSE_MS}ms var(--ease-out-soft)`,
       }}
     >
       <div
@@ -180,7 +189,9 @@ function CollapseShell({
           overflow: "hidden",
           minHeight: 0,
           opacity: expanded ? 1 : 0,
-          transition: "opacity .25s",
+          // Leads the collapse slightly, so the row reads as fading out of the
+          // list rather than being physically squashed shut.
+          transition: `opacity ${Math.round(COLLAPSE_MS * 0.7)}ms linear`,
         }}
       >
         {children}
@@ -214,7 +225,19 @@ function Divider({ className }: { className?: string }) {
   return <span className={cn("h-5 w-px self-center bg-line", className)} />;
 }
 
-export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
+export function Triage({
+  rows: initialRows,
+  demo = false,
+}: {
+  rows: TriageRow[];
+  /**
+   * Motion lab mode: keep every interaction local instead of persisting it, so
+   * the animations can be exercised over and over against fixtures without
+   * writing ticks, hides or resume builds to a real tracker. Only /motion-lab
+   * passes this.
+   */
+  demo?: boolean;
+}) {
   const [rows, setRows] = useState<TriageRow[]>(initialRows);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -274,6 +297,13 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
       prev.map((r) => (r.short === short ? { ...r, ...patch } : r))
     );
   }, []);
+
+  /** The single seam every tick write goes through, so demo mode stays local. */
+  const persistTicks = useCallback(
+    (writes: TickWrite[]): Promise<unknown> =>
+      demo ? Promise.resolve() : writeTicks(writes),
+    [demo]
+  );
 
   const visible = useMemo(
     () => visibleRows(rows, filter, query),
@@ -378,7 +408,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     }
     flushBusy.current = true;
     try {
-      await writeTicks(writes);
+      await persistTicks(writes);
       for (const w of writes) {
         if (queue.get(w.short) === w.value) queue.delete(w.short);
       }
@@ -456,7 +486,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     const value = !r.applied;
     if (value) flashTick(short, "a"); // 1a: pop + checkdraw only on toggle-ON
     updateRow(short, { applied: value });
-    void writeTicks([{ short, field: "applied", value }]).catch(() => {
+    void persistTicks([{ short, field: "applied", value }]).catch(() => {
       updateRow(short, { applied: r.applied });
       toast.error("Couldn't sync applied state.");
     });
@@ -468,7 +498,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     const value = !r.saved;
     if (value) flashTick(short, "s");
     updateRow(short, { saved: value });
-    void writeTicks([{ short, field: "saved", value }]).catch(() => {
+    void persistTicks([{ short, field: "saved", value }]).catch(() => {
       updateRow(short, { saved: r.saved });
       toast.error("Couldn't sync saved state.");
     });
@@ -479,6 +509,19 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     if (builds[short] === "building") return;
     delete buildStartedAt.current[short];
     setBuilds((prev) => ({ ...prev, [short]: "building" as const }));
+    if (demo) {
+      // Walk the button through building -> built locally so the state machine
+      // can be seen without dispatching a real Convex build.
+      window.setTimeout(() => {
+        updateRow(short, { resumeUrl: "#demo" });
+        setBuilds((prev) => {
+          const next = { ...prev };
+          delete next[short];
+          return next;
+        });
+      }, 1400);
+      return;
+    }
     void requestResumeBuild(short).then((res) => {
       if (res.ok) return;
       setBuilds((prev) => ({ ...prev, [short]: { failed: res.error || "Couldn't start the resume build." } }));
@@ -495,6 +538,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   }
   // Polling for Convex resume builds
   useEffect(() => {
+    if (demo) return; // demo builds resolve on their own timer
     const building = Object.entries(builds)
       .filter(([, s]) => s === "building")
       .map(([k]) => k);
@@ -535,7 +579,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
       }
     }, BUILD_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [builds, updateRow]);
+  }, [builds, updateRow, demo]);
 
   function move(delta: number) {
     if (!ordered.length) return;
@@ -754,7 +798,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                     })}
                   </div>
                 ) : (
-                  <DesktopGroup cursor={cursor} rows={g.rows}>
+                  <DesktopGroup cursor={cursor}>
                     {g.rows.map((r) => {
                       const i = flatIndex++;
                       return (
@@ -767,12 +811,8 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
                             row={r}
                             cascade={cascadeStyle(i)}
                             isCursor={r.short === cursor}
-                            appliedFlash={
-                              tickFlash.key === `${r.short}:a` ? tickFlash.n : null
-                            }
-                            savedFlash={
-                              tickFlash.key === `${r.short}:s` ? tickFlash.n : null
-                            }
+                            appliedFlash={tokenFor(tickFlash, `${r.short}:a`)}
+                            savedFlash={tokenFor(tickFlash, `${r.short}:s`)}
                             buildState={buildStateFor(r)}
                             buildError={buildErrorFor(r)}
                             onSelect={() => setCursor(r.short)}
@@ -820,15 +860,7 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
           style={{ animation: "toastin .22s var(--ease-out-soft) both" }}
         >
           <span>
-            Hidden{" "}
-            {/* count pulses on each increment (keyed remount restarts it) */}
-            <span
-              key={burst.count}
-              className="inline-block font-semibold tabular-nums"
-              style={{ animation: popAnim(burst.count) }}
-            >
-              {burst.count}
-            </span>
+            Hidden <BurstCount count={burst.count} />
           </span>
           <button
             type="button"
@@ -843,35 +875,65 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   );
 }
 
-/* 1a — desktop term-group container owning the sliding rail + wash. Measures
-   the cursor row ([data-cursor="1"]) inside itself; when the cursor is in
-   another group the rail fades out (each group has its own). */
+/**
+ * Desktop term-group container, owning the sliding cursor rail and its wash.
+ *
+ * The rail is one absolutely-positioned element per group that translates to
+ * the cursor row, instead of a border repainted on whichever row is current -
+ * that is the whole point, since a repaint has no motion to read. Rows are
+ * variable height, so the position is measured rather than computed: a
+ * ResizeObserver re-measures when a row grows (a resume button switching to
+ * "building…", the window reflowing) so the rail never drifts off its row.
+ *
+ * Each group owns its own rail, so moving the cursor across a group boundary
+ * fades one out and snaps the other in rather than flying the rail across the
+ * gap. Appearing is always instant - only row-to-row moves within a group
+ * animate, or the rail would slide down from the top of the group on arrival.
+ */
 function DesktopGroup({
   cursor,
-  rows,
   children,
 }: {
   cursor: string | null;
-  rows: TriageRow[];
   children: React.ReactNode;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [rail, setRail] = useState<{ y: number; h: number } | null>(null);
+  const [instant, setInstant] = useState(true);
+  const wasShown = useRef(false);
 
   useLayoutEffect(() => {
     const box = boxRef.current;
     if (!box) return;
-    const el = box.querySelector<HTMLElement>('[data-cursor="1"]');
-    if (el) setRail({ y: el.offsetTop, h: el.offsetHeight });
-    else setRail(null);
-  }, [cursor, rows]);
+    const measure = () => {
+      const el = box.querySelector<HTMLElement>('[data-cursor="1"]');
+      if (!el) {
+        wasShown.current = false;
+        setRail(null);
+        return;
+      }
+      setInstant(!wasShown.current);
+      wasShown.current = true;
+      const y = el.offsetTop;
+      const h = el.offsetHeight;
+      // The observer fires every frame while a row collapses, which keeps the
+      // rail glued to its row - but only re-render when it actually moved.
+      setRail((prev) => (prev && prev.y === y && prev.h === h ? prev : { y, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [cursor]);
 
   const railStyle: CSSProperties = {
     transform: `translateY(${rail ? rail.y : 0}px)`,
     height: rail ? `${rail.h}px` : 0,
     opacity: rail ? 1 : 0,
-    transition:
-      "transform .26s var(--ease-spring), height .26s var(--ease-spring), opacity .15s",
+    transition: instant
+      ? "opacity .12s linear"
+      : "transform var(--rail-ms) var(--ease-rail), height var(--rail-ms) var(--ease-rail), opacity .12s linear",
+    willChange: "transform, height",
     pointerEvents: "none",
   };
 
@@ -880,20 +942,30 @@ function DesktopGroup({
       ref={boxRef}
       className="relative overflow-hidden rounded-md border border-line bg-surface"
     >
-      {/* wash behind the rows (rows have no background of their own) */}
+      {/* wash behind the rows (rows carry no background of their own) */}
       <span
         aria-hidden
-        className="absolute left-0 top-0 w-full bg-[color-mix(in_srgb,var(--color-accent)_4%,transparent)]"
+        className="absolute top-0 left-0 w-full bg-[color-mix(in_srgb,var(--color-accent)_4%,transparent)]"
         style={railStyle}
       />
-      {/* the rail */}
+      {/* the rail itself */}
       <span
         aria-hidden
-        className="absolute left-0 top-0 z-10 w-[3px] rounded-r-[2px] bg-accent"
+        className="absolute top-0 left-0 z-10 w-[3px] rounded-r-[2px] bg-accent"
         style={railStyle}
       />
       {children}
     </div>
+  );
+}
+
+/** The hide-burst tally, popping once per increment within a burst. */
+function BurstCount({ count }: { count: number }) {
+  const el = useReplay<HTMLSpanElement>(count, TICK_POP, TICK_POP_OPTS);
+  return (
+    <span ref={el} className="inline-block font-semibold tabular-nums">
+      {count}
+    </span>
   );
 }
 
@@ -1015,6 +1087,25 @@ function RowView({
   onBuild: () => void;
 }) {
   const { short, company, title, location, salary, added, applied, saved, dismissed } = row;
+
+  // Replay tokens are null except on the row the user just ticked, so a row
+  // that arrives already applied renders static through SSR and hydration.
+  const appliedBtn = useReplay<HTMLButtonElement>(
+    appliedFlash,
+    TICK_POP,
+    TICK_POP_OPTS
+  );
+  const checkPath = useReplay<SVGPathElement>(
+    appliedFlash,
+    CHECK_DRAW,
+    CHECK_DRAW_OPTS
+  );
+  const savedBtn = useReplay<HTMLButtonElement>(
+    savedFlash,
+    TICK_POP,
+    TICK_POP_OPTS
+  );
+
   return (
     <div
       data-cursor={isCursor ? "1" : undefined}
@@ -1036,26 +1127,25 @@ function RowView({
       {/* ticks */}
       <div className="flex gap-1.5 pt-0.5">
         <button
+          ref={appliedBtn}
           type="button"
           data-applied-tick
           aria-label={applied ? "Mark as not applied" : "Mark as applied"}
           aria-pressed={applied}
           onClick={onToggleApplied}
-          style={
-            appliedFlash !== null
-              ? { animation: popAnim(appliedFlash) }
-              : undefined
-          }
           className={cn(
-            "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-all active:scale-90",
+            "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-[background-color,border-color,box-shadow] duration-150 active:scale-90",
             applied
               ? "border-accent bg-accent text-accent-ink"
               : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
           )}
         >
-          {/* inline check path (replaces <Check/>) so the stroke can draw */}
+          {/* Inline path rather than lucide's <Check/> so the stroke can draw
+              itself: dasharray 20 covers the whole path, and the replay walks
+              the offset to 0. Unticked rows park it at 20 (fully hidden). */}
           <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden>
             <path
+              ref={checkPath}
               d="M3 8.5 L6.5 12 L13 4.5"
               fill="none"
               stroke="currentColor"
@@ -1063,30 +1153,19 @@ function RowView({
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeDasharray="20"
-              style={
-                applied
-                  ? appliedFlash !== null
-                    ? {
-                        strokeDashoffset: 0,
-                        animation: "checkdraw .3s ease .05s both",
-                      }
-                    : { strokeDashoffset: 0 } // ticked at load: static, no draw
-                  : { strokeDashoffset: 20 }
-              }
+              style={{ strokeDashoffset: applied ? 0 : 20 }}
             />
           </svg>
         </button>
         <button
+          ref={savedBtn}
           type="button"
           data-saved-tick
           aria-label={saved ? "Unsave" : "Save"}
           aria-pressed={saved}
           onClick={onToggleSaved}
-          style={
-            savedFlash !== null ? { animation: popAnim(savedFlash) } : undefined
-          }
           className={cn(
-            "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-all active:scale-90",
+            "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-[background-color,border-color,box-shadow] duration-150 active:scale-90",
             saved
               ? "border-amber bg-[color-mix(in_srgb,var(--color-amber)_16%,var(--color-surface))] text-amber"
               : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
@@ -1386,8 +1465,40 @@ function MobileCard({
   );
 }
 
-/* 1d — glass dock: translucent surface + blur, entrance rise on mount, and a
-   keycap press ripple on whichever action fired (click or shortcut). */
+/**
+ * One dock button. Owns its own press-ring replay so the ring blooms in the
+ * action's colour - a uniform accent flash on every key reads as one
+ * undifferentiated blink, and loses the colour language the dock already
+ * teaches (green applies, amber saves, red hides).
+ */
+function DockButton({
+  act,
+  ring,
+  pressed,
+  className,
+  children,
+  ...rest
+}: {
+  act: string;
+  ring: string;
+  pressed: FlashState;
+  className?: string;
+  children: React.ReactNode;
+} & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "className">) {
+  const btn = useReplay<HTMLButtonElement>(
+    tokenFor(pressed, act),
+    keypressFrames(ring),
+    KEYPRESS_OPTS
+  );
+  return (
+    <button ref={btn} type="button" data-act={act} className={className} {...rest}>
+      {children}
+    </button>
+  );
+}
+
+/* Glass dock: translucent surface + blur, an entrance rise on mount, and a
+   keycap press ring on whichever action fired (click or keyboard shortcut). */
 function Dock({
   pressed,
   onNav,
@@ -1408,8 +1519,6 @@ function Dock({
   const db =
     "inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-[12.5px] font-medium text-ink transition-colors select-none active:translate-y-px hover:bg-chip hover:border-line-2";
   const label = "hidden min-[701px]:inline";
-  const press = (act: string): CSSProperties | undefined =>
-    pressed.key === act ? { animation: pressAnim(pressed.n) } : undefined;
   return (
     <div
       className="fixed bottom-4 left-1/2 z-50 flex max-w-[calc(100vw-24px)] translate-x-[-50%] items-center gap-1 rounded-[11px] border border-line-2 px-1.5 py-1 shadow-[0_6px_24px_color-mix(in_srgb,var(--color-ink)_16%,transparent)] backdrop-blur-[8px]"
@@ -1436,54 +1545,54 @@ function Dock({
         else if (act) onAct(act as "applied" | "saved" | "hide");
       }}
     >
-      <button
-        type="button"
-        data-act="up"
-        style={press("up")}
+      <DockButton
+        act="up"
+        ring="var(--color-amber)"
+        pressed={pressed}
         className={cn(db, "text-ink-2 hover:border-amber hover:bg-[color-mix(in_srgb,var(--color-amber)_10%,transparent)]")}
       >
-        <span className={cn(kbd, "group-hover:border-amber")}>k</span>
-      </button>
-      <button
-        type="button"
-        data-act="down"
-        style={press("down")}
+        <span className={kbd}>k</span>
+      </DockButton>
+      <DockButton
+        act="down"
+        ring="var(--color-amber)"
+        pressed={pressed}
         className={cn(db, "text-ink-2 hover:border-amber hover:bg-[color-mix(in_srgb,var(--color-amber)_10%,transparent)]")}
       >
         <span className={kbd}>j</span>
-      </button>
+      </DockButton>
       <Divider />
-      <button
-        type="button"
-        data-act="applied"
-        style={press("applied")}
+      <DockButton
+        act="applied"
+        ring="var(--color-accent)"
+        pressed={pressed}
         className={cn(db, "text-accent hover:border-accent hover:bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]")}
       >
         <span className={kbd}>x</span> <span className={label}>applied</span>
-      </button>
-      <button
-        type="button"
-        data-act="saved"
-        style={press("saved")}
+      </DockButton>
+      <DockButton
+        act="saved"
+        ring="var(--color-amber)"
+        pressed={pressed}
         className={cn(db, "text-amber hover:border-amber hover:bg-[color-mix(in_srgb,var(--color-amber)_10%,transparent)]")}
       >
         <span className={kbd}>s</span> <span className={label}>save</span>
-      </button>
-      <button
-        type="button"
-        data-act="hide"
-        style={press("hide")}
+      </DockButton>
+      <DockButton
+        act="hide"
+        ring="var(--color-red)"
+        pressed={pressed}
         className={cn(db, "text-red hover:border-red hover:bg-[color-mix(in_srgb,var(--color-red)_10%,transparent)]")}
       >
         <span className={kbd}>h</span> <span className={label}>hide</span>
-      </button>
+      </DockButton>
       <Divider />
-      <button
-        type="button"
-        data-act="build"
+      <DockButton
+        act="build"
+        ring="var(--color-accent)"
+        pressed={pressed}
         disabled={buildState === "building"}
         title={buildState === "built" ? "open resume" : "build resume"}
-        style={press("build")}
         className={cn(db, "disabled:opacity-70")}
       >
         <span className={kbd}>b</span>{" "}
@@ -1492,10 +1601,10 @@ function Dock({
         ) : (
           <span className={label}>build resume</span>
         )}
-      </button>
-      <button type="button" data-act="open" style={press("open")} className={db}>
+      </DockButton>
+      <DockButton act="open" ring="var(--color-ink-2)" pressed={pressed} className={db}>
         <span className={kbd}>↵</span> <span className={label}>open</span>
-      </button>
+      </DockButton>
     </div>
   );
 }
