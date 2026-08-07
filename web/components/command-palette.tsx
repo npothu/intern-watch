@@ -233,8 +233,16 @@ export function CommandPalette({
                   {entry.kind === "jump" ? (
                     <>
                       <span className="size-2 shrink-0 rounded-full bg-accent" />
-                      <span className="truncate text-ink">{entry.item.title}</span>
-                      <span className="truncate text-ink-2">
+                      {/* The company holds its width and the job title gives
+                          way. Both were previously `truncate` and therefore
+                          both flexible, so flexbox shrank them in proportion
+                          and a long title clipped the company to "Te..." -
+                          the one part of the row you scan by. The max-width
+                          still catches a pathologically long employer name. */}
+                      <span className="max-w-[45%] shrink-0 truncate text-ink">
+                        {entry.item.title}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-ink-2">
                         - {entry.item.subtitle}
                       </span>
                     </>
