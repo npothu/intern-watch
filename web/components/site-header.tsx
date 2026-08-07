@@ -7,6 +7,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLayoutEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
+import { Moon, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UserChip } from "@/components/user-chip";
 
@@ -14,6 +16,25 @@ const NAV = [
   { href: "/", label: "Matches" },
   { href: "/tracker", label: "Tracker" },
 ];
+
+function ThemeToggle() {
+  const { theme, setTheme, resolvedTheme } = useTheme();
+  const active = theme === "system" ? resolvedTheme : theme;
+  const isDark = active === "dark";
+  return (
+    <button
+      type="button"
+      aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+      title={isDark ? "Light mode" : "Dark mode"}
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+      className="relative inline-flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 transition-colors hover:bg-chip hover:text-ink"
+    >
+      <Sun className="h-[14px] w-[14px] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+      <Moon className="absolute h-[14px] w-[14px] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+      <span className="sr-only">Toggle theme</span>
+    </button>
+  );
+}
 
 export function SiteHeader({ trackerUser }: { trackerUser: string }) {
   const pathname = usePathname();
@@ -74,32 +95,9 @@ export function SiteHeader({ trackerUser }: { trackerUser: string }) {
             );
           })}
         </nav>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
           <UserChip trackerUser={trackerUser} />
-        </div>
-      </div>
-      {/* 1h sync sweep: 2px track replaces the header's border-b. Keyed by
-          pathname so it runs one pass per route change. */}
-      <div className="relative h-[2px] overflow-hidden bg-line">
-        <span
-          key={pathname}
-          aria-hidden
-          className="absolute inset-y-0 left-0 w-[18%]"
-          style={{
-            background:
-              "linear-gradient(90deg, transparent, var(--color-accent), transparent)",
-            animation: "sweep 1.4s ease-in-out .1s 1 both",
-          }}
-        />
-      </div>
-      {/* watcher bar — matches screenshot: second row below header */}
-      <div className="border-t border-line bg-[#f0ece0] dark:bg-[#1e1c17]">
-        <div className="mx-auto flex w-full max-w-[1060px] items-center justify-between px-5 py-1.5 text-[12px] leading-none tabular-nums">
-          <span className="text-ink-2">watcher synced 2m ago</span>
-          <span className="text-ink-2">
-            <b className="font-semibold text-ink">128</b> matches ·{" "}
-            <b className="font-semibold text-ink">37</b> applied
-          </span>
         </div>
       </div>
     </header>

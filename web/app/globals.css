@@ -7,10 +7,11 @@
 /*
  * intern-watch identity: "Fern & Paper"
  * Palette ported verbatim from web-design/approved-spec.html (approved visual
- * mock). Light values in :root; dark values flip via prefers-color-scheme,
- * exactly like the mock (no class toggle in v1).
+ * mock). Light tokens are default; dark tokens activate via .dark class
+ * (next-themes) or system preference before hydration.
  */
-:root {
+:root,
+:root.light {
   --bg: #f4f2ed;
   --surface: #fcfbf8;
   --ink: #211f1a;
@@ -23,10 +24,27 @@
   --red: #a8402f;
   --chip: #ebe8de;
   --mono: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+:root.dark,
+.dark {
+  --bg: #171612;
+  --surface: #1e1c17;
+  --ink: #e9e5d9;
+  --ink-2: #9d977f;
+  --line: #2d2a22;
+  --line-2: #403c30;
+  --accent: #83b79a;
+  --accent-ink: #12211a;
+  --amber: #d0a04f;
+  --red: #d3705d;
+  --chip: #2a2820;
+  color-scheme: dark;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light):not(.dark) {
     --bg: #171612;
     --surface: #1e1c17;
     --ink: #e9e5d9;
@@ -38,6 +56,7 @@
     --amber: #d0a04f;
     --red: #d3705d;
     --chip: #2a2820;
+    color-scheme: dark;
   }
 }
 
