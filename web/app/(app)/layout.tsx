@@ -5,7 +5,7 @@ import { NotProvisioned } from "@/components/not-provisioned";
 import { MotionPreviewInit } from "@/components/motion-preview";
 
 /**
- * Auth-gated app shell for the app routes (everything except the Clerk
+ * Auth-gated app shell for the whole app (everything except the Clerk
  * sign-in/sign-up pages, which live outside this route group). If the signed
  * in email isn't provisioned, render the full-page "not provisioned" state
  * instead of the app.

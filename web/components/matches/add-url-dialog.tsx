@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -13,6 +12,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { addJobUrl, getIngestStatusAction } from "@/app/(app)/ingest-actions";
+import { useSyncRefresh } from "@/lib/sync-pulse";
 
 const POLL_INTERVAL = 1500;
 const POLL_TIMEOUT = 30000;
@@ -20,7 +20,7 @@ const POLL_TIMEOUT = 30000;
 type Phase = "idle" | "submitting" | "polling" | "done" | "failed";
 
 export function AddUrlDialog() {
-  const router = useRouter();
+  const syncRefresh = useSyncRefresh();
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export function AddUrlDialog() {
       // Refresh anyway: the row exists but may be sitting behind a filter, or
       // may have landed since this page was rendered. Without it "already in
       // your matches" points at a list that might not show it.
-      router.refresh();
+      syncRefresh();
       return;
     }
     // polling
@@ -92,7 +92,7 @@ export function AddUrlDialog() {
         setOpen(false);
         setUrl("");
         setPhase("done");
-        router.refresh();
+        syncRefresh();
       } else if (row.status === "failed") {
         clearPoll();
         setError(row.error || "Failed to ingest this URL.");
@@ -103,7 +103,7 @@ export function AddUrlDialog() {
         setOpen(false);
         setUrl("");
         setPhase("done");
-        router.refresh();
+        syncRefresh();
       }
     }, POLL_INTERVAL);
 

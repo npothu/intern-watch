@@ -54,6 +54,14 @@ function matches(haystack: string, q: string): boolean {
   return haystack.toLowerCase().includes(q);
 }
 
+/** Fire on `window` to open the palette from anywhere (see openCommandPalette). */
+export const OPEN_PALETTE_EVENT = "intern-watch:open-palette";
+
+/** Opens the palette from a click, matching what Ctrl/Cmd+K does. */
+export function openCommandPalette() {
+  window.dispatchEvent(new Event(OPEN_PALETTE_EVENT));
+}
+
 export function CommandPalette({
   jumps,
   onJump,
@@ -72,17 +80,30 @@ export function CommandPalette({
   // Ctrl/Cmd+K toggles. Registered in the capture phase so it wins over the
   // triage surface's own window-level key handling, whatever the focus is.
   // Every open starts from a clean query at the top of the list.
+  //
+  // The same reset runs for OPEN_PALETTE_EVENT, which is how the toolbar's
+  // button opens it. An event rather than lifted state keeps the palette the
+  // sole owner of its open flag, so a trigger can sit anywhere on the page
+  // without threading props to it.
   useEffect(() => {
+    const reset = (next: boolean | ((v: boolean) => boolean)) => {
+      setOpen(next);
+      setQuery("");
+      setActive(0);
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((v) => !v);
-        setQuery("");
-        setActive(0);
+        reset((v) => !v);
       }
     };
+    const onOpen = () => reset(true);
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener(OPEN_PALETTE_EVENT, onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener(OPEN_PALETTE_EVENT, onOpen);
+    };
   }, []);
 
   const q = query.trim().toLowerCase();
@@ -212,8 +233,16 @@ export function CommandPalette({
                   {entry.kind === "jump" ? (
                     <>
                       <span className="size-2 shrink-0 rounded-full bg-accent" />
-                      <span className="truncate text-ink">{entry.item.title}</span>
-                      <span className="truncate text-ink-2">
+                      {/* The company holds its width and the job title gives
+                          way. Both were previously `truncate` and therefore
+                          both flexible, so flexbox shrank them in proportion
+                          and a long title clipped the company to "Te..." -
+                          the one part of the row you scan by. The max-width
+                          still catches a pathologically long employer name. */}
+                      <span className="max-w-[45%] shrink-0 truncate text-ink">
+                        {entry.item.title}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-ink-2">
                         - {entry.item.subtitle}
                       </span>
                     </>
