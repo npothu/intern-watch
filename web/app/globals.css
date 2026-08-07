@@ -220,6 +220,13 @@
   to   { opacity: 1; transform: none; }
 }
 
+/* Build-report affordance: a soft ring that announces the icon right after a
+   build completes (played twice, then the icon sits quiet). */
+@keyframes reportPulse {
+  from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 45%, transparent); }
+  to   { box-shadow: 0 0 0 10px transparent; }
+}
+
 /* Header sync sweep: one pass down the header's bottom edge per route change. */
 @keyframes sweep {
   from { transform: translateX(-110%); }

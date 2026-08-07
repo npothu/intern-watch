@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
+  ChevronRight as ChevronRightIcon,
   Eraser as EraserIcon,
   ExternalLink as ExternalLinkIcon,
   FileText as FileTextIcon,
   Ghost as GhostIcon,
   LayoutList as LayoutListIcon,
   ListChecks as ListChecksIcon,
+  PanelRight as PanelRightIcon,
   Plus as PlusIcon,
 } from "lucide-react";
 
@@ -35,14 +37,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { updateStatus } from "@/app/(app)/tracker/tracker-actions";
+import {
+  updateDueAt,
+  updateSnooze,
+  updateStatus,
+} from "@/app/(app)/tracker/tracker-actions";
+import { ApplicationDrawer } from "@/components/tracker/drawer";
 import {
   GHOST_DAYS,
+  LIVE_STATUSES,
   STATUS_LABELS,
   STATUS_ORDER,
   WAIT_DAYS,
+  dueInDays,
   entryDate,
   formatDate,
+  isSnoozed,
   waitingDays,
 } from "@/components/tracker/tracker-lib";
 import type {
@@ -112,6 +122,223 @@ function statusPills(rows: TrackerRow[]): PillOption[] {
 function matchesQuery(row: TrackerRow, q: string): boolean {
   if (!q) return true;
   return `${row.company} ${row.title} ${row.location}`.toLowerCase().includes(q);
+}
+
+/** Deadline chip: red when overdue/imminent, amber when close, quiet chip
+ * otherwise. Sits beside the waiting chip in the row and the drawer. */
+function DueChip({ row }: { row: TrackerRow }) {
+  const dd = dueInDays(row);
+  if (dd === null) return null;
+  const label =
+    dd < 0
+      ? `overdue ${-dd}d`
+      : dd === 0
+        ? "due today"
+        : dd === 1
+          ? "due tomorrow"
+          : `due in ${dd}d`;
+  return (
+    <span
+      className={cn(
+        "ml-1.5 inline-block rounded-full px-2 py-px text-[10.5px] font-semibold",
+        dd <= 1
+          ? "bg-[color-mix(in_srgb,var(--color-red)_12%,transparent)] text-red"
+          : dd <= 4
+            ? "bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] text-amber"
+            : "bg-chip text-ink-2"
+      )}
+      title={`deadline ${row.dueAt}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
+ * "Needs attention": one collapsible strip above the funnel, two sections -
+ * user-entered deadlines (soonest first) and system-computed quiet
+ * applications (waitingDays >= WAIT_DAYS on a live status, snooze-aware).
+ * Collapsed it costs a single summary line, so the simple tracker view stays
+ * simple; the open/closed choice sticks in localStorage. The strip renders
+ * nothing at all when nothing needs attention.
+ */
+const NA_COLLAPSED_KEY = "iw:na-collapsed";
+const NA_EVENT = "iw:na-collapsed-change";
+
+/* localStorage as an external store: the server snapshot renders expanded,
+ * the client snapshot takes over after hydration without a mismatch. */
+function subscribeNa(cb: () => void) {
+  window.addEventListener(NA_EVENT, cb);
+  return () => window.removeEventListener(NA_EVENT, cb);
+}
+function readNa(): boolean {
+  return localStorage.getItem(NA_COLLAPSED_KEY) === "1";
+}
+
+function NeedsAttention({
+  rows,
+  onOpenRow,
+  onFollowUp,
+  onSnooze,
+  onClearDue,
+}: {
+  rows: TrackerRow[];
+  onOpenRow: (row: TrackerRow) => void;
+  onFollowUp: (short: string) => void;
+  onSnooze: (short: string) => void;
+  onClearDue: (short: string) => void;
+}) {
+  const collapsed = useSyncExternalStore(subscribeNa, readNa, () => false);
+  function toggle() {
+    localStorage.setItem(NA_COLLAPSED_KEY, collapsed ? "0" : "1");
+    window.dispatchEvent(new Event(NA_EVENT));
+  }
+
+  const live = (r: TrackerRow) => LIVE_STATUSES.has(r.status as TrackerStatus);
+  const deadlines = rows
+    .filter((r) => live(r) && dueInDays(r) !== null)
+    .sort((a, b) => (dueInDays(a) ?? 0) - (dueInDays(b) ?? 0));
+  const withDue = new Set(deadlines.map((r) => r.short));
+  const quiet = rows
+    .filter(
+      (r) =>
+        live(r) &&
+        !withDue.has(r.short) &&
+        !isSnoozed(r) &&
+        waitingDays(r) >= WAIT_DAYS
+    )
+    .sort((a, b) => waitingDays(b) - waitingDays(a));
+
+  if (deadlines.length === 0 && quiet.length === 0) return null;
+
+  const urgent = deadlines.filter((r) => (dueInDays(r) ?? 99) <= 1).length;
+
+  return (
+    <div className="mt-4 overflow-hidden rounded-md border border-[color-mix(in_srgb,var(--color-amber)_35%,var(--color-line))] bg-[color-mix(in_srgb,var(--color-amber)_5%,var(--color-surface))]">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-[12.5px]"
+      >
+        <ChevronRightIcon
+          className={cn(
+            "size-3.5 shrink-0 text-ink-2 transition-transform duration-200",
+            !collapsed && "rotate-90"
+          )}
+        />
+        <b className="font-semibold text-amber">Needs attention</b>
+        <span className="flex flex-wrap items-center gap-1.5 text-ink-2">
+          {deadlines.length > 0 && (
+            <span
+              className={cn(
+                "rounded-full px-2 py-px text-[10.5px] font-semibold",
+                urgent > 0
+                  ? "bg-[color-mix(in_srgb,var(--color-red)_12%,transparent)] text-red"
+                  : "bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] text-amber"
+              )}
+            >
+              {deadlines.length} deadline{deadlines.length > 1 ? "s" : ""}
+            </span>
+          )}
+          {quiet.length > 0 && (
+            <span className="rounded-full bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] px-2 py-px text-[10.5px] font-semibold text-amber">
+              {quiet.length} quiet {WAIT_DAYS}d+
+            </span>
+          )}
+        </span>
+      </button>
+      {/* Grid-rows collapse so opening/closing folds instead of popping. */}
+      <div
+        className="grid transition-[grid-template-rows] duration-300 ease-[var(--ease-out-soft)]"
+        style={{ gridTemplateRows: collapsed ? "0fr" : "1fr" }}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="px-3 pb-2.5">
+            {deadlines.length > 0 && (
+              <>
+                <div className="mb-1 mt-0.5 text-[10.5px] font-semibold uppercase tracking-[0.05em] text-ink-2">
+                  Deadlines
+                </div>
+                {deadlines.map((r) => (
+                  <div
+                    key={r.short}
+                    className="mb-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[7px] border border-line bg-surface px-2.5 py-1.5 text-[12.5px]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onOpenRow(r)}
+                      className="min-w-0 cursor-pointer truncate text-left hover:text-accent"
+                    >
+                      <b className="font-semibold">{r.company}</b>{" "}
+                      <span className="text-ink-2">
+                        {labelLower(r.status)}
+                      </span>
+                      <DueChip row={r} />
+                    </button>
+                    <span className="flex shrink-0 gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2.5 text-[11.5px]"
+                        onClick={() => onClearDue(r.short)}
+                      >
+                        Done
+                      </Button>
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
+            {quiet.length > 0 && (
+              <>
+                <div className="mb-1 mt-2 text-[10.5px] font-semibold uppercase tracking-[0.05em] text-ink-2">
+                  Quiet applications
+                </div>
+                {quiet.map((r) => (
+                  <div
+                    key={r.short}
+                    className="mb-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[7px] border border-line bg-surface px-2.5 py-1.5 text-[12.5px]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onOpenRow(r)}
+                      className="min-w-0 cursor-pointer truncate text-left hover:text-accent"
+                    >
+                      <b className="font-semibold">{r.company}</b>{" "}
+                      <span className="text-ink-2">
+                        {labelLower(r.status)} · applied{" "}
+                        {formatDate(r.appliedDate)}
+                      </span>
+                      <WaitingChip row={r} />
+                    </button>
+                    <span className="flex shrink-0 gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2.5 text-[11.5px]"
+                        onClick={() => onFollowUp(r.short)}
+                      >
+                        Log follow-up
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[11.5px] text-ink-2"
+                        onClick={() => onSnooze(r.short)}
+                      >
+                        Snooze 3d
+                      </Button>
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Funnel({ rows }: { rows: TrackerRow[] }) {
@@ -215,6 +442,7 @@ function TrackerRowView({
   onStatus,
   onNote,
   onHistory,
+  onDetails,
 }: {
   row: TrackerRow;
   /** The row a command-palette jump landed on - washed until the next jump. */
@@ -222,6 +450,7 @@ function TrackerRowView({
   onStatus: (s: string) => void;
   onNote: () => void;
   onHistory: () => void;
+  onDetails: () => void;
 }) {
   return (
     <div
@@ -239,6 +468,7 @@ function TrackerRowView({
           <span className="text-[13.5px] font-semibold text-ink">
             {row.company}
           </span>
+          <DueChip row={row} />
           <WaitingChip row={row} />
         </div>
         {row.title && (
@@ -293,6 +523,16 @@ function TrackerRowView({
         >
           <PlusIcon className="size-3.5" />
           note
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onDetails}
+          title="Open details"
+          className="text-ink-2"
+        >
+          <PanelRightIcon className="size-3.5" />
+          details
         </Button>
         <Button
           variant="ghost"
@@ -355,9 +595,11 @@ function NoteDialog({
 }: {
   row: TrackerRow | null;
   onOpenChange: (open: boolean) => void;
-  onSave: (short: string, note: string) => void;
+  /** dueAt: undefined = untouched, null = cleared, string = set. */
+  onSave: (short: string, note: string, dueAt?: string | null) => void;
 }) {
   const [value, setValue] = useState("");
+  const [due, setDue] = useState("");
   const open = row !== null;
 
   // Reset the draft whenever a different row opens the dialog. This is a
@@ -365,12 +607,18 @@ function NoteDialog({
   const [lastRow, setLastRow] = useState<TrackerRow | null>(null);
   if (row !== lastRow) {
     setLastRow(row);
-    if (row) setValue("");
+    if (row) {
+      setValue("");
+      setDue(row.dueAt ?? "");
+    }
   }
 
+  const dueChanged = row ? due !== (row.dueAt ?? "") : false;
+
   function submit() {
-    if (!row || !value.trim()) return;
-    onSave(row.short, value.trim());
+    if (!row) return;
+    if (!value.trim() && !dueChanged) return;
+    onSave(row.short, value.trim(), dueChanged ? due || null : undefined);
   }
 
   return (
@@ -392,12 +640,34 @@ function NoteDialog({
           placeholder="e.g. OA due Friday, recruiter: Sam"
           className="w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-2 focus:border-accent"
         />
+        {/* The deadline lives beside the note because that's where deadlines
+            arrive in real life ("OA due Friday") - an explicit date field, so
+            it feeds the needs-attention queue without any note parsing. */}
+        <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-ink-2">
+          <span>Deadline (optional)</span>
+          <input
+            type="date"
+            value={due}
+            onChange={(e) => setDue(e.target.value)}
+            aria-label="Deadline date"
+            className="rounded-md border border-line-2 bg-bg px-2.5 py-1 text-[12.5px] text-ink outline-none transition-colors focus:border-accent"
+          />
+          {due && (
+            <button
+              type="button"
+              onClick={() => setDue("")}
+              className="cursor-pointer text-[11.5px] text-ink-2 underline decoration-dashed underline-offset-2 hover:text-ink"
+            >
+              clear
+            </button>
+          )}
+        </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={!value.trim()}>
-            Save note
+          <Button onClick={submit} disabled={!value.trim() && !dueChanged}>
+            Save
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -539,22 +809,70 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
     }
   }
 
-  async function commitNote(short: string, note: string) {
+  async function commitNote(short: string, note: string, label = "Note saved") {
     const prev = rows.find((r) => r.short === short);
     if (!prev || !note.trim()) return;
     const snapshot = rows;
     setRows(applyChange(short, prev.status, note.trim()));
     const res = await updateStatus(short, prev.status, note.trim());
     if (res.ok) {
-      toast.success("Note saved");
+      toast.success(label);
     } else {
       setRows(snapshot);
       toast.error(res.error);
     }
   }
 
+  async function commitDueAt(short: string, dueAt: string | null) {
+    const snapshot = rows;
+    setRows(rows.map((r) => (r.short === short ? { ...r, dueAt: dueAt ?? undefined } : r)));
+    const res = await updateDueAt(short, dueAt);
+    if (res.ok) {
+      toast.success(dueAt ? `Deadline set for ${formatDate(dueAt)}` : "Deadline cleared");
+    } else {
+      setRows(snapshot);
+      toast.error(res.error);
+    }
+  }
+
+  async function commitSnooze(short: string, until: string | null) {
+    const snapshot = rows;
+    setRows(
+      rows.map((r) =>
+        r.short === short ? { ...r, snoozedUntil: until ?? undefined } : r
+      )
+    );
+    const res = await updateSnooze(short, until);
+    if (res.ok) {
+      toast.success(until ? `Snoozed until ${formatDate(until)}` : "Unsnoozed");
+    } else {
+      setRows(snapshot);
+      toast.error(res.error);
+    }
+  }
+
+  // The drawer tracks a short key, not a row object, so optimistic row
+  // updates (status, notes, deadline) are live inside an open drawer.
+  const [drawerShort, setDrawerShort] = useState<string | null>(null);
+  const drawerRow = drawerShort
+    ? (rows.find((r) => r.short === drawerShort) ?? null)
+    : null;
+
   return (
     <div>
+      <NeedsAttention
+        rows={rows}
+        onOpenRow={(r) => setDrawerShort(r.short)}
+        onFollowUp={(short) => commitNote(short, "followed up", "Follow-up logged")}
+        onSnooze={(short) =>
+          commitSnooze(
+            short,
+            new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10)
+          )
+        }
+        onClearDue={(short) => commitDueAt(short, null)}
+      />
+
       <Funnel rows={rows} />
 
       <div className="mb-3 flex flex-col gap-2">
@@ -604,6 +922,7 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
               onStatus={(s) => commitStatus(r.short, s)}
               onNote={() => setNoteRow(r)}
               onHistory={() => setHistoryRow(r)}
+              onDetails={() => setDrawerShort(r.short)}
             />
           ))}
         </div>
@@ -626,10 +945,21 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
         onOpenChange={(o) => {
           if (!o) setNoteRow(null);
         }}
-        onSave={(short, note) => {
+        onSave={(short, note, dueAt) => {
           setNoteRow(null);
-          commitNote(short, note);
+          if (note) commitNote(short, note);
+          if (dueAt !== undefined) commitDueAt(short, dueAt);
         }}
+      />
+      <ApplicationDrawer
+        row={drawerRow}
+        onOpenChange={(o) => {
+          if (!o) setDrawerShort(null);
+        }}
+        onStatus={commitStatus}
+        onNote={(short, note) => commitNote(short, note)}
+        onDueAt={commitDueAt}
+        onSnooze={commitSnooze}
       />
     </div>
   );

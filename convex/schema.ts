@@ -49,6 +49,14 @@ export default defineSchema({
     ),
     snapshot: v.optional(v.any()),
     createdAt: v.string(),
+    // Needs-attention fields, both optional so applyStatus (which patches only
+    // status/history/note/snapshot) and every Python-driven write leave them
+    // untouched. dueAt is the next externally imposed deadline (ISO date);
+    // snoozedUntil defers the row's appearance in the follow-up queue only.
+    // Deliberately two scalars, not a tasks table: migrate when one
+    // application needs several simultaneous deadlines.
+    dueAt: v.optional(v.string()),
+    snoozedUntil: v.optional(v.string()),
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),
@@ -155,6 +163,17 @@ export default defineSchema({
     filename: v.string(),
     storageId: v.id("_storage"),
     updatedAt: v.number(),
+    // Keep-N=2 versioning: a rebuild moves the current build into prev* and
+    // deletes the storage object prev* held before, so exactly the last two
+    // artifacts exist and nothing orphans (the schema's original no-leak goal).
+    prevStorageId: v.optional(v.id("_storage")),
+    prevFilename: v.optional(v.string()),
+    prevUpdatedAt: v.optional(v.number()),
+    // Build report: what the tailor actually did (JD source and size, project
+    // selection scores, before/after bullets, LLM notes, rendered outline).
+    // Computed by resume_node.performBuild; rendered by the web app's report
+    // dialog. v.any() because it embeds profile-authored strings.
+    report: v.optional(v.any()),
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),

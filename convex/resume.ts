@@ -48,8 +48,22 @@ const ERROR_MAX = 200; // truncated error message length for the status row
 // scheduled runBuild action.
 // ---------------------------------------------------------------------------
 export const requestBuild = mutation({
-  args: { user: v.string(), short: v.string(), secret: v.string() },
-  handler: async (ctx, { user, short, secret }) => {
+  args: {
+    user: v.string(),
+    short: v.string(),
+    secret: v.string(),
+    // Rebuild refinements, all optional so the plain "build" click stays a
+    // two-field call. jdText: user-pasted JD when acquisition failed (or to
+    // override a bad fetch). instructions: free-form guidance forwarded to the
+    // tailor LLM ("emphasize the Go work"). overrides: literal bullet text the
+    // user edited by hand, applied after the LLM pass per project name.
+    jdText: v.optional(v.string()),
+    instructions: v.optional(v.string()),
+    overrides: v.optional(
+      v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
+    ),
+  },
+  handler: async (ctx, { user, short, secret, jdText, instructions, overrides }) => {
     checkSecret(secret);
     // Validate the preconditions before spending a scheduler slot: the user
     // must have a resume profile AND a matching match row to build from.
@@ -88,8 +102,35 @@ export const requestBuild = mutation({
     } else {
       await ctx.db.insert("resumeBuilds", row);
     }
-    await ctx.scheduler.runAfter(0, internal.resume_node.runBuild, { user, short });
+    await ctx.scheduler.runAfter(0, internal.resume_node.runBuild, {
+      user,
+      short,
+      jdText,
+      instructions,
+      overrides,
+    });
     return { ok: true as const };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Public query: the user's resume profile (bank) JSON string, for the web
+// app's profile editor. Secret-gated like every read - the bank is personal
+// data. Legacy rows written as raw objects are serialized on the way out so
+// the caller always receives a string.
+// ---------------------------------------------------------------------------
+export const getProfile = query({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("profiles")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (!row) return { data: null };
+    const data =
+      typeof row.data === "string" ? row.data : JSON.stringify(row.data);
+    return { data, updatedAt: row.updatedAt };
   },
 });
 
@@ -174,10 +215,11 @@ export const getProfileInternal = internalQuery({
 
 // ---------------------------------------------------------------------------
 // Internal mutation: attach a built resume's storage id to its (user, short)
-// row, replacing any earlier build and deleting the old storage object so a
-// rebuild never leaks orphaned files. This is the same replace-on-upsert the
-// public tracker.attachResume performs - extracted here as an internal
-// mutation so the action can reuse it without duplicating the logic.
+// row. Keep-N=2, same semantics as the public tracker.attachResume: the
+// current build slides into the prev* fields and the object prev* held before
+// is deleted, so a rebuild orphans nothing and the last build stays
+// restorable. Also stores the build report alongside the artifact it
+// describes.
 // ---------------------------------------------------------------------------
 export const attachResumeInternal = internalMutation({
   args: {
@@ -185,8 +227,9 @@ export const attachResumeInternal = internalMutation({
     short: v.string(),
     filename: v.string(),
     storageId: v.id("_storage"),
+    report: v.optional(v.any()),
   },
-  handler: async (ctx, { user, short, filename, storageId }) => {
+  handler: async (ctx, { user, short, filename, storageId, report }) => {
     const existing = await ctx.db
       .query("resumes")
       .withIndex("by_user_short", (q) =>
@@ -194,8 +237,18 @@ export const attachResumeInternal = internalMutation({
       )
       .first();
     if (existing) {
-      await ctx.storage.delete(existing.storageId);
-      await ctx.db.patch(existing._id, { filename, storageId, updatedAt: Date.now() });
+      if (existing.prevStorageId) {
+        await ctx.storage.delete(existing.prevStorageId);
+      }
+      await ctx.db.patch(existing._id, {
+        filename,
+        storageId,
+        updatedAt: Date.now(),
+        report,
+        prevStorageId: existing.storageId,
+        prevFilename: existing.filename,
+        prevUpdatedAt: existing.updatedAt,
+      });
     } else {
       await ctx.db.insert("resumes", {
         user,
@@ -203,6 +256,7 @@ export const attachResumeInternal = internalMutation({
         filename,
         storageId,
         updatedAt: Date.now(),
+        report,
       });
     }
   },

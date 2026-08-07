@@ -107,7 +107,37 @@ export type TickRow = {
 
 export type LedgerRecord = { [key: string]: unknown; status: string };
 
-export type ResumeUrls = Record<string, string>;
+/** The build report resume_node.performBuild stores on the resumes row. */
+export type ResumeReport = {
+  builtAt: number;
+  usedLlm: boolean;
+  llmError?: string;
+  jdSource: "manual" | "fetched" | "stub";
+  jdChars: number;
+  instructions?: string;
+  scores: Record<string, number>;
+  notes: string[];
+  projects: {
+    name: string;
+    variant?: string;
+    before: string[];
+    after: string[];
+    llmRewritten: boolean;
+    overridden: boolean;
+  }[];
+  outline: string[];
+};
+
+export type ResumeMeta = {
+  url: string;
+  filename: string;
+  updatedAt?: number;
+  report: ResumeReport | null;
+  prevUrl: string | null;
+  prevFilename: string | null;
+};
+
+export type ResumeUrls = Record<string, ResumeMeta>;
 
 export type TrackerUserData = {
   matches: MatchItem[];
@@ -157,10 +187,43 @@ export async function recordStatus(
   await post("mutation", "recordStatus", { user, short, status, note });
 }
 
-/** Map of short key -> built resume URL for the user. */
+/** Map of short key -> built resume metadata for the user.
+ *
+ * The Convex query returns an ARRAY of {short, url, filename, ...} rows; the
+ * old cast-to-Record here silently produced a map with no usable keys, so
+ * server-rendered resume links could never light up. Folded explicitly now. */
 export async function getResumeUrls(user: string): Promise<ResumeUrls> {
   const value = await post("query", "getResumeUrls", { user });
-  return (value as ResumeUrls | null) ?? {};
+  const out: ResumeUrls = {};
+  if (Array.isArray(value)) {
+    for (const row of value as Array<Record<string, unknown>>) {
+      const short = typeof row.short === "string" ? row.short : "";
+      const url = typeof row.url === "string" ? row.url : "";
+      if (!short || !url) continue;
+      out[short] = {
+        url,
+        filename: typeof row.filename === "string" ? row.filename : "resume.docx",
+        updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : undefined,
+        report: (row.report as ResumeReport | null | undefined) ?? null,
+        prevUrl: typeof row.prevUrl === "string" ? row.prevUrl : null,
+        prevFilename:
+          typeof row.prevFilename === "string" ? row.prevFilename : null,
+      };
+    }
+  }
+  return out;
+}
+
+/** Swap the current and previous resume builds back (keep-N=2 restore). */
+export async function restoreResume(
+  user: string,
+  short: string
+): Promise<{ ok: boolean; error?: string }> {
+  const value = await post("mutation", "restoreResume", { user, short });
+  const res = value as { ok?: boolean; error?: string } | null;
+  return res && typeof res.ok === "boolean"
+    ? { ok: res.ok, error: res.error }
+    : { ok: true };
 }
 
 /** Convenience: the full per-user bundle the pages need. */
@@ -178,12 +241,25 @@ export async function getTrackerUserData(user: string): Promise<TrackerUserData>
  * or {ok:false, error} when the profile/matches are missing. */
 export type ResumeBuildResponse = { ok: boolean; error?: string };
 
+/** Optional rebuild refinements forwarded to resume:requestBuild. */
+export type ResumeBuildOpts = {
+  jdText?: string;
+  instructions?: string;
+  overrides?: { name: string; bullets: string[] }[];
+};
+
 /** Kick off an on-demand resume build for one match inside Convex. */
 export async function requestResumeBuild(
   user: string,
-  short: string
+  short: string,
+  opts: ResumeBuildOpts = {}
 ): Promise<ResumeBuildResponse> {
-  const value = await post("mutation", "requestBuild", { user, short }, "resume");
+  const value = await post(
+    "mutation",
+    "requestBuild",
+    { user, short, ...opts },
+    "resume"
+  );
   const res = value as ResumeBuildResponse | null;
   return res && typeof res.ok === "boolean" ? res : { ok: true };
 }
@@ -231,5 +307,125 @@ export type IngestRow = {
 export async function getIngestStatus(user: string, ingestId: string): Promise<IngestRow | null> {
   const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest");
   return value as IngestRow | null;
+}
+
+// -- inbox (mail) ------------------------------------------------------------
+
+/** One candidate an inbox action offers for resolution. */
+export type InboxCandidate = {
+  short: string;
+  company: string;
+  title: string;
+  score: number;
+};
+
+/** A pending inbox action row, shaped like the `mail:getActions` items. */
+export type InboxAction = {
+  id: string;
+  gmailMessageId: string;
+  threadId: string;
+  accountEmail: string;
+  from: string;
+  subject: string;
+  receivedAt: string;
+  signal: string;
+  evidence: string;
+  source: string;
+  candidates: InboxCandidate[];
+  createdAt: string;
+};
+
+/** The per-account health half of `mail:getActions`. */
+export type MailHealth = {
+  email: string;
+  lastPushAt: number | null;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+  watchExpiration: number | null;
+  historyId: string | null;
+};
+
+export type InboxState = { actions: InboxAction[]; health: MailHealth | null };
+
+/** All pending inbox actions plus the linked account health. */
+export async function getInboxActions(user: string): Promise<InboxState> {
+  const value = await post("query", "getActions", { user }, "mail");
+  return (value as InboxState | null) ?? { actions: [], health: null };
+}
+
+export type ResolveInboxActionArgs = {
+  id: string;
+  short?: string;
+  status?: string;
+  dismiss?: boolean;
+};
+
+/** Resolve (or dismiss) one pending inbox action. */
+export async function resolveInboxAction(
+  user: string,
+  args: ResolveInboxActionArgs
+): Promise<void> {
+  await post("mutation", "resolveAction", { user, ...args }, "mail");
+}
+
+// -- profile (resume) --------------------------------------------------------
+
+/** The `resume:getProfile` query result: profile JSON as an opaque string. */
+export type ProfileData = { data: string | null };
+
+/** Read the user's resume profile JSON (null when never saved). */
+export async function getProfile(user: string): Promise<ProfileData> {
+  const value = await post("query", "getProfile", { user }, "resume");
+  return (value as ProfileData | null) ?? { data: null };
+}
+
+/** Persist the user's resume profile JSON (a serialized string, validated
+ * server-side by the mutation). */
+export async function putProfile(user: string, data: string): Promise<void> {
+  await post("mutation", "putProfile", { user, data }, "resume");
+}
+
+// -- tracker deadlines -------------------------------------------------------
+
+/** Set (or clear) a match's due date. */
+export async function setDueAt(
+  user: string,
+  short: string,
+  dueAt: string | null
+): Promise<void> {
+  await post("mutation", "setDueAt", { user, short, dueAt }, "tracker");
+}
+
+/** Set (or clear) a match's snooze. */
+export async function setSnooze(
+  user: string,
+  short: string,
+  snoozedUntil: string | null
+): Promise<void> {
+  await post("mutation", "setSnooze", { user, short, snoozedUntil }, "tracker");
+}
+
+/** The per-account health half of `tracker:getHealth`. */
+export type TrackerHealthMail = {
+  email: string;
+  lastPushAt: number | null;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  watchExpiration: number | null;
+};
+
+/** The `tracker:getHealth` query payload. */
+export type TrackerHealth = {
+  watcherPushedAt: number | null;
+  mail: TrackerHealthMail | null;
+  pendingInbox: number;
+  stuckBuilds: number;
+};
+
+/** Read the tracker/mail pipeline health for the user. */
+export async function getHealth(user: string): Promise<TrackerHealth | null> {
+  const value = await post("query", "getHealth", { user }, "tracker");
+  return value as TrackerHealth | null;
 }
 
