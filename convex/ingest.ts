@@ -82,8 +82,19 @@ function extractJobrightId(input: string): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
-export function dedupInfoForUrl(canonical: string): { dedupKey: string; short: string } {
-  const jr = extractJobrightId(canonical);
+/**
+ * Derive the dedup identity for a URL.
+ *
+ * `raw` matters: canonicalUrl() strips `jr_id` as a tracking parameter, so a
+ * jobright-sourced employer link (jobs.ashbyhq.com/...?jr_id=<24hex>) has no
+ * jobright id left by the time it reaches here. Reading the id from the raw
+ * URL first means such a link derives the same `jr:<id>` key - and therefore
+ * the same short - that the watcher assigns when it finds the job itself.
+ * Without this, adding a job by hand and having the watcher pick it up later
+ * produces two rows for one job.
+ */
+export function dedupInfoForUrl(canonical: string, raw?: string): { dedupKey: string; short: string } {
+  const jr = extractJobrightId(raw ?? canonical) || extractJobrightId(canonical);
   let dedupKey: string;
   if (jr) dedupKey = `jr:${jr}`;
   else dedupKey = `manual:${sha1HexSync(canonical)}`;
@@ -119,7 +130,7 @@ export const requestIngest = mutation({
     // Validate and canonicalize
     validateUrl(url);
     const canonical = canonicalUrl(url);
-    const { dedupKey, short } = dedupInfoForUrl(canonical);
+    const { dedupKey, short } = dedupInfoForUrl(canonical, url);
 
     // Rate limit before duplicate check so duplicates don't bypass it? Check after validation.
     await checkRateLimit(ctx, user);

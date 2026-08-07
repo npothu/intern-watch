@@ -2,7 +2,14 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import * as ingest from "./ingest";
-import { canonicalUrl, validateUrl, detectAts, extractGeneric } from "./ingest_extract";
+import {
+  canonicalUrl,
+  validateUrl,
+  detectAts,
+  extractGeneric,
+  companyFromUrl,
+  inferTerm,
+} from "./ingest_extract";
 
 const SECRET = "test-tracker-secret";
 
@@ -294,14 +301,171 @@ describe("ingest: runIngest", () => {
       url: "https://example.com/jobs/big",
       secret: SECRET,
     });
-    const bigHtml = "a".repeat(300 * 1024) + `<script type="application/ld+json">{"@type":"JobPosting","title":"Big Intern","hiringOrganization":{"name":"BigCo"}}</script>`;
+    // Job data inside the cap, padding past it: the body is truncated and the
+    // match is still extracted. (Previously this fixture put the ld+json after
+    // the padding, so truncation dropped it and the test only passed because a
+    // titleless page was given the placeholder title "Manual Ingest" - the
+    // junk-row behaviour that is now a hard failure instead.)
+    const bigHtml =
+      `<script type="application/ld+json">{"@type":"JobPosting","title":"Big Intern","hiringOrganization":{"name":"BigCo"}}</script>` +
+      "a".repeat(300 * 1024);
     const fetchMock = vi.fn(async () => new Response(bigHtml, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const { runIngest } = await import("./ingest_node");
     await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
     const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId: req.ingestId as any, secret: SECRET });
-    // Should still succeed (truncated) and create a match
     expect(row?.status).toBe("done");
+    const match = await t.run(async (ctx) => await ctx.db.query("matches").first());
+    expect(match?.item?.title).toBe("Big Intern");
     vi.unstubAllGlobals();
+  });
+
+  test("200KB cap: job data beyond the cap fails rather than inventing a row", async () => {
+    const t = convexTest(schema);
+    const req = await t.mutation(ingest.requestIngest, {
+      user: "u1",
+      url: "https://example.com/jobs/big-late",
+      secret: SECRET,
+    });
+    const lateHtml =
+      "a".repeat(300 * 1024) +
+      `<script type="application/ld+json">{"@type":"JobPosting","title":"Late Intern","hiringOrganization":{"name":"LateCo"}}</script>`;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(lateHtml, { status: 200 })));
+    const { runIngest } = await import("./ingest_node");
+    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
+    const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId: req.ingestId as any, secret: SECRET });
+    expect(row?.status).toBe("failed");
+    const matches = await t.run(async (ctx) => await ctx.db.query("matches").collect());
+    expect(matches).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions found while testing manual ingest against real job URLs
+// ---------------------------------------------------------------------------
+describe("regressions from live ingest testing", () => {
+  test("a jobright employer link derives the same jr: key the watcher would", () => {
+    // canonicalUrl strips jr_id as tracking, so the id has to be read from the
+    // raw URL or this link never matches the watcher's row for the same job.
+    const raw =
+      "https://jobs.ashbyhq.com/terranova/a8e5a8d2-4af3-4736-b66e-e0804447f7a0/application?utm_source=jobright&jr_id=6a75372837da8525e8cdcbb9";
+    const canonical = canonicalUrl(raw);
+    expect(canonical).not.toContain("jr_id");
+
+    const viaRaw = ingest.dedupInfoForUrl(canonical, raw);
+    expect(viaRaw.dedupKey).toBe("jr:6a75372837da8525e8cdcbb9");
+
+    // ...and that must equal what the jobright.ai permalink for the same job
+    // derives, so the two routes to one job collapse to a single row.
+    const permalink = "https://jobright.ai/jobs/info/6a75372837da8525e8cdcbb9";
+    const viaPermalink = ingest.dedupInfoForUrl(canonicalUrl(permalink), permalink);
+    expect(viaPermalink.short).toBe(viaRaw.short);
+  });
+
+  test("employer name comes from the URL on shared boards, not the hostname", () => {
+    expect(
+      companyFromUrl(
+        "https://job-boards.greenhouse.io/embed/job_app?for=flyzipline&token=7787868003"
+      )
+    ).toBe("Flyzipline");
+    expect(
+      companyFromUrl("https://jobs.ashbyhq.com/ramp/67fadb77-43d8-4449-954b-d4cf2c6d3b8b/application")
+    ).toBe("Ramp");
+  });
+
+  test("employer is read from the <title> 'at <employer>' phrase", () => {
+    // Greenhouse puts the role in <h1> and "<role> at <employer>" in <title>.
+    const html =
+      "<title>Job Application for Maps Intern (Fall 2026) at Zipline </title>" +
+      "<h1>Maps Intern (Fall 2026)</h1>";
+    const out = extractGeneric(
+      html,
+      "https://job-boards.greenhouse.io/embed/job_app?for=flyzipline"
+    );
+    expect(out.company).toBe("Zipline");
+    expect(out.title).toBe("Maps Intern (Fall 2026)");
+  });
+
+  test("term is inferred from a title that spells it out", () => {
+    expect(inferTerm("Maps Intern (Fall 2026)")).toBe("Fall 2026");
+    expect(inferTerm("SWE Intern - Summer 2027")).toBe("Summer 2027");
+    expect(inferTerm("Software Engineering Intern")).toBe("");
+  });
+
+  test("a 2xx response with an empty body fails instead of creating a row", async () => {
+    // Avature answers automated requests with HTTP 202 and no body.
+    const t = convexTest(schema);
+    const req = await t.mutation(ingest.requestIngest, {
+      user: "u1",
+      url: "https://careers.example.com/en_US/careers/JobDetail?jobId=1",
+      secret: SECRET,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 202 })));
+    const { runIngest } = await import("./ingest_node");
+    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
+    const row = await t.query(ingest.getIngestStatus, {
+      user: "u1",
+      ingestId: req.ingestId as any,
+      secret: SECRET,
+    });
+    expect(row?.status).toBe("failed");
+    expect(row?.error).toMatch(/empty response/i);
+
+    const matches = await t.run(async (ctx) => await ctx.db.query("matches").collect());
+    expect(matches).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("manual rows survive the watcher's snapshot prune", () => {
+  test("pruneMatches keeps manual rows it was never told about", async () => {
+    const t = convexTest(schema);
+    // One watcher row and one hand-added row.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("matches", {
+        user: "u1",
+        short: "watcher00001",
+        item: { key: "jr:aaa", title: "Watcher Job" },
+        pushedAt: Date.now(),
+      });
+      await ctx.db.insert("matches", {
+        user: "u1",
+        short: "manual000001",
+        item: { key: "manual:bbb", title: "Hand Added", source: "manual" },
+        pushedAt: Date.now(),
+      });
+    });
+
+    // The watcher prunes to its own snapshot, which cannot mention the manual
+    // row - it only exists in Convex, never in the run state.
+    const tracker = await import("./tracker");
+    await t.mutation(tracker.pruneMatches, {
+      user: "u1",
+      keep: ["watcher00001"],
+      secret: SECRET,
+    });
+
+    const left = await t.run(async (ctx) =>
+      await ctx.db.query("matches").collect()
+    );
+    const shorts = left.map((r) => r.short).sort();
+    expect(shorts).toEqual(["manual000001", "watcher00001"]);
+  });
+
+  test("pruneMatches still deletes stale watcher rows", async () => {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("matches", {
+        user: "u1",
+        short: "stale0000001",
+        item: { key: "jr:ccc", title: "Gone" },
+        pushedAt: Date.now(),
+      });
+    });
+    const tracker = await import("./tracker");
+    await t.mutation(tracker.pruneMatches, { user: "u1", keep: [], secret: SECRET });
+    const left = await t.run(async (ctx) => await ctx.db.query("matches").collect());
+    expect(left).toHaveLength(0);
   });
 });
