@@ -191,4 +191,25 @@ export default defineSchema({
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),
+
+  // Manual job URL ingest: one row per user-submitted URL. The row tracks
+  // fetch -> extract -> match upsert, or a terminal failure / already_exists.
+  // `canonicalUrl` is the normalized URL used for dedup; `dedupKey` is the
+  // stable key (jr:<id> or manual:<sha1(canonical)>) whose sha1 prefix is
+  // `short`. `status` is one of "fetching" | "extracting" | "done" | "failed"
+  // | "already_exists".
+  manualIngests: defineTable({
+    user: v.string(),
+    short: v.string(),
+    url: v.string(),
+    canonicalUrl: v.optional(v.string()),
+    status: v.string(),
+    error: v.optional(v.string()),
+    dedupKey: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["user"])
+    .index("by_user_short", ["user", "short"])
+    .index("by_user_url", ["user", "canonicalUrl"]),
 });

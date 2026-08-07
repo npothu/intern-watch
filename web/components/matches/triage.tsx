@@ -35,6 +35,7 @@ import {
   fetchBuildStatus,
   fetchResumeUrl,
 } from "@/app/(app)/matches-actions";
+import { AddUrlDialog } from "./add-url-dialog";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TickWrite } from "@/lib/convex";
 
@@ -674,20 +675,23 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
         })}
       </div>
 
-      {/* search */}
-      <input
-        ref={searchRef}
-        type="search"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search company, title, location…"
-        autoComplete="off"
-        aria-label="Search matches"
-        className="mb-4 w-full rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
-      />
+      {/* toolbar */}
+      <div className="mb-4 flex items-center gap-2">
+        <input
+          ref={searchRef}
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search company, title, location…"
+          autoComplete="off"
+          aria-label="Search matches"
+          className="flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
+        />
+        <AddUrlDialog />
+      </div>
 
       {!hasAnyRows ? (
-        <EmptyState title="No matches yet." hint="Matches will land here as the watcher finds them." />
+        <div className="rounded-md border border-line bg-surface"><div className="px-4 py-8 text-center"><p className="text-[14px] font-medium text-ink">No matches yet.</p><p className="mt-1 text-[13px] text-ink-2">Matches will land here as the watcher finds them — or add a job URL manually.</p><div className="mt-4 flex justify-center"><AddUrlDialog /></div></div></div>
       ) : emptyFilter ? (
         <div className="rounded-md border border-line bg-surface">
           <div className="px-4 py-7 text-center text-[13px] text-ink-2">
@@ -893,17 +897,6 @@ function DesktopGroup({
         style={railStyle}
       />
       {children}
-    </div>
-  );
-}
-
-function EmptyState({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div className="rounded-md border border-line bg-surface">
-      <div className="px-4 py-20 text-center">
-        <div className="text-[13.5px] font-medium text-ink">{title}</div>
-        <p className="mt-1 text-[12.5px] text-ink-2">{hint}</p>
-      </div>
     </div>
   );
 }

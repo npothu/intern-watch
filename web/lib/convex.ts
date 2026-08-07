@@ -204,3 +204,32 @@ export async function fetchBuildStatus(
   const value = await post("query", "getBuildStatus", { user, short }, "resume");
   return value as BuildStatus;
 }
+
+/** Manual ingest: request a URL ingest. */
+export type IngestResponse =
+  | { ingestId: string; status: "fetching"; short: string }
+  | { ingestId: string; status: "already_exists"; short: string };
+
+export async function requestIngest(user: string, url: string): Promise<IngestResponse> {
+  const value = await post("mutation", "requestIngest", { user, url }, "ingest");
+  return value as IngestResponse;
+}
+
+export type IngestRow = {
+  _id: string;
+  user: string;
+  short: string;
+  url: string;
+  canonicalUrl?: string;
+  status: string;
+  error?: string;
+  dedupKey?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export async function getIngestStatus(user: string, ingestId: string): Promise<IngestRow | null> {
+  const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest");
+  return value as IngestRow | null;
+}
+
