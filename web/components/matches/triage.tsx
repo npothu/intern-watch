@@ -175,6 +175,9 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     [rows, filter, query]
   );
   const groups = useMemo(() => groupByTerm(visible), [visible]);
+  // Navigation must follow the RENDERED order (term groups, sorted within
+  // each group), not the server's row order - j/k walks what the eye sees.
+  const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
 
   const stats = useMemo(() => {
     const active = rows.filter((r) => !r.dismissed);
@@ -187,8 +190,8 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
     };
   }, [rows]);
 
-  const cursorIndex = cursor ? visible.findIndex((r) => r.short === cursor) : -1;
-  const currentRow = cursorIndex >= 0 ? visible[cursorIndex] : null;
+  const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
+  const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
 
   // Scroll the cursor row into view whenever it changes.
   useEffect(() => {
@@ -286,8 +289,8 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   }
 
   function hideShort(short: string) {
-    const i = visible.findIndex((r) => r.short === short);
-    const next = visible[i + 1] || visible[i - 1];
+    const i = ordered.findIndex((r) => r.short === short);
+    const next = ordered[i + 1] || ordered[i - 1];
     setCursor(next ? next.short : null);
     queueDismiss(short, true);
   }
@@ -319,14 +322,14 @@ export function Triage({ rows: initialRows }: { rows: TriageRow[] }) {
   }
 
   function move(delta: number) {
-    if (!visible.length) return;
+    if (!ordered.length) return;
     let i = cursorIndex;
     if (i < 0) {
-      i = delta > 0 ? 0 : visible.length - 1;
+      i = delta > 0 ? 0 : ordered.length - 1;
     } else {
-      i = Math.max(0, Math.min(visible.length - 1, i + delta));
+      i = Math.max(0, Math.min(ordered.length - 1, i + delta));
     }
-    setCursor(visible[i].short);
+    setCursor(ordered[i].short);
   }
 
   function openRow(row?: TriageRow) {
