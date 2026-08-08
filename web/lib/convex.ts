@@ -25,7 +25,7 @@ export class ConvexError extends Error {
 type ConvexStatus = { status?: string; value?: unknown; errorMessage?: string };
 
 async function post(
-  kind: "query" | "mutation",
+  kind: "query" | "mutation" | "action",
   fn: string,
   args: Record<string, unknown>,
   module: string = "tracker"
@@ -429,3 +429,65 @@ export async function getHealth(user: string): Promise<TrackerHealth | null> {
   return value as TrackerHealth | null;
 }
 
+
+// -- credentials (connections) ------------------------------------------------
+
+/** One stored provider credential row, per `credentials:listCredentials`.
+ *  `status` is one of "ok" | "error" | "untested" and tells the Connections
+ *  page which pill to draw; the secret itself is never returned. */
+export type CredentialRow = {
+  provider: string;
+  hint?: string;
+  label?: string;
+  status: "ok" | "error" | "untested";
+  lastCheckedAt?: number;
+  lastError?: string;
+  updatedAt?: number;
+};
+
+/** All of the user's provider credentials, keyed by provider name. */
+export async function listCredentials(user: string): Promise<CredentialRow[]> {
+  const value = await post("query", "listCredentials", { user }, "credentials");
+  return (value as CredentialRow[] | null) ?? [];
+}
+
+/** Save (or replace) one provider's secret fields. */
+export async function putCredential(
+  user: string,
+  provider: string,
+  fields: Record<string, string>
+): Promise<void> {
+  await post(
+    "action",
+    "putCredential",
+    { user, provider, fields },
+    "credentials"
+  );
+}
+
+/** Ping the provider with the saved credential. Returns ok + a human detail. */
+export async function testCredential(
+  user: string,
+  provider: string
+): Promise<{ ok: boolean; detail: string }> {
+  const value = await post(
+    "action",
+    "testCredential",
+    { user, provider },
+    "credentials"
+  );
+  return value as { ok: boolean; detail: string };
+}
+
+/** Delete one provider's stored credential. */
+export async function deleteCredential(
+  user: string,
+  provider: string
+): Promise<void> {
+  await post(
+    "mutation",
+    "deleteCredential",
+    { user, provider },
+    "credentials"
+  );
+}

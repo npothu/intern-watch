@@ -196,6 +196,46 @@ export default defineSchema({
   })
     .index("by_user", ["user"]),
 
+  // The pre-migration copy of a profile, written once when a v1 document is
+  // upgraded to the v2 (versioned, section-list) shape. The v2 migration is
+  // deliberately one-shot and lossy-looking - v1's `Record<name, X>` groups
+  // become ordered arrays - so the original JSON is parked here rather than
+  // thrown away. Nothing reads this in normal operation; it exists so a bad
+  // migration is recoverable by hand instead of unrecoverable.
+  profileBackups: defineTable({
+    user: v.string(),
+    fromVersion: v.number(),           // 1
+    data: v.string(),                  // the raw JSON string as it was stored
+    createdAt: v.number(),
+  })
+    .index("by_user", ["user"]),
+
+  // Per-user third-party credentials for the Connections page.
+  //
+  // The secret itself is AES-256-GCM ciphertext and is NEVER returned to a
+  // client - queries return only the non-secret display fields (hint, label,
+  // status) so a card can render "AIza…7f2c / Connected" without the value
+  // leaving the backend. Decryption happens in actions that are about to make
+  // the outbound call.
+  //
+  // `provider` is one of: "gemini" | "google" | "browserbase" | "jobright"
+  // | "smtp". One row per (user, provider).
+  credentials: defineTable({
+    user: v.string(),
+    provider: v.string(),
+    ciphertext: v.string(),            // base64, AES-256-GCM over JSON fields
+    iv: v.string(),                    // base64, 12 bytes, fresh per write
+    // Non-secret, safe to show:
+    hint: v.optional(v.string()),      // masked tail, e.g. "AIza…7f2c"
+    label: v.optional(v.string()),     // account email, project id, ...
+    status: v.string(),                // "ok" | "error" | "untested"
+    lastCheckedAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["user"])
+    .index("by_user_provider", ["user", "provider"]),
+
   // In-flight on-demand resume builds. A row is upserted to "building" when
   // requestBuild schedules runBuild; runBuild deletes it on success or patches
   // it to "failed" (with a truncated error) on failure. The hosted web app

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { Profile, Project } from "./resume_docx";
+import { migrateProfile, type Entry } from "./profile_schema";
 import {
   analyze,
   matches,
@@ -18,16 +18,34 @@ import {
 // These cover the deterministic surfaces - JD skill extraction, weighted
 // overlap scoring, variant picking, and the cap/pad selection rule.
 
-function proj(opts: Partial<Project> & { bullets?: Record<string, string[]> } = {}): Project {
-  return { date: "2026", bullets: { base: ["general project text"] }, ...opts };
+function proj(opts: Partial<Entry> & { bullets?: Record<string, string[]> } = {}): Entry {
+  return {
+    id: "proj-item-0",
+    heading: "proj",
+    date: "2026",
+    bullets: { base: ["general project text"] },
+    ...opts,
+  };
 }
 
-function profile(projects: Record<string, Project>): Profile {
-  return {
+// Build a v2 profile from the same v1 inputs the pre-migration helper took, so
+// fixtures read the way they always did while the shape under test is v2.
+function profile(projects: Record<string, Partial<Entry>>): ReturnType<typeof migrateProfile> {
+  return migrateProfile({
     header: { name: "Alex Example", contact_line: "alex@example.com" },
     education: { institution: "Georgia Tech", grad_date: "May 2027" },
-    projects,
-  };
+    projects: Object.fromEntries(
+      Object.entries(projects).map(([name, e]) => [
+        name,
+        {
+          tech: e.tech,
+          date: e.date ?? "2026",
+          tags: e.tags,
+          bullets: e.bullets ?? { base: ["general project text"] },
+        },
+      ]),
+    ),
+  });
 }
 
 describe("matches / analyze (jd.py port)", () => {
@@ -95,7 +113,7 @@ describe("select_projects ordering / cap / pad", () => {
   });
 
   test("orders by score desc, then bank order, and caps at MAX_PROJECTS", () => {
-    const projects: Record<string, Project> = {
+    const projects: Record<string, Entry> = {
       R1: proj({ tags: ["redis"] }),
       D1: proj({ tags: ["docker"] }),
       A1: proj({ tags: ["aws"] }),
@@ -114,7 +132,7 @@ describe("select_projects ordering / cap / pad", () => {
 
   test("pads to MIN_PROJECTS with remaining projects in bank order when few score above zero", () => {
     // Only "P2" (unique redis tag) matches the JD; the rest score zero.
-    const projects: Record<string, Project> = {
+    const projects: Record<string, Entry> = {
       P1: proj({ tags: ["react"] }),
       P2: proj({ tags: ["redis"] }),
       P3: proj({ tags: ["docker"] }),
@@ -126,7 +144,7 @@ describe("select_projects ordering / cap / pad", () => {
   });
 
   test("empty JD falls back to bank order, first MAX_PROJECTS", () => {
-    const projects: Record<string, Project> = {};
+    const projects: Record<string, Entry> = {};
     for (let i = 1; i <= 8; i++) projects[`P${i}`] = proj({ tags: ["react"] });
     const r = selectProjects(profile(projects), "");
     expect(r.selected.map(([n]) => n)).toEqual(
@@ -136,7 +154,7 @@ describe("select_projects ordering / cap / pad", () => {
   });
 
   test("is deterministic across repeated calls", () => {
-    const projects: Record<string, Project> = {
+    const projects: Record<string, Entry> = {
       A: proj({ tags: ["redis"] }),
       B: proj({ tags: ["docker"] }),
       C: proj({ tags: ["aws"] }),

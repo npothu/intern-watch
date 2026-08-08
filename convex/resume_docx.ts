@@ -46,6 +46,18 @@ import {
   TabStopType,
   TextRun,
 } from "docx";
+import { bulletsFor, toV2, visibleEntries } from "./profile_schema";
+import type {
+  Entry,
+  HeadingRun,
+  ProfileV2,
+  Section,
+  SkillItem,
+} from "./profile_schema";
+// Re-exported for callers that used to get these types from here. A re-export
+// alone does not bind the name locally, so HeadingRun is imported above too -
+// datedLineSpec takes it as a parameter type.
+export type { HeadingRun, SkillItem } from "./profile_schema";
 
 const FONT = "Times New Roman";
 
@@ -70,54 +82,6 @@ const SECTION_BORDER_SZ8 = 6;
 
 // Single line spacing: 240/240 auto is Word's "single".
 const LINE_SINGLE = 240;
-
-export type HeadingRun = { text: string; bold?: boolean; italics?: boolean };
-export type SkillItem = string | { name: string; keywords?: string[] };
-export type WorkEntry = {
-  location?: string;
-  role: string;
-  date: string;
-  bullets: Record<string, string[]>;
-};
-export type Project = {
-  tech?: string[];
-  date: string;
-  tags?: string[];
-  bullets: Record<string, string[]>;
-};
-export type CommunityEntry = {
-  heading_runs?: HeadingRun[];
-  date: string;
-  bullets: Record<string, string[]>;
-};
-
-/** A user's resume profile (bank) JSON - the shape of users/<user>_resume.json. */
-export type Profile = {
-  header: {
-    name: string;
-    contact_line: string;
-    citizen_prefix?: string;
-    links?: { text: string; url: string }[];
-  };
-  education: {
-    institution: string;
-    grad_date: string;
-    degree?: string;
-    threads?: string;
-    gpa?: string;
-    graduate_degree?: { degree: string; grad_date: string };
-    study_abroad?: { text: string; date: string };
-  };
-  skills?: {
-    coursework?: SkillItem[];
-    languages?: SkillItem[];
-    tools?: SkillItem[];
-    certifications?: string[];
-  };
-  work_experience?: Record<string, WorkEntry>;
-  projects?: Record<string, Project>;
-  community?: Record<string, CommunityEntry>;
-};
 
 /**
  * The tailored (variable) part of a build: the projects selected to surface,
@@ -190,10 +154,149 @@ function skillNamed(item: SkillItem): string {
   return typeof item === "string" ? item : item.name;
 }
 
-// Build the full ordered paragraph list (render.py.render order).
-function buildRenderNodes(profile: Profile, content: TailoredContent): ParaSpec[] {
+// --- per-section renderers ----------------------------------------------------
+// renderSection dispatches on section.kind and pushes the same nodes the v1
+// renderer produced. The generic `renderedCount > 0` separator rule down in
+// buildRenderNodes reproduces v1's "no separator before Education, one before
+// every other populated section" behavior as long as Education is the first
+// populated section, which it always is in a migrated v1 profile.
+
+function sectionHasContent(
+  profile: ProfileV2,
+  section: Section,
+  content: TailoredContent,
+  variant: string,
+): boolean {
+  switch (section.kind) {
+    case "skills":
+      return (
+        (profile.skills.languages ?? []).length > 0 ||
+        (profile.skills.tools ?? []).length > 0 ||
+        (profile.skills.certifications ?? []).length > 0
+      );
+    case "projects":
+      return content.projects.length > 0;
+    default:
+      return visibleEntries(section, variant).length > 0;
+  }
+}
+
+// Render one section's entries. `visible` is already filtered/ordered by the
+// caller (education/experience/custom/community) or is content.projects.
+function renderSection(
+  section: Section,
+  profile: ProfileV2,
+  content: TailoredContent,
+  variant: string,
+): ParaSpec[] {
   const nodes: ParaSpec[] = [];
-  const edu = profile.education;
+  switch (section.kind) {
+    case "education": {
+      const visible = visibleEntries(section, variant);
+      visible.forEach((entry, ei) => {
+        nodes.push(
+          datedLineSpec([{ text: entry.heading, bold: true }], entry.date, SZ_EDU),
+        );
+        const degrees = entry.degrees ?? [];
+        if (degrees[0]) {
+          for (const line of [degrees[0].degree, degrees[0].concentration, degrees[0].gpa]) {
+            if (line) nodes.push(plainSpec(line, SZ_EDU, { italics: true }));
+          }
+        }
+        for (const d of degrees.slice(1)) {
+          nodes.push(
+            datedLineSpec([{ text: d.degree, italics: true }], d.grad_date, SZ_EDU),
+          );
+          for (const line of [d.concentration, d.gpa]) {
+            if (line) nodes.push(plainSpec(line, SZ_EDU, { italics: true }));
+          }
+        }
+        for (const x of entry.extras ?? []) {
+          nodes.push(
+            datedLineSpec([{ text: x.text, italics: x.italics ?? true }], x.date ?? "", SZ_EDU),
+          );
+        }
+        for (const b of bulletsFor(entry, variant)) nodes.push(bulletSpec(b));
+        if (ei < visible.length - 1) nodes.push(separatorSpec());
+      });
+      // Exactly once, unconditionally, after all education entries (even when
+      // coursework is empty - dropping it would change a no-coursework resume).
+      const coursework = (profile.skills.coursework ?? []).map(skillNamed).join(", ");
+      nodes.push(
+        paraSpec([
+          run("Coursework:", SZ_EDU, { bold: true }),
+          run(` ${coursework}`, SZ_EDU),
+        ]),
+      );
+      break;
+    }
+    case "experience":
+    case "custom": {
+      const visible = visibleEntries(section, variant);
+      visible.forEach((entry, ei) => {
+        nodes.push(
+          datedLineSpec([{ text: entry.heading, bold: true }], entry.location ?? "", SZ_BODY),
+        );
+        if (entry.subheading) {
+          nodes.push(datedLineSpec([{ text: entry.subheading, italics: true }], entry.date, SZ_BODY));
+        }
+        for (const b of bulletsFor(entry, variant)) nodes.push(bulletSpec(b));
+        if (ei < visible.length - 1) nodes.push(separatorSpec());
+      });
+      break;
+    }
+    case "projects": {
+      content.projects.forEach((p, i) => {
+        nodes.push(
+          datedLineSpec(
+            [
+              { text: `${p.name} | `, bold: true },
+              { text: p.tech, italics: true },
+            ],
+            p.date,
+            SZ_BODY,
+          ),
+        );
+        for (const b of p.bullets) nodes.push(bulletSpec(b));
+        if (i < content.projects.length - 1) nodes.push(separatorSpec());
+      });
+      break;
+    }
+    case "community": {
+      const visible = visibleEntries(section, variant);
+      visible.forEach((entry, ei) => {
+        const runs = entry.headingRuns ?? [{ text: entry.heading, bold: true }];
+        nodes.push(datedLineSpec(runs, entry.date, SZ_BODY));
+        for (const b of bulletsFor(entry, variant)) nodes.push(bulletSpec(b));
+        if (ei < visible.length - 1) nodes.push(separatorSpec());
+      });
+      break;
+    }
+    case "skills": {
+      const skills = profile.skills;
+      const skillSpecs: [string, string][] = [
+        ["Languages:", (skills.languages ?? []).map(skillNamed).join(", ")],
+        ["Systems & Tools:", (skills.tools ?? []).map(skillNamed).join(", ")],
+        ["Certifications:", (skills.certifications ?? []).join(", ")],
+      ];
+      for (const [label, value] of skillSpecs) {
+        if (value) {
+          nodes.push(paraSpec([run(label, SZ_EDU, { bold: true }), run(` ${value}`, SZ_EDU)]));
+        }
+      }
+      break;
+    }
+  }
+  return nodes;
+}
+
+// Build the full ordered paragraph list (render.py.render order).
+function buildRenderNodes(
+  profile: ProfileV2,
+  content: TailoredContent,
+  variant: string = "base",
+): ParaSpec[] {
+  const nodes: ParaSpec[] = [];
 
   // header
   nodes.push(paraSpec([run(profile.header.name, SZ_NAME, { bold: true })], { align: "center" }));
@@ -209,91 +312,13 @@ function buildRenderNodes(profile: Profile, content: TailoredContent): ParaSpec[
   });
   nodes.push(paraSpec(linkRuns, { align: "center" }));
 
-  // education
-  nodes.push(sectionHeaderSpec("Education"));
-  nodes.push(datedLineSpec([{ text: edu.institution, bold: true }], edu.grad_date, SZ_EDU));
-  for (const line of [edu.degree, edu.threads, edu.gpa]) {
-    if (line) nodes.push(plainSpec(line, SZ_EDU, { italics: true }));
-  }
-  if (edu.graduate_degree) {
-    nodes.push(
-      datedLineSpec(
-        [{ text: edu.graduate_degree.degree, italics: true }],
-        edu.graduate_degree.grad_date,
-        SZ_EDU,
-      ),
-    );
-  }
-  if (edu.study_abroad) {
-    nodes.push(
-      datedLineSpec([{ text: edu.study_abroad.text, italics: true }], edu.study_abroad.date, SZ_EDU),
-    );
-  }
-  const coursework = (profile.skills?.coursework ?? []).map(skillNamed).join(", ");
-  nodes.push(
-    paraSpec([
-      run("Coursework:", SZ_EDU, { bold: true }),
-      run(` ${coursework}`, SZ_EDU),
-    ]),
-  );
-
-  // work experience
-  const work = profile.work_experience ?? {};
-  const workNames = Object.keys(work);
-  if (workNames.length > 0) {
-    nodes.push(separatorSpec());
-    nodes.push(sectionHeaderSpec("Work Experience"));
-    workNames.forEach((name, i) => {
-      const w = work[name];
-      nodes.push(datedLineSpec([{ text: name, bold: true }], w.location ?? "", SZ_BODY));
-      nodes.push(datedLineSpec([{ text: w.role, italics: true }], w.date, SZ_BODY));
-      for (const b of w.bullets.base ?? []) nodes.push(bulletSpec(b));
-      if (i < workNames.length - 1) nodes.push(separatorSpec());
-    });
-  }
-
-  // programming projects (tailored)
-  nodes.push(separatorSpec());
-  nodes.push(sectionHeaderSpec("Programming Projects"));
-  content.projects.forEach((p, i) => {
-    nodes.push(
-      datedLineSpec(
-        [
-          { text: `${p.name} | `, bold: true },
-          { text: p.tech, italics: true },
-        ],
-        p.date,
-        SZ_BODY,
-      ),
-    );
-    for (const b of p.bullets) nodes.push(bulletSpec(b));
-    if (i < content.projects.length - 1) nodes.push(separatorSpec());
-  });
-
-  // community
-  const community = profile.community ?? {};
-  const communityNames = Object.keys(community);
-  nodes.push(separatorSpec());
-  nodes.push(sectionHeaderSpec("Community"));
-  communityNames.forEach((name, i) => {
-    const c = community[name];
-    nodes.push(datedLineSpec(c.heading_runs ?? [], c.date, SZ_BODY));
-    for (const b of c.bullets.base ?? []) nodes.push(bulletSpec(b));
-    if (i < communityNames.length - 1) nodes.push(separatorSpec());
-  });
-
-  // skills
-  nodes.push(separatorSpec());
-  nodes.push(sectionHeaderSpec("Skills"));
-  const skillSpecs: [string, string][] = [
-    ["Languages:", (profile.skills?.languages ?? []).map(skillNamed).join(", ")],
-    ["Systems & Tools:", (profile.skills?.tools ?? []).map(skillNamed).join(", ")],
-    ["Certifications:", (profile.skills?.certifications ?? []).join(", ")],
-  ];
-  for (const [label, value] of skillSpecs) {
-    if (value) {
-      nodes.push(paraSpec([run(label, SZ_EDU, { bold: true }), run(` ${value}`, SZ_EDU)]));
-    }
+  let renderedCount = 0;
+  for (const section of profile.sections) {
+    if (!sectionHasContent(profile, section, content, variant)) continue;
+    if (renderedCount > 0) nodes.push(separatorSpec());
+    nodes.push(sectionHeaderSpec(section.title));
+    nodes.push(...renderSection(section, profile, content, variant));
+    renderedCount++;
   }
 
   return nodes;
@@ -302,7 +327,8 @@ function buildRenderNodes(profile: Profile, content: TailoredContent): ParaSpec[
 // --- public pure functions --------------------------------------------------
 
 /** `First_Last_Company.docx` - mirrors src/resume/build.py out_name(). */
-export function resumeFilename(profile: Profile, company: string): string {
+export function resumeFilename(profileArg: ProfileV2, company: string): string {
+  const profile = toV2(profileArg);
   const tokens = profile.header.name.trim().split(/\s+/);
   const first = tokens[0] ?? "";
   const surname = tokens[tokens.length - 1] ?? "";
@@ -314,9 +340,22 @@ export function resumeFilename(profile: Profile, company: string): string {
  * The ordered rendered text lines for a profile + tailored content - one
  * string per paragraph, section headers included. Same source of truth as
  * composeResumeDoc; used by tests to assert sections and their order.
+ * Accepts a v1 shape too (migrated on the fly via toV2) so stale documents
+ * still render.
  */
-export function resumeOutline(profile: Profile, content: TailoredContent): string[] {
-  return buildRenderNodes(profile, content).map((n) => n.runs.map((r) => r.text).join(""));
+export function resumeOutline(
+  profileArg: ProfileV2,
+  content: TailoredContent,
+  variant: string = "base",
+): string[] {
+  const p = toV2(profileArg);
+  return buildRenderNodes(p, content, variant).map((n) => n.runs.map((r) => r.text).join(""));
+}
+
+/** Entries of the projects section (or [] if the profile has none). */
+export function projectEntries(p: ProfileV2): Entry[] {
+  const section = p.sections.find((s) => s.kind === "projects");
+  return section ? section.entries : [];
 }
 
 /** Map one RenderNode to a docx Paragraph. */
@@ -377,10 +416,15 @@ function toParagraph(node: ParaSpec): Paragraph {
 
 /**
  * Compose the full .docx `Document` for a profile + tailored project content.
- * Section order (header, Education, [Work Experience], Programming Projects,
- * Community, Skills) mirrors src/resume/render.py.render exactly.
+ * Section order follows profile.sections (Education, Work Experience,
+ * Programming Projects, Community, Skills for a migrated v1 profile) mirroring
+ * src/resume/render.py.render. Accepts a v1 shape too (migrated via toV2).
  */
-export function composeResumeDoc(profile: Profile, content: TailoredContent): Document {
+export function composeResumeDoc(
+  profileArg: ProfileV2,
+  content: TailoredContent,
+): Document {
+  const p = toV2(profileArg);
   return new Document({
     sections: [
       {
@@ -390,7 +434,7 @@ export function composeResumeDoc(profile: Profile, content: TailoredContent): Do
             margin: { top: 720, bottom: 720, left: 720, right: 720 },
           },
         },
-        children: buildRenderNodes(profile, content).map(toParagraph),
+        children: buildRenderNodes(p, content).map(toParagraph),
       },
     ],
   });

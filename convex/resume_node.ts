@@ -27,7 +27,8 @@ import {
   parseRewrites,
   type ProjectPayload,
 } from "./resume_prompt";
-import { composeResumeDoc, resumeFilename, resumeOutline, type Profile } from "./resume_docx";
+import { composeResumeDoc, projectEntries, resumeFilename, resumeOutline } from "./resume_docx";
+import { bulletsFor, type ProfileV2, toV2 } from "./profile_schema";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
@@ -110,7 +111,7 @@ async function llmCall(system: string, user: string, apiKey: string): Promise<st
 // Scores and variants ride along into the build report so the user can see
 // why a project was picked, dropped, or shown in a non-base voice.
 function selectForBuild(
-  profile: Profile,
+  profile: ProfileV2,
   jdText: string,
 ): {
   payload: ProjectPayload[];
@@ -121,13 +122,13 @@ function selectForBuild(
   const jd = analyze(jdText);
   const variants: Record<string, string> = {};
   const payload = buildProjectPayload(
-    selected.map(([name, p]) => {
-      const variant = pickVariant(p, jd);
+    selected.map(([name, e]) => {
+      const variant = pickVariant(e, jd);
       variants[name] = variant;
       return {
         name,
-        tech: (p.tech ?? []).join(", "),
-        bullets: p.bullets[variant] ?? p.bullets.base ?? [],
+        tech: (e.tech ?? []).join(", "),
+        bullets: bulletsFor(e, variant),
       };
     }),
   );
@@ -182,9 +183,9 @@ async function performBuild(
   if (!profileRow) throw new Error("profile not found");
   // `data` is a JSON string (putProfile's contract - object storage rejects
   // non-ASCII dict keys); tolerate legacy rows written as a raw object.
-  const profile = (
-    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data
-  ) as Profile;
+  const profile: ProfileV2 = toV2(
+    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data,
+  );
 
   // JD text, most trustworthy source first: user-pasted (a rebuild after the
   // report said acquisition failed, or an override of a bad fetch), then the
@@ -211,7 +212,7 @@ async function performBuild(
   // to the deterministic bank text, exactly like tailor.py never raising).
   const { payload: selected, scores, variants } = selectForBuild(profile, jdText);
   const projectDates = new Map(
-    Object.entries(profile.projects ?? {}).map(([n, p]) => [n, p.date]),
+    projectEntries(profile).map((e) => [e.heading, e.date]),
   );
   const before = new Map(
     selected.map((p) => [p.name, p.bullets.map((b) => b.text)]),

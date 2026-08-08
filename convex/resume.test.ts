@@ -10,12 +10,8 @@ import {
   capFor,
   parseRewrites,
 } from "./resume_prompt";
-import {
-  composeResumeDoc,
-  resumeFilename,
-  resumeOutline,
-  type Profile,
-} from "./resume_docx";
+import { composeResumeDoc, resumeFilename, resumeOutline } from "./resume_docx";
+import { migrateProfile, type ProfileV1, type ProfileV2 } from "./profile_schema";
 
 const SECRET = "test-tracker-secret";
 
@@ -30,7 +26,7 @@ beforeAll(() => {
 
 // A compact, representative profile (mirrors tests/fixtures/resume_bank.json
 // shape: header/education/skills/work/projects/community).
-const PROFILE: Profile = {
+const PROFILE: ProfileV1 = {
   header: {
     name: "Alex Example",
     contact_line: "Atlanta, Georgia 30332 | alex@example.com",
@@ -92,6 +88,40 @@ const CONTENT = {
   ],
 };
 
+// The renderer now consumes a v2 profile; these composition tests exercise
+// the renderer, so they use the migrated form of the v1 fixture.
+const V2_PROFILE: ProfileV2 = migrateProfile(PROFILE);
+
+const V1_GOLDEN_OUTLINE: string[] = [
+  "Alex Example",
+  "Atlanta, Georgia 30332 | alex@example.com",
+  "US Citizen | linkedin.com/in/alex",
+  "Education",
+  "Georgia Institute of Technology | Atlanta, GA\tExpected Graduation May 2027",
+  "B.S Computer Science",
+  "Concentrations: Systems & AI",
+  "GPA 3.7/4.0",
+  "Coursework: Operating Systems, Data Structures & Algorithms",
+  "",
+  "Work Experience",
+  "Acme Corp\tAtlanta, GA",
+  "Software Intern\tSummer 2026",
+  "●\tBuilt features for a web platform using React and FastAPI.",
+  "",
+  "Programming Projects",
+  "Simple Prep | React, TypeScript\tFall 2025",
+  "●\tDeveloped a meal planning platform with REST APIs.",
+  "",
+  "Community",
+  "Teaching Assistant (\t2025–2026",
+  "●\tGuides students in low-level systems code.",
+  "",
+  "Skills",
+  "Languages: C, Python, TypeScript",
+  "Systems & Tools: Docker, React",
+  "Certifications: AWS Cloud Practitioner"
+];
+
 describe("resume_prompt: capFor / payload / prompt (tailor.py port)", () => {
   test("capFor floors at CAP_FLOOR and adds CAP_SLACK", () => {
     expect(capFor("short")).toBe(140);
@@ -150,7 +180,7 @@ describe("resume_prompt: capFor / payload / prompt (tailor.py port)", () => {
 
 describe("resume_docx: section composition (render.py port)", () => {
   test("outline renders header, sections and content in the expected order", () => {
-    const lines = resumeOutline(PROFILE, CONTENT);
+    const lines = resumeOutline(V2_PROFILE, CONTENT);
     // Header block first.
     expect(lines[0]).toBe("Alex Example");
     expect(lines[1]).toBe("Atlanta, Georgia 30332 | alex@example.com");
@@ -186,23 +216,117 @@ describe("resume_docx: section composition (render.py port)", () => {
   });
 
   test("composeResumeDoc returns a docx Document with one section", () => {
-    const doc = composeResumeDoc(PROFILE, CONTENT);
+    const doc = composeResumeDoc(V2_PROFILE, CONTENT);
     expect(doc).toBeInstanceOf(Document);
     expect(() => doc).not.toThrow();
   });
 
   test("resumeFilename is First_Last_Company.docx (build.py out_name)", () => {
-    expect(resumeFilename(PROFILE, "Acme, Inc.")).toBe("Alex_Example_AcmeInc.docx");
-    expect(resumeFilename(PROFILE, "")).toBe("Alex_Example_Tailored.docx");
+    expect(resumeFilename(V2_PROFILE, "Acme, Inc.")).toBe("Alex_Example_AcmeInc.docx");
+    expect(resumeFilename(V2_PROFILE, "")).toBe("Alex_Example_Tailored.docx");
   });
 
   test("outline omits the Work Experience section when there are no entries", () => {
-    const noWork: Profile = {
-      ...PROFILE,
-      work_experience: {},
-    };
-    const lines = resumeOutline(noWork, CONTENT);
+    const migrated = migrateProfile({ ...PROFILE, work_experience: {} });
+    const lines = resumeOutline(migrated, CONTENT);
     expect(lines).not.toContain("Work Experience");
+  });
+
+  test("v1 profile through migrateProfile renders byte-identical to the pre-migration golden outline", () => {
+    const migrated = migrateProfile(PROFILE);
+    expect(resumeOutline(migrated, CONTENT)).toEqual(V1_GOLDEN_OUTLINE);
+  });
+
+  test("a hand-written v2 education with two schools and a second-degree entry renders both", () => {
+    const p: ProfileV2 = {
+      version: 2,
+      header: { name: "Alex Example", contact_line: "alex@example.com" },
+      skills: {},
+      sections: [
+        {
+          id: "edu",
+          title: "Education",
+          kind: "education",
+          entries: [
+            {
+              id: "e1",
+              heading: "University of Georgia",
+              date: "2021",
+              degrees: [{ degree: "B.S Computer Science", grad_date: "2021" }],
+              bullets: {},
+            },
+            {
+              id: "e2",
+              heading: "Georgia Institute of Technology",
+              date: "2023",
+              degrees: [
+                { degree: "B.S Computer Science", grad_date: "2023" },
+                { degree: "M.S Machine Learning", grad_date: "2025" },
+              ],
+              bullets: {},
+            },
+          ],
+        },
+      ],
+    };
+    // A dated line renders as "<heading>\t<date>", so match on substring
+    // rather than whole-element equality.
+    const lines = resumeOutline(p, { projects: [] });
+    const at = (needle: string) => lines.findIndex((l) => l.includes(needle));
+    const i1 = at("University of Georgia");
+    const i2 = at("Georgia Institute of Technology");
+    expect(i1).toBeGreaterThan(-1);
+    expect(i2).toBeGreaterThan(-1);
+    expect(i1).toBeLessThan(i2);
+    // The first degree renders undated, the second as a dated italic line.
+    expect(at("B.S Computer Science")).toBeGreaterThan(-1);
+    expect(at("M.S Machine Learning")).toBeGreaterThan(-1);
+  });
+
+  test("hiddenIn excludes an entry for the swe variant but keeps it in base", () => {
+    const p: ProfileV2 = {
+      version: 2,
+      header: { name: "Alex Example", contact_line: "alex@example.com" },
+      skills: {},
+      sections: [
+        {
+          id: "community",
+          title: "Community",
+          kind: "community",
+          entries: [
+            {
+              id: "c1",
+              heading: "Hackathon Mentor",
+              date: "2025",
+              hiddenIn: ["swe"],
+              bullets: { base: ["Mentored students."] },
+            },
+          ],
+        },
+      ],
+    };
+    // The heading renders as "Hackathon Mentor\t2025", so match on substring.
+    const has = (ls: string[]) => ls.some((l) => l.includes("Hackathon Mentor"));
+    expect(has(resumeOutline(p, { projects: [] }))).toBe(true);
+    expect(has(resumeOutline(p, { projects: [] }, "swe"))).toBe(false);
+  });
+
+  test("reordering profile.sections moves Skills before Work Experience", () => {
+    const migrated = migrateProfile(PROFILE);
+    const skills = migrated.sections.find((s) => s.kind === "skills");
+    const work = migrated.sections.find((s) => s.kind === "experience");
+    if (!skills || !work) throw new Error("missing expected sections");
+    const reordered: ProfileV2 = {
+      ...migrated,
+      sections: [
+        migrated.sections[0],
+        skills,
+        ...migrated.sections.filter((s) => s !== skills && s !== work),
+        work,
+      ],
+    };
+    const lines = resumeOutline(reordered, CONTENT);
+    expect(lines.indexOf("Skills")).toBeLessThan(lines.indexOf("Work Experience"));
   });
 });
 

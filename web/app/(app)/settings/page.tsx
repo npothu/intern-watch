@@ -2,6 +2,7 @@ import { SettingsSection, SettingsRow } from "@/components/settings/settings-sec
 import { ThemeControl } from "@/components/settings/theme-control";
 import { MotionControl } from "@/components/settings/motion-control";
 import { ViewSwitch } from "@/components/nav/view-switch";
+import { SettingsTabs } from "@/components/settings/settings-tabs";
 
 export const metadata = { title: "Settings - intern-watch" };
 
@@ -26,6 +27,7 @@ export default function SettingsPage() {
         <h1 className="text-[15px] font-semibold text-ink">Settings</h1>
         <ViewSwitch active={null} />
       </div>
+      <SettingsTabs active="appearance" />
       <SettingsSection title="Appearance">
         <SettingsRow label="Theme" description="Light, dark, or match your system.">
           <ThemeControl />
