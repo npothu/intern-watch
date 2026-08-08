@@ -121,6 +121,10 @@ export type ProfileV2 = {
     tools?: SkillItem[];
     certifications?: string[];
   };
+  /** Variants the user has created, in creation order. "base" is implicit and
+   *  is never stored here. Bullet keys can still introduce a variant (an older
+   *  profile predates this field), so variantsOf unions the two. */
+  variants?: string[];
   sections: Section[];
 };
 
@@ -259,10 +263,12 @@ export function visibleEntries(section: Section, variant: Variant): Entry[] {
 }
 
 /** Every variant key that appears anywhere, "base" first. */
+/** Every variant key that appears anywhere, "base" first. */
 export function variantsOf(profile: ProfileV2): Variant[] {
-  const seen = new Set<Variant>(["base"]);
-  for (const s of profile.sections) {
-    for (const e of s.entries) for (const k of Object.keys(e.bullets)) seen.add(k);
-  }
-  return ["base", ...[...seen].filter((v) => v !== "base").sort()];
+  const out: Variant[] = ["base"];
+  for (const v of profile.variants ?? []) if (v !== "base" && !out.includes(v)) out.push(v);
+  for (const s of profile.sections)
+    for (const e of s.entries)
+      for (const k of Object.keys(e.bullets)) if (!out.includes(k)) out.push(k);
+  return out;
 }

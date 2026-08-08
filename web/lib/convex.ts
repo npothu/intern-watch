@@ -115,6 +115,8 @@ export type ResumeReport = {
   jdSource: "manual" | "fetched" | "stub";
   jdChars: number;
   instructions?: string;
+  /** The user-forced bullet variant for this build (undefined = JD auto-pick). */
+  variant?: string;
   scores: Record<string, number>;
   notes: string[];
   projects: {
@@ -226,6 +228,24 @@ export async function restoreResume(
     : { ok: true };
 }
 
+/** Delete a built resume for one match via `resume:deleteResume`. The
+ * mutation removes both kept storage artifacts and the resumeBuilds marker.
+ * Returns the same {ok, reason} shape the mutation returns. */
+export async function deleteResume(
+  user: string,
+  short: string
+): Promise<{ ok: boolean; reason?: string }> {
+  const value = await post("mutation", "deleteResume", { user, short }, "resume");
+  const res = value as { ok?: boolean; reason?: string } | null;
+  // Default to FAILURE on an unrecognised response, not success: reporting a
+  // delete that may not have happened would leave the user believing an
+  // artifact is gone while it is still in storage.
+  if (!res || typeof res.ok !== "boolean") {
+    return { ok: false, reason: "unexpected_response" };
+  }
+  return { ok: res.ok, reason: res.reason };
+}
+
 /** Convenience: the full per-user bundle the pages need. */
 export async function getTrackerUserData(user: string): Promise<TrackerUserData> {
   const [matches, ticks, ledger, resumes] = await Promise.all([
@@ -246,6 +266,7 @@ export type ResumeBuildOpts = {
   jdText?: string;
   instructions?: string;
   overrides?: { name: string; bullets: string[] }[];
+  variant?: string;
 };
 
 /** Kick off an on-demand resume build for one match inside Convex. */

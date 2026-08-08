@@ -12,18 +12,23 @@
  * the raw subtle.encrypt/decrypt failure.
  */
 
-// Plain `Uint8Array`, not the TS 5.7+ `Uint8Array<ArrayBuffer>` generic form:
-// Convex typechecks this directory with its own bundled TypeScript, which is
-// older and rejects the generic as "Type 'Uint8Array' is not generic" even
-// though the web workspace's newer compiler accepts it.
-function base64ToBytes(b64: string): Uint8Array {
+/**
+ * Returns a real `ArrayBuffer`, not a `Uint8Array`, and that is deliberate:
+ * this file has to typecheck under TWO compilers with different lib
+ * definitions. Convex bundles an older TypeScript that rejects the
+ * `Uint8Array<ArrayBuffer>` generic form outright ("Type 'Uint8Array' is not
+ * generic"), while the web workspace's newer one resolves a bare `Uint8Array`
+ * to `Uint8Array<ArrayBufferLike>`, which is NOT assignable to WebCrypto's
+ * `BufferSource`. `ArrayBuffer` has no type parameter and is a valid
+ * BufferSource in both, so it is the one spelling that satisfies each.
+ */
+function base64ToBuffer(b64: string): ArrayBuffer {
   // atob lives on the global in the Convex runtime; no node Buffer here.
   const bin = atob(b64);
-  // Build on a fresh ArrayBuffer so callers can hand the result to crypto
-  // WebCrypto (which rejects ArrayBufferLike inputs under strict typings).
-  const out = new Uint8Array(new ArrayBuffer(bin.length));
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  const buf = new ArrayBuffer(bin.length);
+  const view = new Uint8Array(buf);
+  for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
+  return buf;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -42,7 +47,7 @@ export async function encryptJson(
   if (!subtle) throw new Error("credentials: Web Crypto (crypto.subtle) is unavailable");
   const keyBytes = await subtle.importKey(
     "raw",
-    base64ToBytes(key),
+    base64ToBuffer(key),
     "AES-GCM",
     false,
     ["encrypt", "decrypt"],
@@ -77,15 +82,15 @@ export async function decryptJson<T>(
   try {
     const keyBytes = await subtle.importKey(
       "raw",
-      base64ToBytes(key),
+      base64ToBuffer(key),
       "AES-GCM",
       false,
       ["encrypt", "decrypt"],
     );
     const decrypted = await subtle.decrypt(
-      { name: "AES-GCM", iv: base64ToBytes(iv) },
+      { name: "AES-GCM", iv: base64ToBuffer(iv) },
       keyBytes,
-      base64ToBytes(ciphertext),
+      base64ToBuffer(ciphertext),
     );
     return JSON.parse(new TextDecoder().decode(decrypted)) as T;
   } catch {

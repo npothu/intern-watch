@@ -113,6 +113,7 @@ async function llmCall(system: string, user: string, apiKey: string): Promise<st
 function selectForBuild(
   profile: ProfileV2,
   jdText: string,
+  forcedVariant?: string,
 ): {
   payload: ProjectPayload[];
   scores: Record<string, number>;
@@ -123,7 +124,11 @@ function selectForBuild(
   const variants: Record<string, string> = {};
   const payload = buildProjectPayload(
     selected.map(([name, e]) => {
-      const variant = pickVariant(e, jd);
+      // A forced variant (user picked it in the report dialog's Edit tab)
+      // replaces the per-project JD auto-pick everywhere. bulletsFor falls
+      // back to "base" when a project has no array for that variant, so a
+      // variant with sparse coverage still renders.
+      const variant = forcedVariant ?? pickVariant(e, jd);
       variants[name] = variant;
       return {
         name,
@@ -144,6 +149,9 @@ type BuildReport = {
   jdSource: "manual" | "fetched" | "stub";
   jdChars: number;
   instructions?: string;
+  // The user-forced bullet variant, when one was picked instead of the
+  // per-project JD auto-pick. Undefined = auto.
+  variant?: string;
   scores: Record<string, number>;
   notes: string[];
   projects: {
@@ -165,7 +173,12 @@ async function performBuild(
   ctx: ActionCtx,
   user: string,
   short: string,
-  opts: { jdText?: string; instructions?: string; overrides?: BuildOverride[] } = {},
+  opts: {
+    jdText?: string;
+    instructions?: string;
+    overrides?: BuildOverride[];
+    variant?: string;
+  } = {},
 ): Promise<void> {
   const match = await ctx.runQuery(internal.resume.getMatchInternal, { user, short });
   if (!match) throw new Error("match not found");
@@ -210,7 +223,11 @@ async function performBuild(
 
   // Tailor the selected project bullets with the LLM (all failures fall back
   // to the deterministic bank text, exactly like tailor.py never raising).
-  const { payload: selected, scores, variants } = selectForBuild(profile, jdText);
+  const { payload: selected, scores, variants } = selectForBuild(
+    profile,
+    jdText,
+    opts.variant,
+  );
   const projectDates = new Map(
     projectEntries(profile).map((e) => [e.heading, e.date]),
   );
@@ -296,6 +313,7 @@ async function performBuild(
     jdSource,
     jdChars: jdText.length,
     instructions: opts.instructions,
+    variant: opts.variant,
     scores,
     notes,
     projects: content.projects.map((p) => ({
@@ -334,10 +352,16 @@ export const runBuild = internalAction({
     overrides: v.optional(
       v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
     ),
+    variant: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, jdText, instructions, overrides }) => {
+  handler: async (ctx, { user, short, jdText, instructions, overrides, variant }) => {
     try {
-      await performBuild(ctx, user, short, { jdText, instructions, overrides });
+      await performBuild(ctx, user, short, {
+        jdText,
+        instructions,
+        overrides,
+        variant,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("resume build failed", err);

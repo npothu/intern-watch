@@ -73,6 +73,26 @@ function randomToken(): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * Shown instead of a URL when the Convex SITE origin is unknown. Guessing here
+ * would be worse than saying nothing: the whole point of these two fields is
+ * that Google and Pub/Sub match them character for character, so a plausible
+ * but wrong origin costs more debugging than an explicit gap.
+ */
+function SiteUrlMissing() {
+  return (
+    <div className="rounded-md border border-amber/45 bg-amber/10 px-3 py-2">
+      <p className="text-[11.5px] text-amber">
+        Set <code className="font-mono">CONVEX_SITE_URL</code> on the web app so this URL can be
+        built. It is the Convex HTTP-actions origin (the{" "}
+        <code className="font-mono">.convex.site</code> domain, or the sibling port of a local
+        deployment), which is not the same as{" "}
+        <code className="font-mono">CONVEX_URL</code>.
+      </p>
+    </div>
+  );
+}
+
 const INP =
   "w-full min-w-0 rounded-md border border-line-2 bg-bg px-2.5 py-1.5 text-[12.5px] text-ink outline-none transition-colors focus:border-accent placeholder:text-ink-2";
 const BTN_PRIMARY =
@@ -391,11 +411,17 @@ export function GoogleWizard({
                 </li>
               </ol>
               <div className="mt-2.5">
-                <CopyField value={`${convexSiteUrl}/gmail/callback`} label="Redirect URI" />
+                {convexSiteUrl ? (
+                  <CopyField value={`${convexSiteUrl}/gmail/callback`} label="Redirect URI" />
+                ) : (
+                  <SiteUrlMissing />
+                )}
               </div>
-              <p className="mt-2 text-[11px] text-ink-2">
-                Google matches this character for character. A trailing slash is a different URI.
-              </p>
+              {convexSiteUrl && (
+                <p className="mt-2 text-[11px] text-ink-2">
+                  Google matches this character for character. A trailing slash is a different URI.
+                </p>
+              )}
 
               <div className="mt-4 border-t border-line pt-3">
                 <p className="text-[11px] text-ink-2">
@@ -539,7 +565,12 @@ export function GoogleWizard({
                       </span>
                     </div>
 
-                    {pushToken ? (
+                    {pushToken && !convexSiteUrl ? (
+                      <div className="mt-3">
+                        <SiteUrlMissing />
+                      </div>
+                    ) : null}
+                    {pushToken && convexSiteUrl ? (
                       <div className="mt-3">
                         <CopyField
                           label="Push endpoint (paste into the Pub/Sub push subscription)"

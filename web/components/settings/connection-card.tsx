@@ -365,7 +365,11 @@ export function ConnectionCard({
         </p>
       )}
 
-      {row?.lastError && (
+      {/* The stored lastError is the result of the LAST test, so once a live
+          testResult is on screen the two say the same thing and the card shows
+          the identical red sentence twice. Only fall back to the stored one
+          when there is no fresher result to show. */}
+      {!testResult && row?.lastError && (
         <p className="mt-1.5 text-[11px] text-red">{row.lastError}</p>
       )}
     </form>

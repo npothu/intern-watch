@@ -121,6 +121,17 @@ export type ProfileV2 = {
     citizen_prefix?: string;
     links?: { text: string; url: string }[];
   };
+  /** Variants the user has created, in creation order. "base" is implicit and
+   *  is never stored here. Bullet keys can still introduce a variant (an older
+   *  profile predates this field), so variantsOf unions the two. */
+  variants?: string[];
+  /**
+   * The skills blob. It is NOT a Section's entries: the `skills` section kind
+   * carries no entries and renders this instead, which is what lets the user
+   * reorder where Skills appears without moving the data. Keep this field -
+   * deleting it silently drops the whole Skills section from every rendered
+   * resume and breaks migrateProfile.
+   */
   skills: {
     coursework?: SkillItem[];
     languages?: SkillItem[];
@@ -301,10 +312,12 @@ export function visibleEntries(section: Section, variant: Variant): Entry[] {
 }
 
 /** Every variant key that appears anywhere, "base" first. */
+/** Every variant key that appears anywhere, "base" first. */
 export function variantsOf(profile: ProfileV2): Variant[] {
-  const seen = new Set<Variant>(["base"]);
-  for (const s of profile.sections) {
-    for (const e of s.entries) for (const k of Object.keys(e.bullets)) seen.add(k);
-  }
-  return ["base", ...[...seen].filter((v) => v !== "base").sort()];
+  const out: Variant[] = ["base"];
+  for (const v of profile.variants ?? []) if (v !== "base" && !out.includes(v)) out.push(v);
+  for (const s of profile.sections)
+    for (const e of s.entries)
+      for (const k of Object.keys(e.bullets)) if (!out.includes(k)) out.push(k);
+  return out;
 }

@@ -28,7 +28,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { Eye, EyeOff, Plus } from "lucide-react";
+import { Eye, EyeOff, Plus, X } from "lucide-react";
 import type { Variant } from "@/lib/profile";
 import {
   blankEntry,
@@ -46,7 +46,8 @@ import {
   saveProfile,
   upgradeProfile,
 } from "@/app/(app)/profile/profile-actions";
-import { SectionRail } from "@/components/profile/section-rail";
+import { SectionRail, PERSONAL_INFO_ID } from "@/components/profile/section-rail";
+import { HeaderEditor } from "@/components/profile/header-editor";
 import { EntryCard } from "@/components/profile/entry-card";
 import { SkillsEditor } from "@/components/profile/skills-editor";
 import { ResumePreview } from "@/components/profile/resume-preview";
@@ -162,6 +163,8 @@ export function ProfileEditor(props: {
     );
   });
   const [openEntries, setOpenEntries] = useState<Record<string, boolean>>({});
+  const [addingVariant, setAddingVariant] = useState(false);
+  const [variantDraft, setVariantDraft] = useState("");
   const [variant, setVariant] = useState<Variant>("base");
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "retrying" | "not-saved"
@@ -469,13 +472,58 @@ export function ProfileEditor(props: {
     });
   };
 
-  const handleAddVariant = () => {
-    const name = window.prompt("Variant name");
-    if (!name || !name.trim()) return;
-    // A variant only "exists" once some entry's bullets has that key; switching
-    // to a fresh name with nothing in it yet is fine - the first bullet edit
-    // creates it for real (see the variant-write rule above).
-    setVariant(name.trim());
+  // Adding a variant PERSISTS it on profile.variants rather than only flipping
+  // local state. Before this, a variant existed solely as a bullets key, so a
+  // newly named one was invisible until some entry happened to get a bullet
+  // under it - it looked like "adding a variant does nothing", and then one
+  // would appear later out of nowhere.
+  const commitVariant = () => {
+    const name = variantDraft.trim();
+    setVariantDraft("");
+    setAddingVariant(false);
+    if (!name) return;
+    if (name.toLowerCase() === "base") {
+      toast.error("base always exists - pick another name.");
+      return;
+    }
+    if (variants.some((v) => v.toLowerCase() === name.toLowerCase())) {
+      toast.error(`"${name}" already exists.`);
+      return;
+    }
+    setProfile((p) =>
+      p ? { ...p, variants: [...(p.variants ?? []), name] } : p
+    );
+    setVariant(name);
+  };
+
+  // Removing a variant drops it from the stored list AND from every entry's
+  // bullets, so it stops being resurrected by variantsOf's derived half.
+  const handleDeleteVariant = (name: string) => {
+    if (name === "base") return;
+    const snapshot = profile;
+    setProfile((p) => {
+      if (!p) return p;
+      return {
+        ...p,
+        variants: (p.variants ?? []).filter((v) => v !== name),
+        sections: p.sections.map((s) => ({
+          ...s,
+          entries: s.entries.map((e) => {
+            if (!(name in e.bullets)) return e;
+            const bullets = { ...e.bullets };
+            delete bullets[name];
+            return { ...e, bullets };
+          }),
+        })),
+      };
+    });
+    if (variant === name) setVariant("base");
+    toast(`Variant "${name}" deleted`, {
+      action: {
+        label: "Undo",
+        onClick: () => setProfile(snapshot),
+      },
+    });
   };
 
   // ---- rendering ---------------------------------------------------------
@@ -527,26 +575,69 @@ export function ProfileEditor(props: {
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <h3 className="text-[15px] font-semibold text-ink">Resume</h3>
 
+        {/* Labelled so the pill row is self-describing - unlabelled pills gave
+            no clue what they switched. */}
+        <span className="text-[11px] font-medium uppercase tracking-wider text-ink-2">
+          Variant
+        </span>
+
         <div className="inline-flex overflow-hidden rounded-md border border-line bg-surface">
           {variants.map((v) => (
-            <button
-              key={v}
-              type="button"
-              aria-current={variant === v ? "page" : undefined}
-              onClick={() => setVariant(v)}
-              className={cn(VAR_PILL, variant === v && VAR_PILL_ACTIVE)}
-            >
-              {v}
-            </button>
+            <span key={v} className="group/var inline-flex items-center">
+              <button
+                type="button"
+                aria-current={variant === v ? "page" : undefined}
+                onClick={() => setVariant(v)}
+                className={cn(VAR_PILL, variant === v && VAR_PILL_ACTIVE)}
+              >
+                {v}
+              </button>
+              {v !== "base" && variant === v && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteVariant(v)}
+                  aria-label={`Delete variant ${v}`}
+                  title={`Delete variant ${v}`}
+                  className="border-r border-line bg-accent px-1.5 py-1 text-accent-ink/70 transition-colors last:border-r-0 hover:text-accent-ink"
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </span>
           ))}
-          <button
-            type="button"
-            onClick={handleAddVariant}
-            aria-label="Add variant"
-            className={cn(VAR_PILL, "font-semibold")}
-          >
-            +
-          </button>
+          {addingVariant ? (
+            <input
+              autoFocus
+              value={variantDraft}
+              placeholder="Name"
+              aria-label="New variant name"
+              className="w-24 min-w-0 bg-bg px-2 py-1 text-[11.5px] text-ink outline-none placeholder:text-ink-2"
+              onChange={(e) => setVariantDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitVariant();
+                }
+                if (e.key === "Escape") {
+                  setAddingVariant(false);
+                  setVariantDraft("");
+                }
+              }}
+              onBlur={commitVariant}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setVariantDraft("");
+                setAddingVariant(true);
+              }}
+              aria-label="Add variant"
+              className={cn(VAR_PILL, "font-semibold")}
+            >
+              +
+            </button>
+          )}
         </div>
 
         <span
@@ -596,25 +687,50 @@ export function ProfileEditor(props: {
             onRename={handleRenameSection}
             onDelete={handleDeleteSection}
             onAdd={handleAddSection}
+            headerIncomplete={
+              !profile.header.name.trim() || !profile.header.contact_line.trim()
+            }
           />
         </div>
 
         <div className="min-w-0">
-          <SectionBody
-            section={activeSection}
-            variant={variant}
-            skills={profile.skills}
-            openEntries={openEntries}
-            onToggleOpen={(id) =>
-              setOpenEntries((o) => ({ ...o, [id]: !o[id] }))
-            }
-            onAddEntry={handleAddEntry}
-            onDeleteEntry={handleDeleteEntry}
-            onToggleHidden={handleToggleHidden}
-            onChangeEntry={updateActiveEntry}
-            onMoveEntry={moveActiveEntry}
-            onSkillsChange={updateSkills}
-          />
+          {activeId === PERSONAL_INFO_ID ? (
+            <HeaderEditor
+              header={profile.header}
+              onChange={(header) => setProfile((p) => (p ? { ...p, header } : p))}
+            />
+          ) : (
+            <>
+              {/* Name the variant being edited in the canvas itself. The pill
+                  row alone was too easy to lose track of, and editing bullets
+                  under the wrong variant is silent and annoying to undo. */}
+              <p className="mb-2 text-[11.5px] text-ink-2">
+                Editing the{" "}
+                {variant === "base" ? (
+                  "base variant"
+                ) : (
+                  <>
+                    <span className="font-semibold text-accent">{variant}</span> variant
+                  </>
+                )}
+              </p>
+              <SectionBody
+                section={activeSection}
+                variant={variant}
+                skills={profile.skills}
+                openEntries={openEntries}
+                onToggleOpen={(id) =>
+                  setOpenEntries((o) => ({ ...o, [id]: !o[id] }))
+                }
+                onAddEntry={handleAddEntry}
+                onDeleteEntry={handleDeleteEntry}
+                onToggleHidden={handleToggleHidden}
+                onChangeEntry={updateActiveEntry}
+                onMoveEntry={moveActiveEntry}
+                onSkillsChange={updateSkills}
+              />
+            </>
+          )}
         </div>
 
         {previewOn && (

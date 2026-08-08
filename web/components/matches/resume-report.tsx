@@ -10,8 +10,9 @@
 // The dialog is read-only over a `ResumeReport`; rebuild/restore intents are
 // handed up to Triage, which owns the per-row build state machine.
 
-import { useMemo, useState } from "react";
-import { Download, RotateCcw, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Download, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Dialog,
@@ -20,12 +21,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { removeResume } from "@/app/(app)/matches-actions";
+import { fetchProfile } from "@/app/(app)/profile/profile-actions";
+import { variantsOf, type ProfileV2 } from "@/lib/profile";
 import type { ResumeMeta, ResumeReport } from "@/lib/convex";
 
 export type RebuildOpts = {
   jdText?: string;
   instructions?: string;
   overrides?: { name: string; bullets: string[] }[];
+  /** The forced bullet variant, undefined = Auto (per-project JD pick). */
+  variant?: string;
 };
 
 const TABS = ["Preview", "Changes", "Selection", "Inputs", "Edit"] as const;
@@ -80,6 +86,24 @@ function PreviewTab({ report }: { report: ResumeReport }) {
     }
     return set;
   }, [report]);
+
+  // A build made before the resume header was filled in renders an outline of
+  // nothing but empty strings, which paints a blank white rectangle that looks
+  // like a broken component. Say what actually happened instead.
+  const hasText = report.outline.some((l) => l.trim().length > 0);
+  if (!hasText) {
+    return (
+      <div className="rounded-md border border-amber/45 bg-amber/10 px-3 py-2.5">
+        <p className="text-[12px] text-amber">
+          This build produced an empty document - it ran before your resume had a name and
+          contact line, so there was nothing to render.
+        </p>
+        <p className="mt-1 text-[11.5px] text-ink-2">
+          Fill in Personal info on the Resume page, then rebuild from the Edit tab.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -289,9 +313,12 @@ function InputsTab({
 function EditTab({
   report,
   onRebuild,
+  variants,
 }: {
   report: ResumeReport;
   onRebuild: (opts: RebuildOpts) => void;
+  /** Every variant the profile defines, "base" first. */
+  variants: string[];
 }) {
   // Working copy of every selected project's bullets; only projects whose
   // text actually differs from the report are sent as overrides.
@@ -299,6 +326,8 @@ function EditTab({
     Object.fromEntries(report.projects.map((p) => [p.name, [...p.after]]))
   );
   const [instructions, setInstructions] = useState("");
+  // "" means Auto (no override), matching RebuildOpts.variant === undefined.
+  const [forcedVariant, setForcedVariant] = useState("");
 
   const overrides = report.projects
     .filter((p) => {
@@ -309,7 +338,10 @@ function EditTab({
       name: p.name,
       bullets: (bullets[p.name] ?? []).map((b) => b.trim()).filter(Boolean),
     }));
-  const dirty = overrides.length > 0 || instructions.trim().length > 0;
+  // A variant override counts as a change on its own - otherwise picking one
+  // and pressing nothing else would leave Rebuild disabled with no explanation.
+  const dirty =
+    overrides.length > 0 || instructions.trim().length > 0 || forcedVariant !== "";
 
   return (
     <div className="text-[12.5px]">
@@ -317,6 +349,33 @@ function EditTab({
         Edit any bullet directly - your words win over the LLM&apos;s. Or describe
         the change below and let the model apply it across the resume.
       </p>
+
+      {/* Variant override. Only worth showing when the profile actually has a
+          second variant - a lone "base" makes the control a decoy. */}
+      {variants.length > 1 && (
+        <div className="mb-3 min-w-0 border-b border-line pb-3">
+          <label className="mb-1 block text-[11.5px] font-medium text-ink-2">
+            Variant
+          </label>
+          <select
+            value={forcedVariant}
+            aria-label="Bullet variant to build with"
+            onChange={(e) => setForcedVariant(e.target.value)}
+            className="w-full min-w-0 rounded-md border border-line-2 bg-bg px-2.5 py-1.5 text-[12.5px] text-ink outline-none transition-colors focus:border-accent"
+          >
+            <option value="">Auto (best match per project)</option>
+            {variants.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-ink-2">
+            Auto picks the best-scoring variant for each project. Choosing one forces it
+            everywhere, falling back to base where a project has no bullets for it.
+          </p>
+        </div>
+      )}
       {report.projects.map((p) => (
         <div key={p.name} className="mb-2.5">
           <div className="mb-1 text-[12px] font-semibold text-ink">{p.name}</div>
@@ -362,6 +421,7 @@ function EditTab({
             onRebuild({
               overrides: overrides.length ? overrides : undefined,
               instructions: instructions.trim() || undefined,
+              variant: forcedVariant || undefined,
             })
           }
         >
@@ -391,16 +451,59 @@ export function ResumeReportDialog({
   onRestore: (short: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("Preview");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // Reset to the first tab whenever a different row's report opens.
   const [lastShort, setLastShort] = useState<string | null>(null);
   if (short !== lastShort) {
     setLastShort(short);
     if (short) setTab("Preview");
+    // Never carry an armed delete across rows - the confirm belongs to the
+    // build that was on screen when it was armed.
+    setConfirmDelete(false);
   }
+
+  // The variant list comes from the saved profile, not from the report: the
+  // report only records the variants a past build happened to pick, so relying
+  // on it would hide the very variant the user wants to switch TO.
+  const [variants, setVariants] = useState<string[]>(["base"]);
+  useEffect(() => {
+    if (!short) return;
+    let cancelled = false;
+    void fetchProfile().then((res) => {
+      if (cancelled || !res.ok || !res.data) return;
+      try {
+        setVariants(variantsOf(JSON.parse(res.data) as ProfileV2));
+      } catch {
+        // A malformed profile just leaves the default ["base"]; the rebuild
+        // still works, it simply offers no override.
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [short]);
 
   const report = meta?.report ?? null;
   const rebuild = (opts: RebuildOpts) => {
     if (short) onRebuild(short, opts);
+  };
+
+  const onDelete = async () => {
+    if (!short) return;
+    setDeleting(true);
+    try {
+      const res = await removeResume(short);
+      if (res.ok) {
+        toast.success("Resume deleted");
+        onOpenChange(false);
+      } else {
+        toast.error(res.error);
+      }
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
   };
 
   return (
@@ -447,14 +550,14 @@ export function ResumeReportDialog({
               {tab === "Selection" && <SelectionTab report={report} />}
               {tab === "Inputs" && <InputsTab report={report} onRebuild={rebuild} />}
               {tab === "Edit" && (
-                <EditTab key={short} report={report} onRebuild={rebuild} />
+                <EditTab key={short} report={report} onRebuild={rebuild} variants={variants} />
               )}
             </div>
           </>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
-          <span>
+          <span className="flex flex-wrap items-center gap-1.5">
             {meta?.prevUrl && short && (
               <Button
                 variant="ghost"
@@ -465,6 +568,44 @@ export function ResumeReportDialog({
                 <RotateCcw className="size-3.5" />
                 restore previous version
               </Button>
+            )}
+            {/* Destructive action, kept on the far left away from Download and
+                Close. The confirm is inline rather than window.confirm, which
+                blocks the page and cannot be styled. */}
+            {short && meta?.url && (
+              confirmDelete ? (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11.5px] text-ink-2">Delete this build?</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red"
+                    disabled={deleting}
+                    onClick={onDelete}
+                  >
+                    {deleting ? "Deleting..." : "Delete"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-ink-2"
+                    disabled={deleting}
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-red"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2 className="size-3.5" />
+                  Delete
+                </Button>
+              )
             )}
           </span>
           <span className="flex gap-1.5">

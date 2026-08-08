@@ -63,16 +63,40 @@ export const PROVIDERS: ProviderDef[] = [
 export function ConnectionsList({ rows }: { rows: CredentialRow[] }) {
   const byProvider = new Map(rows.map((r) => [r.provider, r]));
 
-  const connected = rows.filter((r) => r.status === "ok").length;
-  const needsAttention = rows.filter((r) => r.status === "error").length;
-  const notSetUp = PROVIDERS.filter((p) => !byProvider.has(p.provider)).length;
+  // These four buckets are exhaustive on purpose: every provider lands in
+  // exactly one, so the counts always sum to PROVIDERS.length. An earlier
+  // version counted only ok / error / missing, which silently dropped a saved
+  // but never-tested row - the page then read "0 connected, 0 needs attention,
+  // 4 not set up" while showing five cards, one of them saved.
+  const known = PROVIDERS.filter((p) => byProvider.has(p.provider)).map(
+    (p) => byProvider.get(p.provider)!
+  );
+  const connected = known.filter((r) => r.status === "ok").length;
+  const needsAttention = known.filter((r) => r.status === "error").length;
+  const saved = known.filter((r) => r.status !== "ok" && r.status !== "error").length;
+  const notSetUp = PROVIDERS.length - known.length;
+
+  // Only non-empty buckets are shown, so the row stays short once things are
+  // configured, but what is shown always adds up to the number of cards below.
+  // Declared as its own const so the object literals get the contextual type;
+  // chaining .filter() directly onto an annotated literal widens `variant`
+  // back to plain string.
+  const allPills: { key: string; variant: "ok" | "err" | "warn" | "off"; label: string }[] = [
+    { key: "ok", variant: "ok", label: `${connected} connected` },
+    { key: "err", variant: "err", label: `${needsAttention} needs attention` },
+    { key: "saved", variant: "warn", label: `${saved} saved, not tested` },
+    { key: "off", variant: "off", label: `${notSetUp} not set up` },
+  ];
+  const summary = allPills.filter((s) => !s.label.startsWith("0 "));
 
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px]">
-        <Pill variant="ok">{connected} connected</Pill>
-        <Pill variant="err">{needsAttention} needs attention</Pill>
-        <Pill variant="off">{notSetUp} not set up</Pill>
+        {summary.map((s) => (
+          <Pill key={s.key} variant={s.variant}>
+            {s.label}
+          </Pill>
+        ))}
       </div>
 
       <div className="flex flex-col gap-2.5">
