@@ -3,6 +3,8 @@ import { getHealth } from "@/lib/convex";
 import { SiteHeader } from "@/components/site-header";
 import { NotProvisioned } from "@/components/not-provisioned";
 import { MotionPreviewInit } from "@/components/motion-preview";
+import { InboxPendingProvider } from "@/components/nav/view-counts";
+import { ViewCycle } from "@/components/nav/view-cycle";
 
 /**
  * Auth-gated app shell for the whole app (everything except the Clerk
@@ -26,16 +28,15 @@ export default async function AppLayout({
   }
   const health = await getHealth(trackerUser).catch(() => null);
   return (
-    <>
+    <InboxPendingProvider value={health?.pendingInbox ?? 0}>
       {/* Dev-only: carries the "force motion" preview override across pages so
           the motion can be reviewed on a reduced-motion machine. */}
       {process.env.NODE_ENV !== "production" && <MotionPreviewInit />}
-      <SiteHeader
-        trackerUser={trackerUser}
-        inboxCount={health?.pendingInbox ?? 0}
-        health={health}
-      />
+      {/* Global `t` view-cycle - see components/nav/view-cycle.tsx for why
+          this can't live inside any one surface. */}
+      <ViewCycle />
+      <SiteHeader trackerUser={trackerUser} health={health} />
       <main className="flex-1">{children}</main>
-    </>
+    </InboxPendingProvider>
   );
 }

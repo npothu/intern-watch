@@ -3,6 +3,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { MOTION_PREFERENCE_INIT_SCRIPT } from "@/lib/motion-preference";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
@@ -21,6 +22,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className="min-h-full flex flex-col bg-bg text-ink">
+        {/* Stamps the motion-preference attribute before first paint, same
+            technique next-themes uses below for `class` - runs first so
+            neither script races the other for a visible flash. */}
+        <script
+          dangerouslySetInnerHTML={{ __html: MOTION_PREFERENCE_INIT_SCRIPT }}
+        />
         <ThemeProvider>
           <ClerkProvider>{children}</ClerkProvider>
           <Toaster />

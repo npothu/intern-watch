@@ -15,14 +15,19 @@ import { useEffect, useRef } from "react";
  * animations, so every helper here checks the media query itself.
  */
 
-/** Attribute on <html> that overrides the OS reduced-motion preference. */
+/** Attribute on <html> that overrides the OS reduced-motion preference on. */
 export const FORCE_MOTION_ATTR = "data-force-motion";
+/** Attribute on <html> that forces reduced motion regardless of the OS query.
+ *  Set by the "Reduced" choice in Settings > Appearance (lib/motion-preference.ts). */
+export const REDUCE_MOTION_ATTR = "data-reduce-motion";
 
 export function prefersReducedMotion(): boolean {
   if (typeof window === "undefined") return false;
-  // The preview override wins, so motion can be reviewed on a machine whose OS
-  // has animations switched off. Mirrors the guard in globals.css.
-  if (document.documentElement.hasAttribute(FORCE_MOTION_ATTR)) return false;
+  const html = document.documentElement;
+  // Force wins over reduce, and both win over the OS query - mirrors the
+  // precedence in the two CSS rules in globals.css.
+  if (html.hasAttribute(FORCE_MOTION_ATTR)) return false;
+  if (html.hasAttribute(REDUCE_MOTION_ATTR)) return true;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 

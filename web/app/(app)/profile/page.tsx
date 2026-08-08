@@ -1,6 +1,7 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { fetchProfile } from "./profile-actions";
 import { ProfileEditor } from "@/components/profile/profile-editor";
+import { ViewSwitch } from "@/components/nav/view-switch";
 
 export const dynamic = "force-dynamic";
 
@@ -20,8 +21,14 @@ export default async function ProfilePage() {
   // down - the editor's empty state invites re-seeding from scratch.
   const data = res.ok ? res.data ?? null : null;
   return (
-    <div className="mx-auto w-full max-w-[1060px] px-5 pb-24 pt-4">
-      <h1 className="mb-4 text-[15px] font-semibold text-ink">Resume profile</h1>
+    <div className="mx-auto w-full max-w-[1060px] px-5 pt-5 pb-24">
+      {/* Resume has no cell of its own - the switch lands here with all
+          three cells inactive, so it still gets the user back to Matches,
+          Tracker or Inbox without reaching for the browser's back button. */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <h1 className="text-[15px] font-semibold text-ink">Resume profile</h1>
+        <ViewSwitch active={null} />
+      </div>
       <ProfileEditor initialData={data} user={user} />
     </div>
   );
