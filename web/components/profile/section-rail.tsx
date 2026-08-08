@@ -4,6 +4,12 @@
 // per section. Order is data (an array), so it is user-reorderable by dragging
 // or by the move-up/move-down buttons. This is deliberately independent - it
 // only knows about Section/SectionKind via the props, never about the editor.
+//
+// A fixed "Personal info" pseudo-row sits ABOVE the real sections. It is not a
+// Section (PERSONAL_INFO_ID is never pushed into profile.sections), so it is
+// NOT draggable and has no move/delete controls - it is just a selectable row
+// that routes the editor to the header editor, and it shows a red dot when the
+// header is incomplete.
 
 import { useRef, useState } from "react";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
@@ -11,6 +17,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { Section, SectionKind } from "@/lib/profile";
 import { SECTION_KINDS } from "@/lib/profile";
+
+/** Stable id for the header/personal-info pseudo-row. Never a real Section. */
+export const PERSONAL_INFO_ID = "__personal_info__";
 
 const RAIL_ITEM =
   "flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] text-ink-2 min-w-0";
@@ -130,12 +139,13 @@ function RailRow({
                 e.preventDefault();
                 commit();
               } else if (e.key === "Escape") {
+                e.stopPropagation();
                 setDraft(section.title);
                 setEditing(false);
               }
             }}
             onBlur={commit}
-            className="w-full min-w-0 rounded border border-line-2 bg-bg px-1 py-0.5 text-[12.5px] text-ink outline-none focus:border-accent"
+            className="w-full min-w-0 rounded border border-line-2 bg-bg px-1.5 py-0.5 text-[12.5px] text-ink outline-none"
           />
         ) : (
           <span
@@ -157,14 +167,11 @@ function RailRow({
         </span>
       )}
 
-      {/* Delete is only safe when more than one section exists; disabling it
-          here too (the caller also enforces) keeps the UI honest. */}
+      {/* Delete immediately - no confirm here. The editor's handleDeleteSection
+          already shows an Undo toast, so a blocking confirm would be doubled
+          and the undo path makes it safe. */}
       <button
         type="button"
-        // No window.confirm: it blocks the page, cannot be styled, and is
-        // inconsistent with the rest of the editor. Deleting is immediately
-        // undoable through the caller's toast, which is a better guard than a
-        // modal nobody reads.
         onClick={(e) => {
           e.stopPropagation();
           onDelete();
@@ -184,65 +191,85 @@ function RailRow({
   );
 }
 
-/**
- * The id of the pinned "Personal info" row. It is NOT a real section - the
- * resume header is a fixed part of every resume, so it has no position to
- * drag and nothing to delete. Selecting it swaps the canvas to HeaderEditor.
- * Kept as a sentinel string so `activeId` stays a single piece of state.
- */
-export const PERSONAL_INFO_ID = "__personal_info__";
+/** The fixed "Personal info" rail row. Selectable like a section row but with
+ *  no drag/move/delete (it is not a real Section). A red dot marks the header
+ *  as incomplete (missing name or contact line). */
+function PersonalInfoRow({
+  active,
+  incomplete,
+  onSelect,
+}: {
+  active: boolean;
+  incomplete: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        "group cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-md",
+        RAIL_ITEM,
+        active && RAIL_ITEM_ACTIVE
+      )}
+    >
+      <span className="min-w-0 truncate">Personal info</span>
+      <div className="min-w-2 flex-1" />
+      {incomplete && (
+        <span
+          className="size-1.5 shrink-0 rounded-full bg-red"
+          aria-label="Personal info incomplete"
+          title="Add your name and contact line"
+        />
+      )}
+    </div>
+  );
+}
 
 export function SectionRail(props: {
   sections: Section[];
   activeId: string;
+  headerIncomplete: boolean;
   onSelect: (id: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
   onAdd: (kind: SectionKind, title?: string) => void;
-  /** Flags the header as incomplete so an unnamed resume is visible here. */
-  headerIncomplete?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [customOpen, setCustomOpen] = useState(false);
-  const [customDraft, setCustomDraft] = useState("");
+  const [customAdding, setCustomAdding] = useState(false);
+  const [customTitle, setCustomTitle] = useState("");
+  const customInputRef = useRef<HTMLInputElement>(null);
   const isOnly = props.sections.length === 1;
 
-  // Blur and Enter both commit, so the field behaves like the rest of the
-  // editor's inline inputs; an empty value just closes without adding.
   const commitCustom = () => {
-    const title = customDraft.trim();
-    setCustomOpen(false);
-    setCustomDraft("");
-    if (title) props.onAdd("custom", title);
+    const t = customTitle.trim();
+    // Commit only a non-empty title; a blank one cancels (computes to "no
+    // change" rather than creating an untitled custom section).
+    if (t) props.onAdd("custom", t);
+    setCustomAdding(false);
+    setCustomTitle("");
+    setMenuOpen(false);
   };
 
   return (
     <div className="flex flex-col gap-0.5">
-      <h5 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-2">
-        Resume
-      </h5>
-
-      <button
-        type="button"
-        onClick={() => props.onSelect(PERSONAL_INFO_ID)}
-        aria-current={props.activeId === PERSONAL_INFO_ID ? "true" : undefined}
-        className={cn(
-          "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors",
-          props.activeId === PERSONAL_INFO_ID
-            ? "bg-chip font-semibold text-ink"
-            : "text-ink-2 hover:text-ink"
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate">Personal info</span>
-        {props.headerIncomplete && (
-          <span
-            aria-label="Incomplete"
-            title="Add your name and contact line"
-            className="size-1.5 shrink-0 rounded-full bg-red"
-          />
-        )}
-      </button>
+      {/* Personal info sits ABOVE the Sections heading, not under it: it is not
+          a section, and grouping it with the reorderable ones implied it could
+          be dragged or deleted. */}
+      <PersonalInfoRow
+        active={props.activeId === PERSONAL_INFO_ID}
+        incomplete={props.headerIncomplete}
+        onSelect={() => props.onSelect(PERSONAL_INFO_ID)}
+      />
 
       <h5 className="mt-2 px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-2">
         Sections
@@ -270,7 +297,12 @@ export function SectionRail(props: {
           variant="ghost"
           size="sm"
           className="w-full justify-start px-2 text-[12.5px] text-ink-2"
-          onClick={() => setMenuOpen((o) => !o)}
+          onClick={() => {
+            // Opening the menu also resets any half-typed custom title.
+            setCustomAdding(false);
+            setCustomTitle("");
+            setMenuOpen((o) => !o);
+          }}
         >
           <Plus className="size-3.5" />
           Add section
@@ -296,47 +328,43 @@ export function SectionRail(props: {
                 </button>
               ))}
               <div className="my-1 h-px bg-line" />
-              <button
-                type="button"
-                // Opens an inline field rather than window.prompt, which blocks
-                // the page and cannot be styled or cancelled with Escape.
-                onClick={() => {
-                  setMenuOpen(false);
-                  setCustomDraft("");
-                  setCustomOpen(true);
-                }}
-                className="flex w-full items-center rounded px-2 py-1.5 text-left text-[12.5px] text-ink hover:bg-chip"
-              >
-                Custom...
-              </button>
+              {customAdding ? (
+                <input
+                  ref={customInputRef}
+                  autoFocus
+                  value={customTitle}
+                  onChange={(e) => setCustomTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitCustom();
+                    } else if (e.key === "Escape") {
+                      // Cancel back to the closed menu without creating.
+                      setCustomAdding(false);
+                      setCustomTitle("");
+                      setMenuOpen(false);
+                    }
+                  }}
+                  onBlur={commitCustom}
+                  placeholder="Section title"
+                  className="w-full min-w-0 rounded border border-line-2 bg-bg px-2 py-1.5 text-[12.5px] text-ink outline-none focus:border-accent"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomTitle("");
+                    setCustomAdding(true);
+                  }}
+                  className="flex w-full items-center rounded px-2 py-1.5 text-left text-[12.5px] text-ink hover:bg-chip"
+                >
+                  Custom...
+                </button>
+              )}
             </div>
           </>
         )}
       </div>
-
-      {customOpen && (
-        <div className="mt-1 px-1">
-          <input
-            autoFocus
-            value={customDraft}
-            placeholder="Section title"
-            aria-label="New section title"
-            className="w-full min-w-0 rounded-md border border-line-2 bg-bg px-2 py-1 text-[12.5px] text-ink outline-none transition-colors focus:border-accent placeholder:text-ink-2"
-            onChange={(e) => setCustomDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitCustom();
-              }
-              if (e.key === "Escape") {
-                setCustomOpen(false);
-                setCustomDraft("");
-              }
-            }}
-            onBlur={commitCustom}
-          />
-        </div>
-      )}
     </div>
   );
 }
