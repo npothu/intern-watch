@@ -207,11 +207,17 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* Dock entrance. The keyframes must carry the dock's own translateX(-50%)
-   centring, or it lands half a dock-width off. */
+/* Dock entrance. Under Tailwind v3 the dock's translate-x-[-50%] compiled
+   into `transform`, so these keyframes used to have to carry that -50%
+   themselves or the entrance would land half a dock-width off. Tailwind v4
+   compiles that utility to the standalone `translate` property instead, which
+   composes WITH `transform` rather than replacing it - so the old from/to
+   here doubled the -50% on top of the element's own, landing the dock a full
+   dock-width left of centre for the animation's duration. `transform: none`
+   on `to` leaves `translate` as the sole source of the centring. */
 @keyframes dockup {
-  from { opacity: 0; transform: translate(-50%, 16px) scale(0.97); }
-  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
 }
 
 /* Undo slab entrance. */
@@ -247,7 +253,14 @@
    `data-force-motion` on <html> opts out, so the motion can be reviewed on a
    machine whose OS has animations switched off (see components/motion-preview).
    lib/motion.ts honours the same pair of signals, since neither this override
-   nor the media query reaches Web Animations. */
+   nor the media query reaches Web Animations.
+   KEEP IN SYNC with the `data-reduce-motion` rule directly below - same six
+   declarations, so an explicit "reduced" choice (Settings > Appearance, see
+   lib/motion-preference.ts) suppresses motion the same way even when the OS
+   query itself doesn't ask for it. If you change one, change both - this is
+   the exact bug that shipped once before (duration was clamped, delay
+   wasn't, so delayed `fill: both` animations sat frozen in their `from`
+   frame instead of being suppressed). */
 @media (prefers-reduced-motion: reduce) {
   html:not([data-force-motion]) *,
   html:not([data-force-motion]) *::before,
@@ -259,4 +272,18 @@
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Same suppression as above, unconditional rather than OS-driven - fires for
+   the explicit "Reduced" choice even on a system that isn't asking for
+   reduced motion, which the @media query above structurally cannot do. */
+html[data-reduce-motion] *,
+html[data-reduce-motion] *::before,
+html[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+  scroll-behavior: auto !important;
 }

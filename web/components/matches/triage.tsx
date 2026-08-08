@@ -37,6 +37,7 @@ import {
   ListChecks,
   Eraser,
   Search,
+  Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -72,7 +73,9 @@ import {
   type RebuildOpts,
 } from "@/components/matches/resume-report";
 import { AddUrlDialog } from "./add-url-dialog";
+import { useRouter } from "next/navigation";
 import { useAppView } from "@/lib/view";
+import { ViewSwitch } from "@/components/nav/view-switch";
 import type { TriageRow } from "@/app/(app)/page";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
 
@@ -347,6 +350,7 @@ export function Triage({
   initialFilter?: string;
 }) {
   const { show } = useAppView();
+  const router = useRouter();
   const [rows, setRows] = useState<TriageRow[]>(initialRows);
 
   /* Re-seed from the server whenever it hands over a new array - a refresh, or
@@ -912,6 +916,12 @@ export function Triage({
         e.preventDefault();
         flashDock("build");
         dockBuild();
+      } else if (kl === "t") {
+        // The actual view cycle is wired globally (components/nav/view-cycle.tsx)
+        // so it keeps working after the user leaves this surface - this just
+        // flashes the dock's own keycap in step with it.
+        e.preventDefault();
+        flashDock("cycle");
       } else if (k === "Enter") {
         e.preventDefault();
         flashDock("open");
@@ -957,6 +967,18 @@ export function Triage({
       run: () => show("tracker"),
     },
     {
+      id: "inbox",
+      label: "Go to Inbox",
+      icon: <Mail className="size-4" />,
+      run: () => router.push("/inbox"),
+    },
+    {
+      id: "resume",
+      label: "Open Resume",
+      icon: <FileText className="size-4" />,
+      run: () => router.push("/profile"),
+    },
+    {
       id: "hidden",
       label: "Show hidden",
       icon: <Ghost className="size-4" />,
@@ -992,8 +1014,12 @@ export function Triage({
       ref={rootRef}
       className="mx-auto w-full max-w-[1060px] px-5 py-5 pb-32"
     >
-      {/* statline, with the freshness readout riding its right edge */}
+      {/* statline, with the freshness readout riding its right edge. The view
+          switch leads the row - same slot on every surface (see Tracker's
+          own first row, and the /inbox and /profile pages), so it costs no
+          extra vertical space of its own. */}
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-ink-2 tabular-nums">
+        <ViewSwitch active="matches" count={stats.matches} />
         <div>
         {FILTERS.map((s, i) => {
           const n =
@@ -1195,6 +1221,10 @@ export function Triage({
 
       <Dock
         pressed={pressed}
+        onCycle={() => {
+          flashDock("cycle");
+          show("tracker");
+        }}
         onNav={(d) => {
           flashDock(d > 0 ? "down" : "up");
           navigate(d);
@@ -1948,6 +1978,7 @@ function Dock({
   onAct,
   onOpen,
   onBuild,
+  onCycle,
   buildState,
 }: {
   pressed: FlashState;
@@ -1955,6 +1986,7 @@ function Dock({
   onAct: (kind: "applied" | "saved" | "hide") => void;
   onOpen: () => void;
   onBuild: () => void;
+  onCycle: () => void;
   buildState: BuildState;
 }) {
   const kbd =
@@ -1974,6 +2006,7 @@ function Dock({
         const t = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
         if (!t) return;
         const act = t.dataset.act as
+          | "cycle"
           | "up"
           | "down"
           | "applied"
@@ -1982,12 +2015,23 @@ function Dock({
           | "build"
           | "open"
           | undefined;
-        if (act === "up" || act === "down") onNav(act === "up" ? -1 : 1);
+        if (act === "cycle") onCycle();
+        else if (act === "up" || act === "down") onNav(act === "up" ? -1 : 1);
         else if (act === "build") onBuild();
         else if (act === "open") onOpen();
         else if (act) onAct(act as "applied" | "saved" | "hide");
       }}
     >
+      <DockButton
+        act="cycle"
+        ring="var(--color-ink-2)"
+        pressed={pressed}
+        title="Switch view"
+        className={cn(db, "text-ink-2")}
+      >
+        <span className={kbd}>t</span>
+      </DockButton>
+      <Divider />
       <DockButton
         act="up"
         ring="var(--color-amber)"

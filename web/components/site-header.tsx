@@ -1,36 +1,19 @@
 "use client";
 
-// Sliding chip indicator behind the nav tabs, plus a one-pass sync sweep along
-// the header's bottom edge each time the server hands over fresh data. Also
-// carries the two smallest pieces of app chrome: the inbox pending badge and
-// the pipeline-health dot (one dot + two words; everything else lives in a
-// click popover so a degraded pipeline never costs more header space than a
-// healthy one).
-//
-// Matches and Tracker are two views of the app route (lib/view.ts) - their
-// tabs switch in place. Inbox and Resume are real routes and navigate.
+// Identity-only header: brand, pipeline-health dot, theme toggle, user chip -
+// plus a one-pass sync sweep along the bottom edge each time the server hands
+// over fresh data. The four view tabs that used to live here moved out to
+// components/nav/view-switch.tsx, which travels with each surface instead of
+// sitting in a fixed shell row; see that file for why.
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UserChip } from "@/components/user-chip";
-import { useAppView, viewHref, type AppView } from "@/lib/view";
 import { useSyncPulse } from "@/lib/sync-pulse";
 import type { TrackerHealth } from "@/lib/convex";
-
-type NavEntry =
-  | { view: AppView; label: string }
-  | { href: string; label: string };
-
-const NAV: NavEntry[] = [
-  { view: "matches", label: "Matches" },
-  { view: "tracker", label: "Tracker" },
-  { href: "/inbox", label: "Inbox" },
-  { href: "/profile", label: "Resume" },
-];
 
 /** "47m" / "3h" / "2d" - compact age for the health line. */
 function fmtAgo(ts: number | null | undefined): string {
@@ -190,30 +173,12 @@ function ThemeToggle() {
 
 export function SiteHeader({
   trackerUser,
-  inboxCount = 0,
   health = null,
 }: {
   trackerUser: string;
-  inboxCount?: number;
   health?: TrackerHealth | null;
 }) {
-  const pathname = usePathname();
-  const { view, show } = useAppView();
   const syncPulse = useSyncPulse();
-  const navRef = useRef<HTMLElement>(null);
-  const [ind, setInd] = useState<{ x: number; w: number } | null>(null);
-  // No slide on first paint: transitions enable only after the first measure.
-  const [animate, setAnimate] = useState(false);
-
-  useLayoutEffect(() => {
-    const nav = navRef.current;
-    if (!nav) return;
-    const el = nav.querySelector<HTMLElement>('[data-active="1"]');
-    if (el) setInd({ x: el.offsetLeft, w: el.offsetWidth });
-    else setInd(null);
-    const id = requestAnimationFrame(() => setAnimate(true));
-    return () => cancelAnimationFrame(id);
-  }, [pathname, view]);
 
   return (
     <header className="bg-surface">
@@ -225,60 +190,6 @@ export function SiteHeader({
           intern-watch{" "}
           <span className="font-normal text-ink-2">/ {trackerUser}</span>
         </Link>
-        <nav ref={navRef} className="relative flex items-center gap-1">
-          {/* sliding indicator (replaces the per-link bg-chip active fill) */}
-          <span
-            aria-hidden
-            className="absolute top-0 left-0 h-full rounded-md bg-chip"
-            style={{
-              width: ind ? `${ind.w}px` : 0,
-              transform: `translateX(${ind ? ind.x : 0}px)`,
-              opacity: ind ? 1 : 0,
-              transition: animate
-                ? "transform .24s var(--ease-spring), width .24s var(--ease-spring), opacity .15s"
-                : "none",
-            }}
-          />
-          {NAV.map((n) => {
-            const isView = "view" in n;
-            // Both views live on "/", so neither view tab is active anywhere
-            // else; route tabs match on their own path prefix.
-            const active = isView
-              ? pathname === "/" && view === n.view
-              : pathname.startsWith(n.href);
-            return (
-              <Link
-                key={n.label}
-                href={isView ? viewHref(n.view) : n.href}
-                data-active={active ? "1" : undefined}
-                onClick={(e) => {
-                  // View tabs switch in place; let the browser have modified
-                  // clicks (new tab, new window), and let Link do a real
-                  // navigation from anywhere that isn't the app route.
-                  if (!isView) return;
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                  if (pathname !== "/") return;
-                  e.preventDefault();
-                  show(n.view);
-                }}
-                className={cn(
-                  "relative rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors",
-                  active ? "text-ink" : "text-ink-2 hover:text-ink"
-                )}
-              >
-                {n.label}
-                {!isView && n.href === "/inbox" && inboxCount > 0 && (
-                  <span
-                    className="ml-1.5 inline-block min-w-[16px] rounded-full bg-accent px-1 text-center align-[1px] text-[10px] font-bold leading-[15px] text-accent-ink tabular-nums"
-                    aria-label={`${inboxCount} pending inbox actions`}
-                  >
-                    {inboxCount > 9 ? "9+" : inboxCount}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </nav>
         <div className="ml-auto flex items-center gap-2">
           <HealthDot health={health} />
           <ThemeToggle />

@@ -29,11 +29,11 @@ export function AppViews({
   const { view, filter } = useAppView();
 
   if (view === "tracker") {
+    // No heading here - Tracker's own first row now opens with the view
+    // switch, which makes a standalone "Tracker" label redundant with the
+    // active cell it sits beside.
     return (
-      <div className="mx-auto w-full max-w-[1060px] px-5 py-6">
-        <h1 className="text-xs font-semibold uppercase tracking-[0.09em] text-ink-2">
-          Tracker
-        </h1>
+      <div className="mx-auto w-full max-w-[1060px] px-5 py-5">
         <Tracker rows={applications} />
       </div>
     );

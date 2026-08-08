@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ChevronRight as ChevronRightIcon,
@@ -10,6 +11,7 @@ import {
   Ghost as GhostIcon,
   LayoutList as LayoutListIcon,
   ListChecks as ListChecksIcon,
+  Mail as MailIcon,
   PanelRight as PanelRightIcon,
   Plus as PlusIcon,
 } from "lucide-react";
@@ -43,6 +45,7 @@ import {
 } from "@/app/(app)/tracker-actions";
 import { ApplicationDrawer } from "@/components/tracker/drawer";
 import { useAppView } from "@/lib/view";
+import { ViewSwitch } from "@/components/nav/view-switch";
 import {
   GHOST_DAYS,
   LIVE_STATUSES,
@@ -686,6 +689,7 @@ function EmptyState() {
 
 export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
   const { show } = useAppView();
+  const router = useRouter();
   const [rows, setRows] = useState(initialRows);
   const [historyRow, setHistoryRow] = useState<TrackerRow | null>(null);
 
@@ -761,6 +765,18 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
       // The hidden list lives on the matches surface, which opens on whatever
       // `?filter=` says - so from here it is a view switch, not a local toggle.
       run: () => show("matches", "hidden"),
+    },
+    {
+      id: "inbox",
+      label: "Go to Inbox",
+      icon: <MailIcon className="size-4" />,
+      run: () => router.push("/inbox"),
+    },
+    {
+      id: "resume",
+      label: "Open Resume",
+      icon: <FileTextIcon className="size-4" />,
+      run: () => router.push("/profile"),
     },
     {
       id: "clear",
@@ -860,6 +876,16 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
 
   return (
     <div>
+      {/* The switch has to lead the first row on every surface or it moves
+          vertically as you switch views. NeedsAttention and Funnel are both
+          data-driven and can be absent, so neither can host it - it gets its
+          own always-present row, pairing with RefreshControl the same way the
+          matches statline does. */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <ViewSwitch active="tracker" count={rows.length} />
+        <RefreshControl className="ml-auto" />
+      </div>
+
       <NeedsAttention
         rows={rows}
         onOpenRow={(r) => setDrawerShort(r.short)}
@@ -886,7 +912,6 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
             aria-label="Search applications"
             className="w-full min-w-[180px] rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none sm:w-[280px]"
           />
-          <RefreshControl className="ml-auto" />
         </div>
         <FilterPills
           label="Filter by status"
