@@ -483,7 +483,7 @@ export function GoogleWizard({
                 loopback redirect to, so it goes through the CLI rather than this page.
               </p>
               {routeWired ? (
-                <div className="mt-3">
+                <div className="mt-3 min-w-0">
                   <button
                     type="button"
                     className={cn(BTN_PRIMARY, "w-full sm:w-auto")}
@@ -503,17 +503,16 @@ export function GoogleWizard({
                     Add <code className="font-mono">GMAIL_CLIENT_ID</code> and{" "}
                     <code className="font-mono">GMAIL_CLIENT_SECRET</code> to your local{" "}
                     <code className="font-mono">.env</code> first. Step 4 saved them to the
-                    Convex deployment, which the CLI does not read - it needs its own copy.
+                    Convex deployment, which this CLI does not read - it needs its own copy.
                   </p>
                   <p className="mt-1 text-[11px] text-ink-2">
-                    The CLI stores the refresh token in Convex and arms the Gmail watch, so this
-                    step goes green on its own once it finishes.
+                    It stores the refresh token in Convex and arms the Gmail watch, so this step
+                    goes green on its own once it finishes.
                   </p>
                 </div>
               )}
             </div>
           )}
-
           {pane === 6 && (
             <div className="min-w-0">
               <h2 className="text-[13.5px] font-semibold text-ink">Turn on push</h2>

@@ -12,7 +12,11 @@
  * the raw subtle.encrypt/decrypt failure.
  */
 
-function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+// Plain `Uint8Array`, not the TS 5.7+ `Uint8Array<ArrayBuffer>` generic form:
+// Convex typechecks this directory with its own bundled TypeScript, which is
+// older and rejects the generic as "Type 'Uint8Array' is not generic" even
+// though the web workspace's newer compiler accepts it.
+function base64ToBytes(b64: string): Uint8Array {
   // atob lives on the global in the Convex runtime; no node Buffer here.
   const bin = atob(b64);
   // Build on a fresh ArrayBuffer so callers can hand the result to crypto

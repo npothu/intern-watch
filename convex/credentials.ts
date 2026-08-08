@@ -312,9 +312,13 @@ export const getCredentialRow = internalQuery({
 // This is the "internal query + action pair": getCredentialRow reaches the DB,
 // this action decrypts and hands the plaintext back. Internal only, so the
 // plaintext secret has no client-facing route.
+// The explicit Promise return annotation is load-bearing: this handler calls
+// back into `internal.credentials.*`, so its inferred type would route through
+// the generated api.d.ts and reference itself, which TypeScript reports as a
+// circular initializer (TS7022/TS7023). Annotating breaks the cycle.
 export const getCredentialFields = internalAction({
   args: { user: v.string(), provider: v.string() },
-  handler: async (ctx, { user, provider }) => {
+  handler: async (ctx, { user, provider }): Promise<Record<string, string> | null> => {
     const row = await ctx.runQuery(internal.credentials.getCredentialRow, {
       user,
       provider,
@@ -333,7 +337,8 @@ export const getCredentialFields = internalAction({
 // design, not by omission.
 export const resolveGeminiKey = internalAction({
   args: { user: v.string() },
-  handler: async (ctx, { user }) => {
+  // Annotated for the same circular-initializer reason as getCredentialFields.
+  handler: async (ctx, { user }): Promise<string | null> => {
     const fields = await ctx.runAction(internal.credentials.getCredentialFields, {
       user,
       provider: "gemini",
