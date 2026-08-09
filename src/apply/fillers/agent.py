@@ -197,12 +197,17 @@ def map_fields(form_fields: list[dict], profile: ApplyProfile,
         call = llm_mod._PROVIDERS.get(provider) if llm_cfg else None
 
     if not llm_cfg or call is None:
+        log.info("auto-apply agent: LLM fill OFF - no llm/resume_llm block in "
+                 "the user yaml; answer-book mapping only")
         notes.append("no LLM configured; answer-book mapping only")
         return base, notes
 
+    key_env = llm_mod.api_key_env_for(llm_cfg)
     try:
-        api_key = os.environ[llm_mod.api_key_env_for(llm_cfg)]
+        api_key = os.environ[key_env]
     except KeyError:
+        log.info("auto-apply agent: LLM fill OFF - set %s to enable the agent "
+                 "fallback; answer-book mapping only", key_env)
         notes.append("LLM API key env not set; answer-book mapping only")
         return base, notes
 
@@ -1097,10 +1102,15 @@ def _pick_combobox_options_llm(pending: list[dict], llm_cfg: dict | None,
         provider = llm_mod.provider_of(llm_cfg) if llm_cfg else ""
         call = llm_mod._PROVIDERS.get(provider) if llm_cfg else None
     if not llm_cfg or call is None:
+        log.info("auto-apply agent: LLM option pick OFF - no llm/resume_llm "
+                 "block in the user yaml; matching stays lexical")
         return {}
+    key_env = llm_mod.api_key_env_for(llm_cfg)
     try:
-        api_key = os.environ[llm_mod.api_key_env_for(llm_cfg)]
+        api_key = os.environ[key_env]
     except KeyError:
+        log.info("auto-apply agent: LLM option pick OFF - set %s to enable "
+                 "it; matching stays lexical", key_env)
         return {}
     provider = llm_mod.provider_of(llm_cfg)
     model = llm_cfg.get("model") or llm_mod.DEFAULT_MODEL.get(provider, "")

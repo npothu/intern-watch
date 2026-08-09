@@ -93,6 +93,25 @@ function SiteUrlMissing() {
   );
 }
 
+/**
+ * The calm substitute for the wizard's write controls when the signed-in user
+ * is not on ADMIN_TRACKER_USERS. The instructions above stay visible - only the
+ * deployment-wide write UI is gated, and the server actions re-check anyway.
+ */
+function AdminOnlyNote() {
+  return (
+    <div className="mt-3 rounded-md border border-line bg-surface px-3 py-2.5">
+      <p className="text-[12.5px] text-ink">
+        Only an administrator can change the deployment&apos;s Google configuration.
+      </p>
+      <p className="mt-1 text-[11.5px] text-ink-2">
+        These settings are shared by every user of this deployment. Ask an
+        admin to run this step from their own account.
+      </p>
+    </div>
+  );
+}
+
 const INP =
   "w-full min-w-0 rounded-md border border-line-2 bg-bg px-2.5 py-1.5 text-[12.5px] text-ink outline-none transition-colors focus:border-accent placeholder:text-ink-2";
 const BTN_PRIMARY =
@@ -108,6 +127,7 @@ export function GoogleWizard({
   googleConnected,
   adminAvailable,
   routeWired,
+  admin,
 }: {
   convexSiteUrl: string;
   presence: EnvPresence;
@@ -117,6 +137,8 @@ export function GoogleWizard({
   adminAvailable: boolean;
   /** Whether the /api/google/start OAuth route exists (false in this build). */
   routeWired: boolean;
+  /** Whether the signed-in user may write deployment-wide env vars. */
+  admin: boolean;
 }) {
   const [manual, setManual] = useState<Record<string, boolean>>(readManual);
   const [pane, setPane] = useState<StepIndex>(1);
@@ -450,7 +472,9 @@ export function GoogleWizard({
           {pane === 4 && (
             <div className="min-w-0">
               <h2 className="text-[13.5px] font-semibold text-ink">Paste client ID and secret</h2>
-              {adminUnavailable ? (
+              {!admin ? (
+                <AdminOnlyNote />
+              ) : adminUnavailable ? (
                 <p className="mt-3 text-[12px] text-red">
                   CONVEX_ADMIN_KEY is not set - the Google wizard cannot write deployment settings.
                   Set it on the server to use this step.
@@ -543,7 +567,9 @@ export function GoogleWizard({
             <div className="min-w-0">
               <h2 className="text-[13.5px] font-semibold text-ink">Turn on push</h2>
 
-              {adminUnavailable ? (
+              {!admin ? (
+                <AdminOnlyNote />
+              ) : adminUnavailable ? (
                 <p className="mt-3 text-[12px] text-red">
                   CONVEX_ADMIN_KEY is not set - the Google wizard cannot write deployment settings.
                   Set it on the server to configure push.

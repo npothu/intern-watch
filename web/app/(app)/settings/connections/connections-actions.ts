@@ -6,6 +6,7 @@ import {
   putCredential,
   testCredential as runCredentialTest,
   deleteCredential,
+  setResumeLlm,
 } from "@/lib/convex";
 
 /**
@@ -61,6 +62,31 @@ export async function testCredential(
     return ok ? { ok: true, detail } : { ok: false, error: detail };
   } catch (err) {
     return { ok: false, error: (err as Error).message || "Couldn't test the credential." };
+  }
+}
+
+/**
+ * Choose which model tailors this user's resumes.
+ *
+ * `provider: null` means "use whatever the operator provides" - the default
+ * every user starts on, and the state a user returns to by picking the shared
+ * model again. There is deliberately no separate reset action.
+ *
+ * This carries no secret: the optional API key behind a choice is saved
+ * through saveCredential like any other credential.
+ */
+export async function saveResumeModel(
+  provider: string | null,
+  model: string | null
+): Promise<CredentialResult> {
+  const user = await requireUser();
+  if (!user) return notSignedIn();
+  try {
+    await setResumeLlm(user, provider, model);
+    revalidatePath("/settings/connections");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || "Couldn't save the model choice." };
   }
 }
 

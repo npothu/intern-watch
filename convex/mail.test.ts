@@ -2,6 +2,7 @@ import { beforeAll, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import * as mail from "./mail";
+import { decryptJson } from "./credentials_crypto";
 
 // Phase 1 tests for the mail-sync skeleton: account upsert, pending-action
 // reads/resolution, and the /gmail/push HTTP doorbell. All tested against the
@@ -9,10 +10,17 @@ import * as mail from "./mail";
 
 const SECRET = "test-tracker-secret";
 const PUSH_TOKEN = "test-push-token";
+const CRED_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="; // 32 bytes
 
 beforeAll(() => {
   process.env.TRACKER_SECRET = SECRET;
   process.env.MAIL_PUSH_TOKEN = PUSH_TOKEN;
+  // setMailAccount encrypts the refresh token before storing it.
+  process.env.CREDENTIALS_KEY = CRED_KEY;
+  // Mail-sync is opt-in; these two switch it on. Without them setMailAccount
+  // refuses to store a token nothing could ever use.
+  process.env.GMAIL_CLIENT_ID = "test-client-id";
+  process.env.GMAIL_CLIENT_SECRET = "test-client-secret";
 });
 
 // Shared pending-action fixture. inboxActions has no public insert in Phase 1,
@@ -49,7 +57,7 @@ function envelope(email: string): string {
 
 test("setMailAccount inserts then upserts, clearing lastError", async () => {
   const t = convexTest(schema);
-  await t.mutation(mail.setMailAccount, {
+  await t.action(mail.setMailAccount, {
     user: "u1",
     email: "a@example.com",
     refreshToken: "r1",
@@ -63,7 +71,7 @@ test("setMailAccount inserts then upserts, clearing lastError", async () => {
       .first();
     await ctx.db.patch(row!._id, { lastError: "boom", lastErrorAt: 123 });
   });
-  await t.mutation(mail.setMailAccount, {
+  await t.action(mail.setMailAccount, {
     user: "u1",
     email: "a@example.com",
     refreshToken: "r2",
@@ -73,6 +81,7 @@ test("setMailAccount inserts then upserts, clearing lastError", async () => {
     (await ctx.db.query("mailAccounts").collect()).map((r) => ({
       email: r.email,
       refreshToken: r.refreshToken,
+      refreshTokenIv: r.refreshTokenIv,
       lastError: r.lastError,
       lastErrorAt: r.lastErrorAt,
     })),
@@ -80,9 +89,55 @@ test("setMailAccount inserts then upserts, clearing lastError", async () => {
   // One row per user - the upsert patched in place rather than inserting.
   expect(rows).toHaveLength(1);
   expect(rows[0].email).toBe("a@example.com");
-  expect(rows[0].refreshToken).toBe("r2");
   expect(rows[0].lastError).toBeUndefined();
   expect(rows[0].lastErrorAt).toBeUndefined();
+
+  // The token is at rest as ciphertext, not as the string we passed in. This
+  // is the whole point of the change: a database dump must not hand over
+  // silent, long-lived read access to someone's mailbox.
+  expect(rows[0].refreshToken).not.toBe("r2");
+  expect(rows[0].refreshTokenIv).toBeTruthy();
+  await expect(
+    decryptJson<string>(CRED_KEY, rows[0].refreshToken, rows[0].refreshTokenIv!),
+  ).resolves.toBe("r2");
+});
+
+test("a legacy plaintext row is still readable, and is upgraded on the next write", async () => {
+  // Rows written before encryption have no iv. Locking those users out of
+  // their own mailbox would have been the worst possible migration, so the
+  // read path tolerates them - see readRefreshToken in mail.ts.
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("mailAccounts", {
+      user: "legacy",
+      email: "old@example.com",
+      refreshToken: "plaintext-token",
+    });
+  });
+  const before = await t.run(async (ctx) =>
+    ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", "legacy"))
+      .first(),
+  );
+  expect(before?.refreshTokenIv).toBeUndefined();
+
+  await t.action(mail.setMailAccount, {
+    user: "legacy",
+    email: "old@example.com",
+    refreshToken: "rotated-token",
+    secret: SECRET,
+  });
+  const after = await t.run(async (ctx) =>
+    ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", "legacy"))
+      .first(),
+  );
+  expect(after?.refreshTokenIv).toBeTruthy();
+  await expect(
+    decryptJson<string>(CRED_KEY, after!.refreshToken, after!.refreshTokenIv!),
+  ).resolves.toBe("rotated-token");
 });
 
 // -- getActions -------------------------------------------------------------

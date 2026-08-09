@@ -9,6 +9,11 @@ file plus a secret or two.
 
 No servers, no database — state is a JSON file committed back to the repo.
 
+New here? `docs/quickstart.md` takes a fresh fork to a working watcher end to
+end, with auto-apply and mail-sync as clearly-marked appendices. The README
+below is the full reference; setup is tiered into REQUIRED (the minimum for a
+working watcher) and OPTIONAL (everything else).
+
 ## Sources
 
 | Source | What |
@@ -83,67 +88,125 @@ With `convex`, the dashboard issue still gets painted each run (a read-only
 digest) so you keep the GitHub-native view, but it is no longer the source of
 truth — edits there are overwritten.
 
+## Hosted web app (optional)
+
+`web/` is a hosted, multi-user Next.js sibling of the local Python webui:
+Clerk sign-in, Tailwind/shadcn UI, and the same Convex store. It is a separate
+Vercel deployment, never part of the watcher cron, and strictly optional. Its
+secrets (`CLERK_SECRET_KEY`, `CONVEX_URL`, `CONVEX_SECRET`, and a
+`TRACKER_USER_MAP` bridging Clerk emails to tracker users) live on Vercel and
+the Convex deployment, not in this repo's `.env`. It makes no Convex schema
+changes and shares the deployment with the Python pipeline.
+See `web/README.md` for the full setup.
+
 ## Setup
 
+Everything splits into two tiers. **REQUIRED** is the minimum for a working
+watcher: a state store (the default GitHub driver needs no setup), an email
+sender, and an LLM classifier key. Everything else is **OPTIONAL** - mail-sync,
+auto-apply, jobright authenticated resolution, a Discord channel, and the
+hosted web app; a fork that skips all of them still gets a fully working
+watcher. The preflight (`python -m src.config_check`) prints both tiers as a
+per-feature ENABLED/DISABLED table, so it is always obvious what is left to
+set up and whether it is required.
+
+If you are forking this, `docs/quickstart.md` walks the REQUIRED tier start to
+finish and defers the optional features to appendices. The reference for both
+tiers follows.
+
+### Required (the minimum for a working watcher)
+
 1. **Create the repo.** Push this directory to a (private is fine) GitHub repo.
-2. **Gmail app password** (for the email channel): Google Account → Security →
+2. **Gmail app password** (the email sender): Google Account → Security →
    enable 2-Step Verification → then myaccount.google.com/apppasswords →
    create one named "intern-watch" → copy the 16-character password.
 3. **Repo secrets** (Settings → Secrets and variables → Actions):
-   - `GMAIL_ADDRESS` — the Gmail account that sends (and receives) the digest
-   - `GMAIL_APP_PASSWORD` — the app password from step 2
-   - the API key for your `llm.provider` (e.g. `GEMINI_API_KEY` or
-     `ANTHROPIC_API_KEY`) — optional; without it the tool runs
-     deterministic-only
-   - (`DISCORD_WEBHOOK_<NAME>` — only if a user enables the Discord channel)
-   - `JOBRIGHT_EMAIL` / `JOBRIGHT_PASSWORD` — optional; when set, accepted
-     matches whose link is still a jobright.ai URL get resolved to the real
-     employer apply URL at match time (session cookies persist across runs via
-     an Actions cache); without them the watcher keeps the jobright link —
-     everything else works. This logs into jobright.ai with your account —
-     enable it only with your own account and your own judgment on their terms
-     of service.
+   - `GMAIL_ADDRESS` - the Gmail account that sends (and receives) the digest
+   - `GMAIL_APP_PASSWORD` - the app password from step 2
+   - the API key for your `llm.provider` (`GEMINI_API_KEY` for the shipped
+     config) - the watcher's term / company / Atlanta judgments need it. A
+     fork that genuinely wants no LLM calls can disable `llm.enabled` and set
+     `unknown_term_policy: drop`; the preflight then marks the LLM OFF without
+     failing.
 4. **Tune your config.** Edit `users/example.yaml` (terms, keywords, rules,
    the prose "top company" definition) and `data/top_companies.txt` /
    `data/atlanta_companies.txt` (one company per line, `|` separates aliases).
-5. **First run.** Actions → *watch* → Run workflow. The first run **seeds**:
+5. **Validate.** `python -m src.config_check` (per-user PASS/FAIL plus the
+   feature table), then `pytest -q` must stay green.
+6. **First run.** Actions → *watch* → Run workflow. The first run **seeds**:
    it marks every currently-listed job as seen without notifying, so you don't
    get a 500-job blast. Every run after that notifies new jobs only.
    (Run `python -m src.main --backfill` locally instead if you *do* want the
    initial blast.)
 
+### Optional features
+
+Same wiring as the required ones (a repo secret plus an `env:` line in
+`watch.yml`), each adding one capability. All of them can wait until the
+REQUIRED tier works.
+
+- **Discord (instant channel)** - set `notify.discord_webhook_env` in a user
+  yaml and add `DISCORD_WEBHOOK_<NAME>` to the repo secrets and `watch.yml`.
+- **Jobright authenticated resolution** - `JOBRIGHT_EMAIL` /
+  `JOBRIGHT_PASSWORD`: accepted matches whose link is still a jobright.ai URL
+  get resolved to the real employer apply URL at match time (session cookies
+  persist across runs via an Actions cache). Without them the watcher keeps
+  the jobright link - everything else works. This logs into jobright.ai with
+  your account - enable it only with your own account and your own judgment on
+  their terms of service.
+- **Resume auto-build** - enable `resume_build` in a user yaml; needs
+  `users/<you>_resume.json` (schema: `docs/resume.md`).
+- **Auto-apply** - the gated CLI that fills and submits applications; it never
+  runs in the cron. Needs `users/<you>_apply.yaml` plus
+  `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` for the cloud browser.
+  See `docs/apply.md`.
+- **Mail-sync** - recruiter emails update application statuses automatically.
+  Convex store only (`STORE=convex`), with `GMAIL_CLIENT_ID` /
+  `GMAIL_CLIENT_SECRET` and the push-topic secrets. See `docs/mail-sync.md`.
+- **Convex database backend** - the alternative state store described under
+  "Database backend": `STORE=convex` plus `CONVEX_URL` / `CONVEX_SECRET`.
+- **Hosted web app** - the separate Next.js app in `web/`; see "Hosted web
+  app (optional)".
+
 ### Fork checklist
 
-Everything a fresh copy of this repo needs, in one place:
+Everything a fresh copy of this repo needs, in one place. Split into the two
+tiers: do the REQUIRED set first (the watcher alone), then add OPTIONAL
+features one at a time. The step-by-step happy path is `docs/quickstart.md`.
+
+**REQUIRED (the watcher):**
 
 1. **Repo**: create your copy (GitHub *Use this template* on the template
-   repo, or push this tree to a new repo — private is fine).
+   repo, or push this tree to a new repo - private is fine).
 2. **Secrets** (Settings → Secrets and variables → Actions):
    `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, and your LLM key
-   (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY` — optional, deterministic-only
-   without it). Add `JOBRIGHT_EMAIL`/`JOBRIGHT_PASSWORD` (optional — see
-   Setup step 3) to resolve jobright links to real employer apply URLs.
+   (`GEMINI_API_KEY` for the shipped config - see Setup).
 3. **Repo settings**: Settings → Actions → General →
    *Workflow permissions: Read and write* and
    *Allow GitHub Actions to create and approve pull requests* (the monthly
    *refresh-boards* workflow opens a PR).
 4. **Watcher config**: edit `users/example.yaml` (or copy it to
-   `users/<you>.yaml` and delete the example) — terms, keywords, rules, the
-   prose "top company" definition — plus `data/top_companies.txt` /
+   `users/<you>.yaml` and delete the example) - terms, keywords, rules, the
+   prose "top company" definition - plus `data/top_companies.txt` /
    `data/atlanta_companies.txt` (swap in your own metro list).
 5. **Validate**: `python -m src.config_check`, then `pytest -q`.
-6. **First run**: Actions → *watch* → Run workflow (seeds silently — see
+6. **First run**: Actions → *watch* → Run workflow (seeds silently - see
    Setup above).
-7. **Optional — resume builds**: create `users/<you>_resume.json`
-   (schema: `docs/resume.md`; structure reference:
-   `tests/fixtures/resume_bank.json`).
-8. **Optional — auto-apply**: copy `users/apply.example.yaml` →
+
+**OPTIONAL (after the watcher works):**
+
+7. **Resume builds**: create `users/<you>_resume.json` (schema:
+   `docs/resume.md`; structure reference: `tests/fixtures/resume_bank.json`).
+8. **Auto-apply**: copy `users/apply.example.yaml` →
    `users/<you>_apply.yaml` and `users/logins.example.yaml` →
-   `users/<you>_logins.yaml` (the latter is gitignored — it holds
+   `users/<you>_logins.yaml` (the latter is gitignored - it holds
    passwords); see `docs/apply.md`.
-9. **Optional — mail sync** (Convex tracker only): recruiter emails update
-   application statuses automatically, with an Inbox action queue in the
-   webui for ambiguous ones; see `docs/mail-sync.md`.
+9. **Mail sync** (Convex tracker only): recruiter emails update application
+   statuses automatically, with an Inbox action queue in the webui for
+   ambiguous ones; see `docs/mail-sync.md`.
+10. **Jobright auth**: `JOBRIGHT_EMAIL`/`JOBRIGHT_PASSWORD` - see Setup.
+11. **Convex store / hosted web app**: see "Database backend" and "Hosted
+    web app (optional)".
 
 ### Config & secrets model
 
@@ -187,14 +250,27 @@ that every `*_env` secret you reference is actually wired into `watch.yml`'s
 line to add. It prints a per-user PASS/FAIL report and exits nonzero on any
 failure, so CI runs it before pytest.
 
+Alongside the per-user report it prints a per-feature status table: every
+feature tiered REQUIRED (store, email, LLM) or OPTIONAL (discord, jobright,
+auto-apply, mail-sync, the hosted web app) and marked ENABLED or DISABLED,
+with exactly the env vars a disabled one needs. DISABLED optional features are
+fine - the exit code only reflects config validity and secret *wiring*, never
+the presence of secret values in the process (CI's preflight step has none;
+they exist only inside the watch job). The "required features: N/3 ready"
+summary line at the bottom is the self-hoster's checklist.
+
 ### Run locally
 
 ```
 pip install -r requirements.txt
-python -m src.config_check     # validate users/*.yaml + secret wiring
+python -m src.config_check     # validate users/*.yaml + wiring; prints the feature table
 python -m src.main --dry-run     # full pipeline, prints the digest, writes nothing
 python -m pytest tests -q
 ```
+
+The preflight reads the gitignored `.env` (like the other local tooling), so
+putting `GMAIL_*` and `GEMINI_API_KEY` there flips the REQUIRED rows to
+ENABLED; exported env vars win over the file.
 
 ## How filtering works (per user)
 

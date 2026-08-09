@@ -93,7 +93,20 @@ export default defineSchema({
   mailAccounts: defineTable({
     user: v.string(),
     email: v.string(),
+    // The Gmail OAuth refresh token: long-lived, silent read access to a
+    // person's mailbox, and therefore the most sensitive value in this
+    // database. It is AES-256-GCM ciphertext under CREDENTIALS_KEY whenever
+    // `refreshTokenIv` is present.
+    //
+    // The iv is optional ONLY to keep rows written before encryption readable:
+    // absent iv means the column still holds legacy plaintext, and the read
+    // path re-encrypts it on the next write. Do not write a new plaintext row.
     refreshToken: v.string(),
+    refreshTokenIv: v.optional(v.string()),
+    // Deprecated and no longer written: caching a live bearer token in
+    // plaintext beside the encrypted refresh token defeated the point of
+    // encrypting it. Kept optional so rows written by older builds still
+    // validate; refreshAccessToken clears them on the next run.
     accessToken: v.optional(v.string()),
     accessTokenExpiry: v.optional(v.number()),
     historyId: v.optional(v.string()),
@@ -235,6 +248,26 @@ export default defineSchema({
   })
     .index("by_user", ["user"])
     .index("by_user_provider", ["user", "provider"]),
+
+  // Per-user, non-secret preferences. One row per user.
+  //
+  // The resume LLM lives here rather than on the `credentials` row because the
+  // choice and the key are independent: a user can pick a model without having
+  // a key (the shared key runs it), and the absence of a row is meaningful -
+  // it means "whatever the operator provides", which is the default everyone
+  // gets without visiting Settings at all.
+  //
+  // llmDay/llmCount are the per-user daily allowance for the OPERATOR's key,
+  // mirroring the LLM_DAILY_CAP counter on mailAccounts. A user running their
+  // own key is never counted here - it is their quota to spend.
+  settings: defineTable({
+    user: v.string(),
+    resumeProvider: v.optional(v.string()),
+    resumeModel: v.optional(v.string()),
+    llmDay: v.optional(v.string()),    // "YYYY-MM-DD" (UTC)
+    llmCount: v.optional(v.number()),  // operator-key builds used that day
+    updatedAt: v.number(),
+  }).index("by_user", ["user"]),
 
   // In-flight on-demand resume builds. A row is upserted to "building" when
   // requestBuild schedules runBuild; runBuild deletes it on success or patches

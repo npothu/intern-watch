@@ -1,25 +1,33 @@
 "use client";
 
-// The Connections page's ordered provider list. Kept as data (not five copies
-// of JSX) so the card rendering, whose layout is shared, lives in exactly one
-// place and the order is explicit. Gemini is first and required: the first-run
-// state the mock's warning describes is just this card absent with its
-// emphasized border.
+// The Connections page's ordered provider list. Kept as data (not copies of
+// JSX) so the shared card layout lives in exactly one place and the order is
+// explicit.
+//
+// This list is deliberately SHORT, and shrinking it was the point. It used to
+// also collect Browserbase, jobright and SMTP credentials - all of which the
+// Convex backend never read. Their real consumers are environment variables in
+// the Python pipeline, so the cards stored real secrets (including a jobright
+// account password) that did nothing, which is both pure liability and the
+// single most phishing-like thing the app did. Do not add a card back here
+// until something in convex/ actually reads that credential.
+//
+// The Gemini card is gone for a different reason: the resume model is no
+// longer a required key, so it gets its own card (ResumeModelCard) that leads
+// with "this already works" instead of an empty password field.
 
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { ConnectionCard, Pill, type ProviderDef } from "./connection-card";
-import type { CredentialRow } from "@/lib/convex";
+import { ResumeModelCard } from "./resume-model-card";
+import { Button } from "@/components/ui/button";
+import { removeCredential } from "@/app/(app)/settings/connections/connections-actions";
+import type { CredentialRow, MailSyncStatus, ResumeLlm } from "@/lib/convex";
+
+/** Providers the resume-model card owns. Their rows are keys, not orphans. */
+const LLM_PROVIDERS = ["gemini", "anthropic", "openai", "openrouter"];
 
 export const PROVIDERS: ProviderDef[] = [
-  {
-    provider: "gemini",
-    icon: "G",
-    accent: true,
-    title: "Gemini",
-    why: "Classifies ambiguous jobs, scores resumes against a JD, and triages your inbox.",
-    required: true,
-    model: "gemini-flash-lite-latest",
-    fields: [{ key: "apiKey", label: "API key", type: "password", placeholder: "AIza..." }],
-  },
   {
     provider: "google",
     icon: "M",
@@ -28,40 +36,24 @@ export const PROVIDERS: ProviderDef[] = [
     why: "Watches application email and moves tracker rows to interviewing, offer or rejected on its own.",
     linkHref: "/settings/connections/google",
   },
-  {
-    provider: "browserbase",
-    icon: "B",
-    title: "Browserbase",
-    why: "Required for auto-apply. Until it is set, the Apply button stays manual.",
-    fields: [
-      { key: "apiKey", label: "API key", type: "password", placeholder: "bb_live_...", mono: true },
-      { key: "projectId", label: "Project ID", type: "text", placeholder: "0d3f1c2e-...", mono: true },
-    ],
-  },
-  {
-    provider: "jobright",
-    icon: "j",
-    title: "jobright.ai",
-    why: "Turns jobright match links into the employer's real apply URL. Without it, matches still arrive, they just point at jobright.",
-    fields: [
-      { key: "email", label: "Email", type: "text", placeholder: "you@example.com" },
-      { key: "password", label: "Password", type: "password", placeholder: "••••••••" },
-    ],
-  },
-  {
-    provider: "smtp",
-    icon: "@",
-    title: "Digest email",
-    why: "Sends the batched match email at 8pm, 8am and 2pm ET. Gmail app password, not your login.",
-    fields: [
-      { key: "address", label: "From address", type: "text", placeholder: "you@gmail.com" },
-      { key: "appPassword", label: "App password", type: "password", placeholder: "16-char password" },
-    ],
-  },
 ];
 
-export function ConnectionsList({ rows }: { rows: CredentialRow[] }) {
+export function ConnectionsList({
+  rows,
+  llm,
+  mailSync,
+}: {
+  rows: CredentialRow[];
+  llm: ResumeLlm;
+  mailSync: MailSyncStatus;
+}) {
   const byProvider = new Map(rows.map((r) => [r.provider, r]));
+  // Anything stored that no card on this page can now show or delete.
+  const orphaned = rows.filter(
+    (r) =>
+      !LLM_PROVIDERS.includes(r.provider) &&
+      !PROVIDERS.some((p) => p.provider === r.provider),
+  );
 
   // These four buckets are exhaustive on purpose: every provider lands in
   // exactly one, so the counts always sum to PROVIDERS.length. An earlier
@@ -100,10 +92,98 @@ export function ConnectionsList({ rows }: { rows: CredentialRow[] }) {
       </div>
 
       <div className="flex flex-col gap-2.5">
+        {/* First, because it is the one every user has - it needs no setup and
+            it is the card most likely to answer "can I change the model?". */}
+        <ResumeModelCard llm={llm} keysByProvider={Object.fromEntries(byProvider)} />
+        {/* Mail-sync is opt-in. When the deployment never set it up, say so
+            plainly and name the missing variables - a card that just sits
+            there unconnected reads as broken rather than as switched off. */}
+        {!mailSync.enabled && (
+          <div className="rounded-md border border-dashed border-line bg-surface px-4 py-3.5">
+            <div className="text-[13px] font-semibold text-ink">
+              Mail-sync is off on this deployment
+            </div>
+            <p className="mt-1 text-[12px] text-ink-2">
+              Everything else works without it. Turn it on by setting{" "}
+              {mailSync.missing.length ? (
+                <>
+                  {mailSync.missing.map((m, i) => (
+                    <span key={m}>
+                      {i > 0 && ", "}
+                      <code className="rounded bg-chip px-1 py-0.5 font-mono text-[11px]">
+                        {m}
+                      </code>
+                    </span>
+                  ))}{" "}
+                </>
+              ) : (
+                "the Gmail variables "
+              )}
+              on the deployment, then connecting Google below.
+            </p>
+          </div>
+        )}
         {PROVIDERS.map((def) => (
           <ConnectionCard key={def.provider} def={def} row={byProvider.get(def.provider)} />
         ))}
+
+        {/* Credentials saved through cards that no longer exist. Removing the
+            collection UI does not remove the collected data: those rows stay
+            encrypted in the database, and without this there would be nowhere
+            in the app to delete a jobright password or a Browserbase key the
+            backend never reads. Shown only when such a row actually exists. */}
+        <OrphanedCredentials rows={orphaned} />
       </div>
     </>
+  );
+}
+
+function OrphanedCredentials({ rows }: { rows: CredentialRow[] }) {
+  const [gone, setGone] = useState<string[]>([]);
+  const [pending, start] = useTransition();
+  const left = rows.filter((r) => !gone.includes(r.provider));
+  if (!left.length) return null;
+
+  const drop = (provider: string) => {
+    start(async () => {
+      const res = await removeCredential(provider);
+      if (res.ok) {
+        setGone((g) => [...g, provider]);
+        toast.success(`Removed the stored ${provider} credential.`);
+      } else {
+        toast.error(res.error);
+      }
+    });
+  };
+
+  return (
+    <div className="rounded-md border border-amber/45 bg-amber/5 px-4 py-3.5">
+      <div className="text-[13px] font-semibold text-ink">No longer used</div>
+      <p className="mt-1 text-[12px] text-ink-2">
+        These were saved by an older version of this page. Nothing reads them
+        any more, so they are worth deleting.
+      </p>
+      <div className="mt-2.5 flex flex-col gap-1.5">
+        {left.map((r) => (
+          <div key={r.provider} className="flex flex-wrap items-center gap-2">
+            <span className="text-[12.5px] font-medium text-ink">{r.provider}</span>
+            {r.hint && (
+              <code className="rounded bg-chip px-1.5 py-0.5 font-mono text-[11px] text-ink-2">
+                {r.hint}
+              </code>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-red"
+              disabled={pending}
+              onClick={() => drop(r.provider)}
+            >
+              Remove
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

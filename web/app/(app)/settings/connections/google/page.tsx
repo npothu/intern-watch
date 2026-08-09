@@ -1,4 +1,4 @@
-import { resolveTrackerUser } from "@/lib/user";
+import { isAdminUser, resolveTrackerUser } from "@/lib/user";
 import { listCredentials } from "@/lib/convex";
 import { GoogleWizard } from "@/components/settings/google-wizard";
 import { getEnvPresence } from "./google-actions";
@@ -50,6 +50,10 @@ export default async function ConnectGooglePage() {
   // Clamp the presence projection so client state starts from server truth.
   const routeWired = false; // the /api/google/start route is not implemented in this build
 
+  // The wizard's write steps change deployment-wide vars, so they are gated on
+  // admin membership for the display AND re-checked inside each server action.
+  const admin = await isAdminUser(user);
+
   return (
     <GoogleWizard
       convexSiteUrl={convexSiteOrigin() ?? ""}
@@ -57,6 +61,7 @@ export default async function ConnectGooglePage() {
       googleConnected={googleConnected}
       adminAvailable={Boolean(process.env.CONVEX_ADMIN_KEY)}
       routeWired={routeWired}
+      admin={admin}
     />
   );
 }

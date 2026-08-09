@@ -9,22 +9,34 @@ present in GitHub but never reaches the process).
 
 `python -m src.config_check` validates every `users/*.yaml` against an explicit
 schema and cross-checks secret wiring against `.github/workflows/watch.yml`,
-prints a per-user PASS/FAIL report, and exits nonzero if anything fails. It is
-deliberately self-contained (no imports from the rest of `src`) so it can run
-as the very first CI step, before anything else can blow up.
+prints a per-user PASS/FAIL report, and exits nonzero if anything fails.
+Alongside it prints a per-feature status report (see `check_features`): each
+feature is REQUIRED or OPTIONAL, marked ENABLED or DISABLED in the current
+environment, with exactly the env vars that would turn a disabled one back on.
+The exit code is about config and secret WIRING only -- optional features off
+never fail the preflight, and nothing about secret presence in the local env
+fails it either (a fresh CI checkout has none, and GitHub secrets only exist
+inside the watch job's env). The feature report's final line is what a
+self-hoster reads to know what to put in `.env`.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
 
 import yaml
 
+# For the feature status we need the same key-env resolution main.py uses:
+# a user may omit llm.api_key_env and fall back to the provider default.
+from .envfile import load_dotenv
+
 # The is-this-a-watcher-config rule lives in filters (load_users must apply
 # it too, else apply answer-books become phantom watcher users).
 from .filters import is_watcher_config as _is_watcher_config
+from .llm import api_key_env_for
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -212,6 +224,251 @@ def _iter_company_in_file(rules) -> list[str]:
     return out
 
 
+# -- feature status report ----------------------------------------------------
+
+# Required = the minimum for a working watcher: a store backend, an email
+# sender, and the LLM classifier key. Everything else is optional and must
+# never fail the preflight on its own.
+REQUIRED = "REQUIRED"
+OPTIONAL = "OPTIONAL"
+
+
+class Feature:
+    """One preflight row: name, tier, enabled, and (when disabled) the exact
+    env vars to set. `missing` is the machine-readable list; `note` covers the
+    cases where the blocker is a config choice rather than a secret."""
+
+    def __init__(self, name: str, tier: str, enabled: bool, *,
+                 missing: list[str] | None = None, note: str = ""):
+        self.name = name
+        self.tier = tier
+        self.enabled = enabled
+        self.missing = list(missing or [])
+        self.note = note
+
+
+def _watcher_users(users_dir: Path) -> list[tuple[str, dict | None]]:
+    """Parse every watcher users/*.yaml as (filename, data). A file that
+    fails to parse yields (filename, None) -- the schema check reports it."""
+    parsed: list[tuple[str, dict | None]] = []
+    for p in sorted(users_dir.glob("*.yaml")) + sorted(users_dir.glob("*.yml")):
+        if not _is_watcher_config(p):
+            continue
+        try:
+            data = yaml.safe_load(p.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            parsed.append((p.name, None))
+            continue
+        parsed.append((p.name, data))
+    return parsed
+
+
+def check_features(users_dir: Path, watch_yml: Path, *,
+                   root: Path) -> list[Feature]:
+    """Status of every feature the repo can run, relative to the current
+    environment (after load_dotenv -- no-op in CI). Required features come
+    first. The caller prints this; a disabled OPTIONAL feature never makes
+    `main` exit nonzero."""
+    users = [data for _, data in _watcher_users(users_dir)
+             if isinstance(data, dict)]
+
+    def present(name: str) -> bool:
+        return bool(os.environ.get(name))
+
+    feats: list[Feature] = []
+
+    # -- REQUIRED ----------------------------------------------------------
+    store = os.environ.get("STORE", "github")
+    if store == "convex":
+        missing = [v for v in ("CONVEX_URL", "CONVEX_SECRET") if not present(v)]
+        if missing:
+            feats.append(Feature("store", REQUIRED, False, missing=missing))
+        else:
+            feats.append(Feature("store", REQUIRED, True,
+                                 note="Convex driver "
+                                      "(CONVEX_URL/CONVEX_SECRET set)"))
+    else:
+        feats.append(Feature("store", REQUIRED, True,
+                             note="GitHub driver (STORE unset) - no vars needed"))
+
+    email_users = []
+    for u in users:
+        found, email = _dig(u, ("notify", "email"))
+        if found and isinstance(email, dict):
+            email_users.append(email)
+    if not email_users:
+        feats.append(Feature(
+            "email digest", REQUIRED, False,
+            note="no watcher user enables notify.email - add it to "
+                 "users/<you>.yaml"))
+    else:
+        # Bind each lookup once: narrowing an inline `email.get(k)` inside the
+        # comprehension's guard does not carry to the value expression, which
+        # is a separate call as far as the type checker is concerned.
+        envs: set[str] = set()
+        for email in email_users:
+            for key in ("smtp_user_env", "smtp_pass_env"):
+                name = email.get(key)
+                if isinstance(name, str) and name:
+                    envs.add(name)
+        missing = [n for n in sorted(envs) if not present(n)]
+        if missing:
+            feats.append(Feature("email digest", REQUIRED, False,
+                                 missing=missing))
+        else:
+            feats.append(Feature("email digest", REQUIRED, True,
+                                 note=f"digest sender ready for "
+                                      f"{len(email_users)} user(s)"))
+
+    llm_users = [u for u in users if _dig(u, ("llm", "enabled"))[1]
+                 and isinstance(u.get("llm"), dict)]
+    if not llm_users:
+        feats.append(Feature(
+            "llm classifier", REQUIRED, False,
+            note="no watcher user enables llm (llm.enabled: true) - the "
+                 "watcher then runs deterministic-only"))
+    else:
+        keys = sorted({api_key_env_for(u["llm"]) for u in llm_users})
+        missing = [k for k in keys if not present(k)]
+        if missing:
+            feats.append(Feature("llm classifier", REQUIRED, False,
+                                 missing=missing))
+        else:
+            feats.append(Feature("llm classifier", REQUIRED, True,
+                                 note=f"keys ready ({', '.join(keys)})"))
+
+    # -- OPTIONAL ----------------------------------------------------------
+    discord_envs = []
+    for u in users:
+        found, env_name = _dig(u, ("notify", "discord_webhook_env"))
+        if found and isinstance(env_name, str) and env_name:
+            discord_envs.append(env_name)
+    if not discord_envs:
+        feats.append(Feature(
+            "discord", OPTIONAL, False,
+            note="no watcher user enables a Discord channel "
+                 "(notify.discord_webhook_env)"))
+    else:
+        missing = sorted({n for n in discord_envs if not present(n)})
+        if missing:
+            feats.append(Feature("discord", OPTIONAL, False, missing=missing))
+        else:
+            feats.append(Feature("discord", OPTIONAL, True,
+                                 note=f"webhook(s) ready ({', '.join(sorted(set(discord_envs)))})"))
+
+    jr_missing = [v for v in ("JOBRIGHT_EMAIL", "JOBRIGHT_PASSWORD")
+                  if not present(v)]
+    if jr_missing:
+        feats.append(Feature("jobright resolution", OPTIONAL, False,
+                             missing=jr_missing))
+    else:
+        feats.append(Feature("jobright resolution", OPTIONAL, True,
+                             note="resolves jobright links to the real "
+                                  "employer apply URL"))
+
+    profiles = sorted(p.name for p in users_dir.glob("*_apply.yaml")
+                      if p.name != "apply.example.yaml")
+    if not profiles:
+        feats.append(Feature(
+            "auto-apply", OPTIONAL, False,
+            note="copy users/apply.example.yaml to users/<you>_apply.yaml "
+                 "(answer book; drives the python -m src.apply CLI)"))
+    else:
+        bb_missing = [v for v in ("BROWSERBASE_API_KEY",
+                                  "BROWSERBASE_PROJECT_ID") if not present(v)]
+        if bb_missing:
+            feats.append(Feature("auto-apply", OPTIONAL, False,
+                                 missing=bb_missing,
+                                 note="profiles found - also check the "
+                                      "profile's cloud.provider"))
+        else:
+            feats.append(Feature("auto-apply", OPTIONAL, True,
+                                 note=f"profile(s) ready ({', '.join(profiles)})"))
+
+    if store != "convex":
+        feats.append(Feature(
+            "mail-sync", OPTIONAL, False,
+            note="needs STORE=convex (a Convex deployment); see "
+                 "docs/mail-sync.md"))
+    else:
+        ms_missing = [v for v in ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET")
+                      if not present(v)]
+        if ms_missing:
+            feats.append(Feature("mail-sync", OPTIONAL, False,
+                                 missing=ms_missing))
+        else:
+            feats.append(Feature("mail-sync", OPTIONAL, True,
+                                 note="recruiter emails update tracker "
+                                      "statuses"))
+
+    feats.append(Feature(
+        "hosted web app", OPTIONAL, False,
+        note="separate deployment (Vercel + Convex); its secrets live there, "
+             "not in .env - see README \"Hosted web app\""))
+
+    return feats
+
+
+def render_features(feats: list[Feature]) -> str:
+    """The human-facing feature table, plus the required-set summary line."""
+    lines = ["features (REQUIRED = the minimum for a working watcher):"]
+    width = max(len(f.name) for f in feats)
+    for f in feats:
+        status = "ENABLED " if f.enabled else "DISABLED"
+        line = (f"  [{f.tier:<8}] {f.name:<{width}}  {status}")
+        if f.enabled:
+            if f.note:
+                line += f"  {f.note}"
+        elif f.missing:
+            line += "  - set " + ", ".join(f.missing)
+        elif f.note:
+            line += f"  - {f.note}"
+        lines.append(line)
+    required = [f for f in feats if f.tier == REQUIRED]
+    n_on = sum(1 for f in required if f.enabled)
+    lines.append("")
+    lines.append(f"  required features: {n_on}/{len(required)} ready in this "
+                 f"environment")
+    for f in required:
+        if f.enabled:
+            continue
+        if f.missing:
+            lines.append(f"    - {f.name}: add {', '.join(f.missing)} to .env "
+                         "(or as Actions secrets of the same name)")
+        else:
+            lines.append(f"    - {f.name}: {f.note}")
+    lines.append("  (A disabled OPTIONAL feature is fine on its own - the "
+                 "watcher only needs the required set.)")
+    return "\n".join(lines)
+
+
+def env_store_report(watch_yml: Path) -> Report | None:
+    """Exit-affecting store checks that depend on the current environment
+    (after load_dotenv): an unknown STORE value, or STORE=convex with the
+    Convex secrets unwired. CI sets neither STORE nor the Convex secrets, so
+    this is a no-op in the preflight step there."""
+    store = os.environ.get("STORE")
+    if not store:
+        return None
+    if store not in ("github", "convex"):
+        rep = Report("STORE env var")
+        rep.error(f"unknown STORE={store!r} (have: github, convex)")
+        return rep
+    if store == "convex":
+        wired = watch_env_names(watch_yml)
+        missing = [n for n in ("CONVEX_URL", "CONVEX_SECRET") if n not in wired]
+        if missing:
+            rep = Report("STORE env var")
+            rep.error(
+                "STORE=convex but " + ", ".join(missing) +
+                " is not wired into watch.yml's env: block -- add this line "
+                "under the run step's env::\n             " +
+                "\n             ".join(f"{n}: ${{{{ secrets.{n} }}}}"
+                                       for n in missing))
+            return rep
+    return None
+
+
 def check_configs(users_dir: Path, watch_yml: Path, *,
                   root: Path) -> tuple[list[Report], bool]:
     """Validate every watcher users/*.yaml. Returns (reports, all_passed)."""
@@ -246,15 +503,28 @@ def main(argv: list[str] | None = None) -> int:
     users_dir = root / "users"
     watch_yml = root / ".github" / "workflows" / "watch.yml"
 
+    # Local-only: pull STORE/CONVEX_* and GMAIL/GEMINI keys out of the
+    # gitignored .env before the feature report. No-op in Actions (no .env).
+    load_dotenv()
+
     reports, ok = check_configs(users_dir, watch_yml, root=root)
+    store_rep = env_store_report(watch_yml)
+    if store_rep is not None:
+        ok = ok and store_rep.ok
     for rep in reports:
         print(rep.render())
+    if store_rep is not None:
+        print(store_rep.render())
+    print()
+    feats = check_features(users_dir, watch_yml, root=root)
+    print(render_features(feats))
     print()
     if ok:
         print(f"config-check: PASS ({len(reports)} user(s))")
         return 0
-    n_fail = sum(1 for r in reports if not r.ok)
-    print(f"config-check: FAIL ({n_fail}/{len(reports)} user(s) failed)")
+    checked = reports + ([store_rep] if store_rep is not None else [])
+    n_fail = sum(1 for r in checked if not r.ok)
+    print(f"config-check: FAIL ({n_fail}/{len(checked)} check(s) failed)")
     return 1
 
 

@@ -1,7 +1,8 @@
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { decryptJson, encryptJson, maskTail } from "./credentials_crypto";
+import { credentialsKey, decryptJson, encryptJson, maskTail } from "./credentials_crypto";
+import { isProvider, testProviderKey } from "./llm_providers";
 
 // Per-user third-party credentials for the Connections page.
 //
@@ -24,13 +25,10 @@ function checkSecret(secret: string) {
   }
 }
 
-// The AES key for per-user credentials. Throwing on an unset key is the only
-// way to guarantee we never silently store or read plaintext with a bogus key.
-function credKey(): string {
-  const k = process.env.CREDENTIALS_KEY;
-  if (!k) throw new Error("CREDENTIALS_KEY is not set on this deployment");
-  return k;
-}
+// Re-exported under the old local name so the call sites below read unchanged.
+// The getter itself moved to credentials_crypto.ts when mail.ts started
+// encrypting the Gmail refresh token with the same key.
+const credKey = credentialsKey;
 
 // Non-secret display fields shown on the Connections card, derived per the
 // provider's field shape. hint is the masked tail of the primary secret;
@@ -253,15 +251,20 @@ async function runTest(
     return { ok: true, detail: NO_TEST_DETAIL[provider], status: "untested" };
   }
   switch (provider) {
-    case "gemini":
-      return testGemini(fields.apiKey ?? "");
     case "browserbase":
       return testBrowserbase(fields.apiKey ?? "", fields.projectId ?? "");
     case "google":
       return testGoogle(fields.refreshToken ?? "");
-    default:
-      return { ok: false, detail: "unknown provider", status: "error" };
   }
+  // Every LLM provider the resume-model picker offers. Handled as a group
+  // rather than one case each, because a picker entry with no matching case
+  // here does not fail quietly - it tells the user their working key is
+  // broken and writes status "error" onto the row.
+  if (isProvider(provider)) {
+    const { ok, detail } = await testProviderKey(provider, fields.apiKey ?? "");
+    return { ok, detail, status: ok ? "ok" : "error" };
+  }
+  return { ok: false, detail: "unknown provider", status: "error" };
 }
 
 // Make the real outbound test call, then record the outcome. The secret is
@@ -328,20 +331,27 @@ export const getCredentialFields = internalAction({
   },
 });
 
-// The user's own Gemini key, or null when they have not configured one.
+// The user's own API key for one LLM provider, or null when they have not
+// configured one.
 //
-// There is deliberately NO fallback to process.env.GEMINI_API_KEY. The
-// product decision is bring-your-own-key only: a user without their own key
-// gets LLM steps skipped, not someone else's quota silently spent on their
-// behalf. Please do not "fix" this later by adding a fallback - it exists by
-// design, not by omission.
-export const resolveGeminiKey = internalAction({
-  args: { user: v.string() },
+// HISTORY, because this reverses an explicit decision rather than forgetting
+// it: this used to be `resolveGeminiKey`, and it carried a comment forbidding
+// any fallback to the deployment's own key - the worry being that one user
+// could silently spend the host's quota. That worry was right for an anonymous
+// multi-tenant service and wrong for an invite-only one, where the effect was
+// simply to make every user do sysadmin work before the feature did anything.
+//
+// The protection now lives where it belongs, as a per-user daily allowance on
+// the OPERATOR's key (settings.ts OPERATOR_DAILY_CAP). A user's own key is
+// still preferred and is never capped. So: the fallback is intentional, and so
+// is the cap - do not remove either without replacing the other.
+export const resolveProviderKey = internalAction({
+  args: { user: v.string(), provider: v.string() },
   // Annotated for the same circular-initializer reason as getCredentialFields.
-  handler: async (ctx, { user }): Promise<string | null> => {
+  handler: async (ctx, { user, provider }): Promise<string | null> => {
     const fields = await ctx.runAction(internal.credentials.getCredentialFields, {
       user,
-      provider: "gemini",
+      provider,
     });
     return fields?.apiKey ?? null;
   },
