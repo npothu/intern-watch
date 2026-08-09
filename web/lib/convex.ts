@@ -513,6 +513,32 @@ export async function deleteCredential(
   );
 }
 
+/** What the consent flow needs, read from the deployment that holds it rather
+ *  than from this server's env - the wizard writes these to Convex. */
+export type OAuthConfig = { clientId: string | null; missing: string[] };
+
+export async function getOAuthConfig(): Promise<OAuthConfig> {
+  const value = await post("query", "getOAuthConfig", {}, "mail");
+  return value as OAuthConfig;
+}
+
+/** Record a started OAuth flow so the callback can spend it exactly once. */
+export async function registerOAuthNonce(
+  nonce: string,
+  user: string,
+  expiresAt: number
+): Promise<void> {
+  await post("mutation", "registerOAuthNonce", { nonce, user, expiresAt }, "mail");
+}
+
+/** The user's connected mailbox, from the table the OAuth flow actually writes. */
+export async function getMailAccount(
+  user: string
+): Promise<{ email: string; lastError: string | null } | null> {
+  const value = await post("query", "getMailAccount", { user }, "mail");
+  return value as { email: string; lastError: string | null } | null;
+}
+
 /** Whether mail-sync is configured on this deployment. It is opt-in: a
  *  deployment that never sets it up should say so, not show a dead feature. */
 export type MailSyncStatus = { enabled: boolean; missing: string[] };

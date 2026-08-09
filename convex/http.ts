@@ -105,11 +105,29 @@ http.route({
     if (googleError) return back({ googleError });
     if (!code) return back({ googleError: "no_code" });
 
+    // Spend the nonce BEFORE the exchange. A signature only proves this state
+    // was issued by us, never that it has not already been used, and the value
+    // is visible in browser history and proxy logs - so without this a captured
+    // state could be replayed with a code from the attacker's own consent to
+    // repoint the victim's mailbox.
+    const fresh = await ctx.runMutation(internal.mail.consumeOAuthNonce, {
+      nonce: state.nonce,
+      user: state.user,
+    });
+    if (!fresh) {
+      return back({
+        googleError:
+          "This sign-in link was already used or has expired. Start the connection again.",
+      });
+    }
+
     try {
       const email = await ctx.runAction(internal.mail.completeOAuth, {
         user: state.user,
         code,
-        redirectUri: `${url.origin}/gmail/callback`,
+        // The value THIS flow actually sent to Google, carried in the signed
+        // state rather than rebuilt here - see oauth_state.ts.
+        redirectUri: state.redirectUri,
       });
       return back({ connected: email });
     } catch (err) {

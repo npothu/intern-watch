@@ -25,6 +25,8 @@
 export type OAuthState = {
   user: string;
   origin: string;
+  /** The exact redirect_uri sent to Google - see the canonical copy for why. */
+  redirectUri: string;
   nonce: string;
   exp: number;
 };
@@ -60,7 +62,12 @@ export async function signState(secret: string, state: OAuthState): Promise<stri
 }
 
 /** A fresh state for a flow started now. */
-export function newState(user: string, origin: string, now: number = Date.now()): OAuthState {
+export function newState(
+  user: string,
+  origin: string,
+  redirectUri: string,
+  now: number = Date.now(),
+): OAuthState {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return { user, origin, nonce: toBase64Url(bytes), exp: now + STATE_TTL_MS };
+  return { user, origin, redirectUri, nonce: toBase64Url(bytes), exp: now + STATE_TTL_MS };
 }

@@ -27,7 +27,18 @@ export type OAuthState = {
   user: string;
   /** Web app origin to send the browser back to when the exchange finishes. */
   origin: string;
-  /** Random per-flow value. */
+  /**
+   * The EXACT redirect_uri sent to Google when this flow started.
+   *
+   * Carried rather than recomputed because the two ends derive it from
+   * different inputs - the start route from its configured site URL, the
+   * callback from the request it happens to receive. Any divergence (a custom
+   * domain, a proxy, dev-vs-prod) makes Google reject the exchange with
+   * redirect_uri_mismatch, and the callback would then name its OWN url in the
+   * error, sending the operator to register the wrong value in Google Cloud.
+   */
+  redirectUri: string;
+  /** Random per-flow value, registered server-side and spent exactly once. */
   nonce: string;
   /** Epoch ms after which this state is refused. */
   exp: number;
@@ -103,26 +114,33 @@ export async function verifyState(
 
   try {
     const decoded = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
-    const { user, origin, nonce, exp } = decoded as Partial<OAuthState>;
+    const { user, origin, redirectUri, nonce, exp } = decoded as Partial<OAuthState>;
     if (
       typeof user !== "string" ||
       typeof origin !== "string" ||
+      typeof redirectUri !== "string" ||
       typeof nonce !== "string" ||
       typeof exp !== "number" ||
       !user ||
-      !origin
+      !origin ||
+      !redirectUri
     ) {
       return null;
     }
     if (exp <= now) return null;
-    return { user, origin, nonce, exp };
+    return { user, origin, redirectUri, nonce, exp };
   } catch {
     return null;
   }
 }
 
 /** A fresh state for a flow started now. */
-export function newState(user: string, origin: string, now: number = Date.now()): OAuthState {
+export function newState(
+  user: string,
+  origin: string,
+  redirectUri: string,
+  now: number = Date.now(),
+): OAuthState {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return { user, origin, nonce: toBase64Url(bytes), exp: now + STATE_TTL_MS };
+  return { user, origin, redirectUri, nonce: toBase64Url(bytes), exp: now + STATE_TTL_MS };
 }

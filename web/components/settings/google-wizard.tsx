@@ -203,6 +203,7 @@ export function GoogleWizard({
   googleConnected,
   adminAvailable,
   routeWired,
+  routeBlockers,
   admin,
   connectedEmail,
   oauthError,
@@ -215,6 +216,8 @@ export function GoogleWizard({
   adminAvailable: boolean;
   /** Whether /api/google/start can run: client id, signing secret, site origin. */
   routeWired: boolean;
+  /** Human names of the preconditions that are missing, when it cannot. */
+  routeBlockers: string[];
   /** Whether the signed-in user may write deployment-wide env vars. */
   admin: boolean;
   /** Set by the callback redirect on success - the mailbox that got linked. */
@@ -235,6 +238,9 @@ export function GoogleWizard({
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  // Showing the step-4 form over already-set values, without pretending they
+  // are gone. Cancelling is just clearing this.
+  const [replacing, setReplacing] = useState(false);
   const [topic, setTopic] = useState("");
 
   // Step 4's "done" derives from deployment presence, not a checkbox.
@@ -564,11 +570,16 @@ export function GoogleWizard({
                   the whole pane on the admin key made it show a red "cannot
                   write" error while the sidebar showed the same step with a
                   green checkmark, on the same screen. */}
-              {step4Done ? (
+              {step4Done && !replacing ? (
                 <AlreadySetNote
                   onNext={() => show(5)}
                   canReplace={admin && !adminUnavailable}
-                  onReplace={() => setPresenceState((p) => ({ ...p, clientId: false, clientSecret: false }))}
+                  // `replacing` is a separate flag rather than faking presence
+                  // to false. Clearing presence also cleared step4Done, which
+                  // disabled step 5's sign-in even though the deployment still
+                  // held valid credentials - and there was no way back short of
+                  // a page reload.
+                  onReplace={() => setReplacing(true)}
                 />
               ) : !admin ? (
                 <AdminOnlyNote />
@@ -602,14 +613,29 @@ export function GoogleWizard({
                       />
                     </label>
                   </div>
-                  <button
-                    type="button"
-                    className={`${BTN_PRIMARY} mt-3`}
-                    onClick={onSaveClient}
-                    disabled={busy}
-                  >
-                    {busy ? "Saving..." : "Save"}
-                  </button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className={BTN_PRIMARY}
+                      onClick={onSaveClient}
+                      disabled={busy}
+                    >
+                      {busy ? "Saving..." : "Save"}
+                    </button>
+                    {/* Only offered when there is something to go back TO.
+                        Opening this form over working credentials with no way
+                        out was the trap. */}
+                    {replacing && (
+                      <button
+                        type="button"
+                        className={BTN_GHOST}
+                        onClick={() => setReplacing(false)}
+                        disabled={busy}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
                   <p className="mt-3 text-[11px] text-ink-2">
                     Saved to the Convex deployment, not to your account. Functions pick the new
                     value up on their next run.
@@ -652,19 +678,33 @@ export function GoogleWizard({
               {routeWired ? (
                 <div className="mt-3 min-w-0">
                   {/* A plain link, not a fetch: this has to be a top-level
-                      navigation so Google's consent screen owns the tab. */}
-                  <a
-                    href={oauthDisabled ? undefined : "/api/google/start"}
-                    aria-disabled={oauthDisabled}
-                    className={cn(
-                      BTN_PRIMARY,
-                      "inline-flex w-full justify-center sm:w-auto",
-                      oauthDisabled && "pointer-events-none opacity-50",
-                    )}
-                    title={oauthTitle}
-                  >
-                    Sign in with Google
-                  </a>
+                      navigation so Google's consent screen owns the tab.
+                      When it cannot run, render a real disabled <button>
+                      instead of a pointer-events-none anchor: that style
+                      suppresses hover, which silently swallows the title and
+                      leaves a dead control with no stated reason. The reason
+                      is also printed below, since a tooltip is invisible on
+                      touch devices either way. */}
+                  {oauthDisabled ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled
+                        className={cn(BTN_PRIMARY, "w-full sm:w-auto")}
+                        title={oauthTitle}
+                      >
+                        Sign in with Google
+                      </button>
+                      <p className="mt-2 text-[11.5px] text-amber">{oauthTitle}</p>
+                    </>
+                  ) : (
+                    <a
+                      href="/api/google/start"
+                      className={cn(BTN_PRIMARY, "inline-flex w-full justify-center sm:w-auto")}
+                    >
+                      Sign in with Google
+                    </a>
+                  )}
                   <p className="mt-2 text-[11px] text-ink-2">
                     Prefer the terminal? <code className="font-mono">python -m src.mail_auth</code>{" "}
                     does the same thing.
@@ -672,6 +712,26 @@ export function GoogleWizard({
                 </div>
               ) : (
                 <div className="mt-3 min-w-0">
+                  {/* Name what is missing. Collapsing three separate causes into
+                      one boolean and then showing only the CLI fallback made a
+                      missing variable read as "this feature was never built" -
+                      the opposite of the degrade-loudly rule mail-sync follows
+                      elsewhere with its own missing[] list. */}
+                  {routeBlockers.length > 0 && (
+                    <div className="mb-3 rounded-md border border-amber/45 bg-amber/10 px-3 py-2.5">
+                      <p className="text-[12px] text-amber">
+                        In-browser sign-in is unavailable until these are set:
+                      </p>
+                      <ul className="mt-1 list-disc pl-4 text-[11.5px] text-ink-2">
+                        {routeBlockers.map((b) => (
+                          <li key={b}>{b}</li>
+                        ))}
+                      </ul>
+                      <p className="mt-1.5 text-[11.5px] text-ink-2">
+                        The CLI below works regardless.
+                      </p>
+                    </div>
+                  )}
                   <CopyField
                     label="Run this from the repo root"
                     value="python -m src.mail_auth"

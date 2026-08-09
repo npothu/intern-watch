@@ -249,6 +249,22 @@ export default defineSchema({
     .index("by_user", ["user"])
     .index("by_user_provider", ["user", "provider"]),
 
+  // In-flight Google OAuth handshakes, one row per started flow.
+  //
+  // The signed state alone is NOT enough. A signature proves a state was issued
+  // by us; it does not prove it has not already been used, and the value is
+  // visible in browser history, in the redirect's Location header, and in any
+  // TLS-inspecting proxy. Without this table a captured state stays usable for
+  // its whole lifetime, and an attacker who replays it with a code from THEIR
+  // OWN Google consent silently repoints the victim's mailbox at a mailbox the
+  // attacker controls. The row is deleted the moment it is consumed, so a
+  // replay finds nothing and is refused.
+  oauthNonces: defineTable({
+    nonce: v.string(),
+    user: v.string(),
+    expiresAt: v.number(),
+  }).index("by_nonce", ["nonce"]),
+
   // Per-user, non-secret preferences. One row per user.
   //
   // The resume LLM lives here rather than on the `credentials` row because the

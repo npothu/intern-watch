@@ -1,5 +1,5 @@
 import { isAdminUser, resolveTrackerUser } from "@/lib/user";
-import { listCredentials } from "@/lib/convex";
+import { getMailAccount, getOAuthConfig } from "@/lib/convex";
 import { GoogleWizard } from "@/components/settings/google-wizard";
 import { getEnvPresence } from "./google-actions";
 
@@ -49,20 +49,33 @@ export default async function ConnectGooglePage({
   if (!user) return null; // layout already rendered NotProvisioned
   const { connected, googleError } = await searchParams;
 
-  // listCredentials can fail transiently; a failure must not crash the page,
-  // so treat it as "not connected yet" and let the user retry by re-opening.
-  const rows = await listCredentials(user).catch(() => []);
-  const googleConnected = rows.some((r) => r.provider === "google");
+  // Ask the table the OAuth flow actually writes. This used to check the
+  // `credentials` table, which nothing in the flow touches, so a successful
+  // connect left the step permanently unchecked while the banner said it had
+  // worked. A transient failure must not crash the page, so it degrades to
+  // "not connected" and the user can retry by re-opening.
+  const account = await getMailAccount(user).catch(() => null);
+  const googleConnected = account !== null;
 
   const presence = await getEnvPresence();
-  // The consent flow is available when the route's own preconditions hold:
-  // /api/google/start needs a client id to build the URL, TRACKER_SECRET to
-  // sign the state, and a site origin for the redirect URI. Checking them here
-  // means the button is disabled with a reason instead of bouncing the user
-  // through a redirect that fails at the far end.
-  const routeWired = Boolean(
-    process.env.GMAIL_CLIENT_ID && process.env.TRACKER_SECRET && convexSiteOrigin(),
-  );
+
+  // Whether the consent flow can run, and if not, exactly what is missing.
+  //
+  // Every input is read from where it actually lives: the client id from the
+  // Convex deployment (the wizard's step 4 writes it there), the shared secret
+  // under its WEB name CONVEX_SECRET, and the site origin from config. The
+  // previous version read GMAIL_CLIENT_ID and TRACKER_SECRET from this server's
+  // env - neither of which is set here - so it was false on every deployment
+  // and the feature was unreachable with no explanation.
+  const oauth = await getOAuthConfig().catch(() => null);
+  const site = convexSiteOrigin();
+  const routeBlockers = [
+    !oauth && "the Convex deployment is unreachable",
+    ...(oauth?.missing ?? []).map((m) => `${m} on the deployment`),
+    !process.env.CONVEX_SECRET && "CONVEX_SECRET on the web server",
+    !site && "CONVEX_SITE_URL on the web server",
+  ].filter((x): x is string => typeof x === "string");
+  const routeWired = routeBlockers.length === 0;
 
   // The wizard's write steps change deployment-wide vars, so they are gated on
   // admin membership for the display AND re-checked inside each server action.
@@ -75,7 +88,8 @@ export default async function ConnectGooglePage({
       googleConnected={googleConnected}
       adminAvailable={Boolean(process.env.CONVEX_ADMIN_KEY)}
       routeWired={routeWired}
-      connectedEmail={connected}
+      routeBlockers={routeBlockers}
+      connectedEmail={connected ?? account?.email}
       oauthError={googleError}
       admin={admin}
     />

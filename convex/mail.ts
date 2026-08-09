@@ -94,6 +94,86 @@ export const getMailSyncStatus = query({
   },
 });
 
+/**
+ * What the web app needs to start a consent flow, read from the deployment
+ * that actually holds it.
+ *
+ * The client id lives on the CONVEX deployment - the wizard's own step 4 writes
+ * it there. The web server reading `process.env.GMAIL_CLIENT_ID` was the bug
+ * that made the wizard unable to satisfy its own precondition: the value it had
+ * just saved was in a different process. The id is not a secret (it is public
+ * in the consent URL), so returning it is safe; the client SECRET never leaves
+ * the deployment.
+ */
+export const getOAuthConfig = query({
+  args: { secret: v.string() },
+  handler: async (_ctx, { secret }) => {
+    checkSecret(secret);
+    return {
+      clientId: process.env.GMAIL_CLIENT_ID ?? null,
+      // Named individually so the wizard can say WHICH one is missing rather
+      // than collapsing three causes into "this feature was never built".
+      missing: [
+        !process.env.GMAIL_CLIENT_ID && "GMAIL_CLIENT_ID",
+        !process.env.GMAIL_CLIENT_SECRET && "GMAIL_CLIENT_SECRET",
+        !process.env.CREDENTIALS_KEY && "CREDENTIALS_KEY",
+      ].filter((x): x is string => typeof x === "string"),
+    };
+  },
+});
+
+/** The user's connected mailbox, or null. This is the table completeOAuth
+ *  actually writes - the wizard used to ask the `credentials` table, which
+ *  nothing in the OAuth path touches, so a successful connect never showed. */
+export const getMailAccount = query({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    return row ? { email: row.email, lastError: row.lastError ?? null } : null;
+  },
+});
+
+/** Record a started flow so the callback can spend it exactly once. */
+export const registerOAuthNonce = mutation({
+  args: { nonce: v.string(), user: v.string(), expiresAt: v.number(), secret: v.string() },
+  handler: async (ctx, { nonce, user, expiresAt, secret }) => {
+    checkSecret(secret);
+    await ctx.db.insert("oauthNonces", { nonce, user, expiresAt });
+    // Opportunistic sweep: these are short-lived and low-volume, so cleaning up
+    // on write avoids needing a cron just for them.
+    const stale = await ctx.db.query("oauthNonces").take(50);
+    const now = Date.now();
+    for (const row of stale) {
+      if (row.expiresAt <= now) await ctx.db.delete(row._id);
+    }
+  },
+});
+
+/**
+ * Spend a nonce. Returns false if it is unknown, expired, or belongs to a
+ * different user - all of which mean "do not proceed".
+ *
+ * Deleting before the token exchange rather than after is deliberate: a
+ * failed exchange should not leave a replayable state behind, and the user can
+ * simply start the flow again.
+ */
+export const consumeOAuthNonce = internalMutation({
+  args: { nonce: v.string(), user: v.string() },
+  handler: async (ctx, { nonce, user }) => {
+    const row = await ctx.db
+      .query("oauthNonces")
+      .withIndex("by_nonce", (q) => q.eq("nonce", nonce))
+      .first();
+    if (!row) return false;
+    await ctx.db.delete(row._id);
+    return row.user === user && row.expiresAt > Date.now();
+  },
+});
+
 // Register (or refresh) a user's Gmail account. Upserts by user so re-running
 // idempotently; a refresh keeps the OAuth refresh token in sync and clears any
 // prior error so a healthy config isn't masked by a stale one.
@@ -233,8 +313,18 @@ export const storeMailAccount = internalMutation({
       await ctx.db.insert("mailAccounts", { user, email, refreshToken, refreshTokenIv });
     }
     // Kick the (idempotent) watch setup right away so a freshly configured
-    // account starts receiving pushes without waiting for the daily cron.
-    await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
+    // account starts receiving pushes without waiting for the daily cron -
+    // but only once there is a topic to point it at. In the wizard the mailbox
+    // is connected at step 5 and the Pub/Sub topic is not collected until step
+    // 6, so arming unconditionally stamped "gmail watch failed: 400" onto the
+    // row seconds after telling the user they were connected. Step 6 arms it.
+    if (process.env.MAIL_PUBSUB_TOPIC) {
+      await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
+    } else {
+      console.log(
+        "mailbox connected but MAIL_PUBSUB_TOPIC is not set - skipping watch until push is configured",
+      );
+    }
   },
 });
 

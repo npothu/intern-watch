@@ -13,7 +13,7 @@ const OTHER = "a-different-secret";
 
 describe("oauth state: signing", () => {
   test("a state signed here verifies here", async () => {
-    const s = newState("nathan", "https://app.example.com");
+    const s = newState("nathan", "https://app.example.com", "https://x.convex.site/gmail/callback");
     const signed = await signState(SECRET, s);
     await expect(verifyState(SECRET, signed)).resolves.toEqual(s);
   });
@@ -22,19 +22,19 @@ describe("oauth state: signing", () => {
     // This is the real production path: the Next route signs, the Convex
     // httpAction verifies. If the two copies drift, this fails here rather
     // than as an unexplained "invalid or expired link" in someone's browser.
-    const s = webNewState("nathan", "https://app.example.com");
+    const s = webNewState("nathan", "https://app.example.com", "https://x.convex.site/gmail/callback");
     const signed = await webSignState(SECRET, s);
     await expect(verifyState(SECRET, signed)).resolves.toEqual(s);
   });
 
   test("both copies produce byte-identical output for the same input", async () => {
-    const s = { user: "u", origin: "https://x.test", nonce: "n", exp: 1 };
+    const s = { user: "u", origin: "https://x.test", redirectUri: "https://x.convex.site/gmail/callback", nonce: "n", exp: 1 };
     expect(await webSignState(SECRET, s)).toBe(await signState(SECRET, s));
   });
 
   test("the mirrors agree on the TTL", async () => {
-    const a = newState("u", "https://x.test", 1000);
-    const b = webNewState("u", "https://x.test", 1000);
+    const a = newState("u", "https://x.test", "https://x.convex.site/gmail/callback", 1000);
+    const b = webNewState("u", "https://x.test", "https://x.convex.site/gmail/callback", 1000);
     expect(a.exp).toBe(b.exp);
     expect(a.exp).toBe(1000 + STATE_TTL_MS);
   });
@@ -42,14 +42,14 @@ describe("oauth state: signing", () => {
 
 describe("oauth state: rejection", () => {
   test("a different secret does not verify", async () => {
-    const signed = await signState(SECRET, newState("nathan", "https://app.example.com"));
+    const signed = await signState(SECRET, newState("nathan", "https://app.example.com", "https://x.convex.site/gmail/callback"));
     await expect(verifyState(OTHER, signed)).resolves.toBeNull();
   });
 
   test("tampering with the user is rejected", async () => {
     // The attack this defends against: swapping the user so a mailbox is
     // grafted onto someone else's account.
-    const signed = await signState(SECRET, newState("victim", "https://app.example.com"));
+    const signed = await signState(SECRET, newState("victim", "https://app.example.com", "https://x.convex.site/gmail/callback"));
     const [payload, sig] = signed.split(".");
     const decoded = JSON.parse(
       Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(),
@@ -63,7 +63,7 @@ describe("oauth state: rejection", () => {
   test("tampering with the return origin is rejected", async () => {
     // The origin rides inside the signature precisely so this cannot become an
     // open redirect.
-    const signed = await signState(SECRET, newState("nathan", "https://app.example.com"));
+    const signed = await signState(SECRET, newState("nathan", "https://app.example.com", "https://x.convex.site/gmail/callback"));
     const [payload, sig] = signed.split(".");
     const decoded = JSON.parse(
       Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(),
@@ -74,7 +74,7 @@ describe("oauth state: rejection", () => {
   });
 
   test("an expired state is rejected", async () => {
-    const s = newState("nathan", "https://app.example.com", 0);
+    const s = newState("nathan", "https://app.example.com", "https://x.convex.site/gmail/callback", 0);
     const signed = await signState(SECRET, s);
     await expect(verifyState(SECRET, signed, STATE_TTL_MS + 1)).resolves.toBeNull();
     // ...and is still good just before it lapses.

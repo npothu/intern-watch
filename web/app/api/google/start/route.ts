@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveTrackerUser } from "@/lib/user";
 import { newState, signState } from "@/lib/oauth-state";
+import { getOAuthConfig, registerOAuthNonce } from "@/lib/convex";
 
 /**
  * Start the Google consent flow for the signed-in user.
@@ -53,27 +54,52 @@ export async function GET(req: Request) {
     });
   }
 
-  const clientId = process.env.GMAIL_CLIENT_ID;
-  const secret = process.env.TRACKER_SECRET;
-  if (!clientId) {
-    return backToWizard(req, {
-      googleError: "GMAIL_CLIENT_ID is not set on the web server.",
-    });
-  }
+  // The shared secret is called CONVEX_SECRET here. TRACKER_SECRET is its name
+  // on the CONVEX deployment and is never set on this server - reading that
+  // name made this route unreachable on every correctly configured deployment.
+  const secret = process.env.CONVEX_SECRET;
   if (!secret) {
     return backToWizard(req, {
-      googleError: "TRACKER_SECRET is not set on the web server.",
+      googleError: "CONVEX_SECRET is not set on the web server.",
     });
   }
 
-  const state = await signState(
-    secret,
-    newState(user, new URL(req.url).origin),
-  );
+  // The client id comes from the Convex deployment, which is where the wizard's
+  // step 4 writes it. Reading process.env here meant the wizard could never
+  // satisfy its own precondition: the value it had just saved lived in a
+  // different process.
+  const config = await getOAuthConfig().catch(() => null);
+  if (!config?.clientId) {
+    return backToWizard(req, {
+      googleError: config
+        ? `Not configured on the deployment yet: ${config.missing.join(", ")}.`
+        : "Could not reach the Convex deployment to read the Google client id.",
+    });
+  }
+
+  const redirectUri = `${site}/gmail/callback`;
+  // APP_ORIGIN over the request's own Host header: the Host is attacker
+  // influenceable, and this origin ends up inside a state WE sign and is then
+  // used as a redirect target by the callback. Pinning it keeps a forged Host
+  // from turning our signature into an endorsement of someone else's domain.
+  const appOrigin = process.env.APP_ORIGIN?.replace(/\/+$/, "") || new URL(req.url).origin;
+
+  const state = newState(user, appOrigin, redirectUri);
+  // Register before redirecting so the callback can spend it exactly once.
+  // If this fails the flow must not start - an unregistered nonce would be
+  // rejected at the far end anyway, and failing here says why.
+  try {
+    await registerOAuthNonce(state.nonce, user, state.exp);
+  } catch {
+    return backToWizard(req, {
+      googleError: "Could not start the sign-in flow. Try again.",
+    });
+  }
+  const signed = await signState(secret, state);
 
   const auth = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  auth.searchParams.set("client_id", clientId);
-  auth.searchParams.set("redirect_uri", `${site}/gmail/callback`);
+  auth.searchParams.set("client_id", config.clientId);
+  auth.searchParams.set("redirect_uri", redirectUri);
   auth.searchParams.set("response_type", "code");
   auth.searchParams.set("scope", SCOPE);
   // offline + consent together are what actually yield a refresh token: Google
@@ -82,7 +108,7 @@ export async function GET(req: Request) {
   auth.searchParams.set("access_type", "offline");
   auth.searchParams.set("prompt", "consent");
   auth.searchParams.set("include_granted_scopes", "true");
-  auth.searchParams.set("state", state);
+  auth.searchParams.set("state", signed);
 
   return NextResponse.redirect(auth.toString());
 }
