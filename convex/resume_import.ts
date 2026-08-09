@@ -21,6 +21,7 @@ export type ExtractedRun = {
   text: string;
   bold: boolean;
   italics: boolean;
+  url?: string;
 };
 
 export type ExtractedLine = {
@@ -58,6 +59,8 @@ export type ImportSectionSummary = {
 export type ValidatedImport = {
   profile: ProfileV2;
   mappings: ImportLineMapping[];
+  fullyMappedLines: { id: string; text: string }[];
+  partialMappedLines: { id: string; text: string; droppedText: string }[];
   unmappedLines: { id: string; text: string }[];
   sections: ImportSectionSummary[];
 };
@@ -92,7 +95,15 @@ function decodeXml(text: string): string {
     if (numeric) {
       const radix = numeric[0].toLowerCase() === "x" ? 16 : 10;
       const value = Number.parseInt(radix === 16 ? numeric.slice(1) : numeric, radix);
-      return Number.isFinite(value) ? String.fromCodePoint(value) : whole;
+      if (
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value > 0x10ffff ||
+        (value >= 0xd800 && value <= 0xdfff)
+      ) {
+        throw new Error("Invalid XML numeric entity.");
+      }
+      return String.fromCodePoint(value);
     }
     return XML_ENTITIES[String(named).toLowerCase()] ?? whole;
   });
@@ -164,7 +175,7 @@ function numericAttribute(xml: string, name: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-function extractRun(runXml: string): ExtractedRun {
+function extractRun(runXml: string, url?: string): ExtractedRun {
   const properties = runXml.match(/<w:rPr\b[\s\S]*?<\/w:rPr>/i)?.[0] ?? "";
   const parts: string[] = [];
   const contentPattern = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/?\s*>|<w:br\b[^>]*\/?\s*>/gi;
@@ -177,17 +188,63 @@ function extractRun(runXml: string): ExtractedRun {
     text: parts.join(""),
     bold: propertyEnabled(properties, "b"),
     italics: propertyEnabled(properties, "i"),
+    ...(url ? { url } : {}),
   };
 }
 
-export function extractDocxXml(xml: string): ExtractedLine[] {
+function relationshipAttribute(xml: string, name: string): string | undefined {
+  const pattern = new RegExp("\\b" + name + "\\s*=\\s*[\"']([^\"']+)[\"']", "i");
+  const match = xml.match(pattern);
+  return match ? decodeXml(match[1]) : undefined;
+}
+
+export function extractHyperlinkRelationships(xml: string): Map<string, string> {
+  const relationships = new Map<string, string>();
+  for (const match of xml.matchAll(/<Relationship\b[^>]*\/?\s*>/gi)) {
+    const relationship = match[0];
+    const type = relationshipAttribute(relationship, "Type");
+    const targetMode = relationshipAttribute(relationship, "TargetMode");
+    const id = relationshipAttribute(relationship, "Id");
+    const target = relationshipAttribute(relationship, "Target");
+    if (type?.endsWith("/hyperlink") && targetMode === "External" && id && target) {
+      relationships.set(id, target);
+    }
+  }
+  return relationships;
+}
+
+function paragraphRuns(
+  paragraph: string,
+  hyperlinks: ReadonlyMap<string, string>,
+): ExtractedRun[] {
+  const runs: ExtractedRun[] = [];
+  const nodes = paragraph.matchAll(
+    /<w:hyperlink\b[\s\S]*?<\/w:hyperlink>|<w:r\b[\s\S]*?<\/w:r>/gi,
+  );
+  for (const match of nodes) {
+    const node = match[0];
+    if (/^<w:hyperlink\b/i.test(node)) {
+      const relationshipId = relationshipAttribute(node, "r:id");
+      const url = relationshipId ? hyperlinks.get(relationshipId) : undefined;
+      for (const run of node.matchAll(/<w:r\b[\s\S]*?<\/w:r>/gi)) {
+        runs.push(extractRun(run[0], url));
+      }
+    } else {
+      runs.push(extractRun(node));
+    }
+  }
+  return runs.filter((run) => run.text.length > 0);
+}
+
+export function extractDocxXml(
+  xml: string,
+  hyperlinks: ReadonlyMap<string, string> = new Map(),
+): ExtractedLine[] {
   const paragraphs = [...xml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/gi)];
   return paragraphs.map((paragraphMatch, index) => {
     const paragraph = paragraphMatch[0];
     const properties = paragraph.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/i)?.[0] ?? "";
-    const runs = [...paragraph.matchAll(/<w:r\b[\s\S]*?<\/w:r>/gi)]
-      .map((match) => extractRun(match[0]))
-      .filter((run) => run.text.length > 0);
+    const runs = paragraphRuns(paragraph, hyperlinks);
     const visibleRuns = runs.filter((run) => run.text.replace(/[\t\n]/g, "").length > 0);
     const text = runs.map((run) => run.text).join("");
     const indent = properties.match(/<w:ind\b[^>]*\/?\s*>/i)?.[0] ?? "";
@@ -210,6 +267,22 @@ export function extractDocxXml(xml: string): ExtractedLine[] {
       hanging,
     };
   });
+}
+
+function declaredDocumentXmlSize(documentFile: JSZip.JSZipObject): number {
+  // JSZip 3.10.1 has no supported public uncompressed-size field, so keep the
+  // private access here as a single upgrade audit point for the pre-decompression guard.
+  const declaredSize = (
+    documentFile as unknown as { _data?: { uncompressedSize?: unknown } }
+  )._data?.uncompressedSize;
+  if (
+    typeof declaredSize !== "number" ||
+    !Number.isSafeInteger(declaredSize) ||
+    declaredSize <= 0
+  ) {
+    throw new Error("This DOCX file is damaged or is not a valid Word document.");
+  }
+  return declaredSize;
 }
 
 export async function extractResume(
@@ -250,18 +323,48 @@ export async function extractResume(
   if (!documentFile) {
     throw new Error("This DOCX file does not contain word/document.xml.");
   }
-  const metadata = documentFile as unknown as {
-    _data?: { uncompressedSize?: number };
-  };
-  if ((metadata._data?.uncompressedSize ?? 0) > MAX_DOCUMENT_XML_BYTES) {
+  if (declaredDocumentXmlSize(documentFile) > MAX_DOCUMENT_XML_BYTES) {
     throw new Error("This DOCX contains too much document content to import safely.");
   }
-  const xmlBytes = await documentFile.async("uint8array");
+  let xmlBytes: Uint8Array;
+  try {
+    xmlBytes = await documentFile.async("uint8array");
+  } catch {
+    throw new Error("This DOCX file is damaged or is not a valid Word document.");
+  }
   if (xmlBytes.byteLength > MAX_DOCUMENT_XML_BYTES) {
     throw new Error("This DOCX contains too much document content to import safely.");
   }
-  const xml = new TextDecoder("utf-8", { fatal: true }).decode(xmlBytes);
-  return { format, filename: file.filename, lines: extractDocxXml(xml) };
+  // Hyperlink targets live in a SEPARATE part: document.xml carries only an
+  // r:id, and the URL it points at is in word/_rels/document.xml.rels. Without
+  // reading it every link resolves to undefined, and since header links[].url
+  // is a required non-empty string the model is then forced to either drop the
+  // links or invent URLs - so a resume this app produced loses its real
+  // LinkedIn and GitHub addresses on re-import.
+  //
+  // Absence is not an error: a resume with no links has no rels entry for one,
+  // and a malformed rels part should cost the URLs, not the whole import.
+  let hyperlinks = new Map<string, string>();
+  const relsFile = zip.file("word/_rels/document.xml.rels");
+  if (relsFile) {
+    try {
+      const relsBytes = await relsFile.async("uint8array");
+      if (relsBytes.byteLength <= MAX_DOCUMENT_XML_BYTES) {
+        hyperlinks = extractHyperlinkRelationships(
+          new TextDecoder("utf-8", { fatal: true }).decode(relsBytes),
+        );
+      }
+    } catch {
+      // Keep the empty map and carry on.
+    }
+  }
+
+  try {
+    const xml = new TextDecoder("utf-8", { fatal: true }).decode(xmlBytes);
+    return { format, filename: file.filename, lines: extractDocxXml(xml, hyperlinks) };
+  } catch {
+    throw new Error("This DOCX file is damaged or is not a valid Word document.");
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -545,16 +648,35 @@ function stringLeaves(value: unknown): string[] {
   return [];
 }
 
-function tokens(value: string): string[] {
-  return value.normalize("NFKD").toLowerCase().match(/[a-z0-9]+/g) ?? [];
+type ContentToken = { normalized: string; source: string };
+
+function contentTokens(value: string): ContentToken[] {
+  return [...value.matchAll(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu)].map((match) => ({
+    normalized: match[0].normalize("NFKC").toLocaleLowerCase(),
+    source: match[0],
+  }));
 }
 
-function mappingAccountsForLine(line: ExtractedLine, targets: string[]): boolean {
-  const source = tokens(line.text);
-  if (source.length === 0) return true;
-  const target = new Set(tokens(targets.join(" ")));
-  const matched = source.filter((token) => target.has(token)).length;
-  return matched >= Math.max(1, Math.ceil(source.length / 2));
+function mappingCoverage(
+  line: ExtractedLine,
+  targets: string[],
+): { matched: number; droppedTokens: string[] } {
+  const targetCounts = new Map<string, number>();
+  for (const token of contentTokens(targets.join(" "))) {
+    targetCounts.set(token.normalized, (targetCounts.get(token.normalized) ?? 0) + 1);
+  }
+  let matched = 0;
+  const droppedTokens: string[] = [];
+  for (const token of contentTokens(line.text)) {
+    const remaining = targetCounts.get(token.normalized) ?? 0;
+    if (remaining > 0) {
+      matched += 1;
+      targetCounts.set(token.normalized, remaining - 1);
+    } else {
+      droppedTokens.push(token.source);
+    }
+  }
+  return { matched, droppedTokens };
 }
 
 function validJsonPointer(pointer: string): boolean {
@@ -629,23 +751,39 @@ export function validateModelOutput(
   if (errors.length || !profileResult.ok) return { ok: false, errors };
 
   const mappingsById = new Map(mappings.map((mapping) => [mapping.lineId, mapping]));
-  const unmappedLines = extraction.lines
-    .filter((line) => line.text.trim())
-    .filter((line) => {
-      const mapping = mappingsById.get(line.id);
-      if (!mapping) return true;
-      const targets = mapping.targetPaths.flatMap((pointer) =>
-        stringLeaves(resolvePointer(profileResult.profile, pointer)),
-      );
-      return !mappingAccountsForLine(line, targets);
-    })
-    .map(({ id, text: lineText }) => ({ id, text: lineText }));
+  const fullyMappedLines: ValidatedImport["fullyMappedLines"] = [];
+  const partialMappedLines: ValidatedImport["partialMappedLines"] = [];
+  const unmappedLines: ValidatedImport["unmappedLines"] = [];
+  for (const line of extraction.lines.filter((item) => item.text.trim())) {
+    const mapping = mappingsById.get(line.id);
+    if (!mapping) {
+      unmappedLines.push({ id: line.id, text: line.text });
+      continue;
+    }
+    const targets = mapping.targetPaths.flatMap((pointer) =>
+      stringLeaves(resolvePointer(profileResult.profile, pointer)),
+    );
+    const coverage = mappingCoverage(line, targets);
+    if (coverage.droppedTokens.length === 0) {
+      fullyMappedLines.push({ id: line.id, text: line.text });
+    } else if (coverage.matched === 0) {
+      unmappedLines.push({ id: line.id, text: line.text });
+    } else {
+      partialMappedLines.push({
+        id: line.id,
+        text: line.text,
+        droppedText: coverage.droppedTokens.join(" "),
+      });
+    }
+  }
 
   return {
     ok: true,
     value: {
       profile: profileResult.profile,
       mappings,
+      fullyMappedLines,
+      partialMappedLines,
       unmappedLines,
       sections: profileResult.profile.sections.map((section) => ({
         id: section.id,

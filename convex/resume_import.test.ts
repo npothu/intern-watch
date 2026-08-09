@@ -2,6 +2,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { Packer } from "docx";
+import JSZip from "jszip";
 import { composeResumeDoc } from "./resume_docx";
 import type { ProfileV2 } from "./profile_schema";
 import {
@@ -184,6 +185,39 @@ describe("resume import extraction", () => {
     });
   });
 
+  test("malformed numeric entities produce the friendly damaged-DOCX error", async () => {
+    const zip = new JSZip();
+    zip.file(
+      "word/document.xml",
+      '<w:document xmlns:w="urn:test"><w:body><w:p><w:r><w:t>&#x110000;</w:t></w:r></w:p></w:body></w:document>',
+    );
+    const bytes = await zip.generateAsync({ type: "uint8array" });
+
+    await expect(
+      extractResume(bytes, {
+        filename: "resume.docx",
+        contentType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+    ).rejects.toThrow("This DOCX file is damaged or is not a valid Word document.");
+  });
+
+  test("a missing declared document size fails closed before decompression", async () => {
+    const decompress = vi.fn().mockResolvedValue(new TextEncoder().encode("<w:document/>"));
+    vi.spyOn(JSZip, "loadAsync").mockResolvedValueOnce({
+      file: vi.fn().mockReturnValue({ async: decompress }),
+    } as unknown as JSZip);
+
+    await expect(
+      extractResume(new Uint8Array([0x50, 0x4b]), {
+        filename: "resume.docx",
+        contentType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+    ).rejects.toThrow("This DOCX file is damaged or is not a valid Word document.");
+    expect(decompress).not.toHaveBeenCalled();
+  });
+
   test("an app-produced DOCX round trips paragraph order and rendering signals", async () => {
     const docxProfile: ProfileV2 = {
       ...profile,
@@ -249,6 +283,27 @@ describe("resume import extraction", () => {
       result.lines.find((line) => line.text.includes("Built a reliable")),
     ).toMatchObject({ bullet: true, indentLeft: 720, hanging: 360 });
   });
+
+  test("app-produced DOCX hyperlinks retain their targets", async () => {
+    const linkedProfile: ProfileV2 = {
+      ...profile,
+      header: {
+        ...profile.header,
+        links: [{ text: "Portfolio", url: "https://example.com/portfolio" }],
+      },
+    };
+    const buffer = await Packer.toBuffer(composeResumeDoc(linkedProfile, { projects: [] }));
+
+    const result = await extractResume(new Uint8Array(buffer), {
+      filename: "Alex_Example.docx",
+      contentType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+
+    expect(
+      result.lines.flatMap((line) => line.runs).find((run) => run.text === "Portfolio"),
+    ).toMatchObject({ url: "https://example.com/portfolio" });
+  });
 });
 
 describe("resume import validation and mappings", () => {
@@ -306,6 +361,89 @@ describe("resume import validation and mappings", () => {
         { id: "experience", title: "Experience", kind: "experience", count: 1 },
         { id: "skills", title: "Skills", kind: "skills", count: 1 },
       ]);
+    }
+  });
+
+  test("a truncated mapped bullet is partial with its dropped content visible", () => {
+    const extraction = extracted("Built a reliable import pipeline with retries");
+    const truncatedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              bullets: { base: ["Built a reliable import pipeline"] },
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/bullets/base/0"],
+          },
+        ],
+        truncatedProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.partialMappedLines).toEqual([
+        {
+          id: "line-0001",
+          text: "Built a reliable import pipeline with retries",
+          droppedText: "with retries",
+        },
+      ]);
+      expect(result.value.unmappedLines).toEqual([]);
+    }
+  });
+
+  test("normalization-only differences are fully mapped", () => {
+    const extraction = extracted("Built, a Café / import pipeline");
+    const normalizedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              bullets: { base: ["BUILT  A CAFE\u0301 IMPORT PIPELINE"] },
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/bullets/base/0"],
+          },
+        ],
+        normalizedProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.fullyMappedLines).toEqual([
+        { id: "line-0001", text: "Built, a Café / import pipeline" },
+      ]);
+      expect(result.value.partialMappedLines).toEqual([]);
+      expect(result.value.unmappedLines).toEqual([]);
     }
   });
 
