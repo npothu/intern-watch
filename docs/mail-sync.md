@@ -58,6 +58,13 @@ Convex deployment env vars (Dashboard -> Settings -> Environment variables):
 `GEMINI_API_KEY` (optional - enables the queue-only LLM fallback, capped at
 20 calls/account/day).
 
+The web app's Google wizard (Settings -> Connections -> Connect Google) can
+write these same vars through the Convex management API, but only for users on
+the web service's `ADMIN_TRACKER_USERS` list (see `web/.env.example`): unset
+means single-user (the signed-in user is the admin), and once set only the
+listed tracker user keys can write. Those vars are deployment-wide, so they
+must not be changeable by every provisioned user.
+
 Deploy the backend (`npm run deploy`), then authorize locally:
 
 ```

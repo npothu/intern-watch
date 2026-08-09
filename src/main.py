@@ -687,12 +687,18 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         print(f"\n===== email for {name} (dry run) =====")
         print(f"Subject: {subject}\n\n{text_body}")
         return
-    smtp_user = os.environ.get(email_cfg.get("smtp_user_env", ""), "")
-    smtp_pass = os.environ.get(email_cfg.get("smtp_pass_env", ""), "")
+    smtp_user_env = email_cfg.get("smtp_user_env", "")
+    smtp_pass_env = email_cfg.get("smtp_pass_env", "")
+    smtp_user = os.environ.get(smtp_user_env, "")
+    smtp_pass = os.environ.get(smtp_pass_env, "")
     to_addr = email_cfg.get("to") or smtp_user
     if not smtp_user or not smtp_pass:
-        log.error("user %s: smtp env vars not set -- keeping %d item(s) in "
-                  "outbox", name, len(items))
+        missing = [n for n, v in ((smtp_user_env, smtp_user),
+                                  (smtp_pass_env, smtp_pass)) if not v]
+        log.error("user %s: email channel OFF -- %s not set; keeping %d "
+                  "item(s) in the outbox (set them as Actions secrets wired "
+                  "into watch.yml, or export locally)", name,
+                  ", ".join(missing), len(items))
         return
     attachments = []
     for item in items:
@@ -724,12 +730,16 @@ def _send_health_alert(name: str, email_cfg: dict, health: list[str],
         print(f"\n===== health alert for {name} (dry run) =====")
         print(f"Subject: {subject}\n\n{text_body}")
         return
-    smtp_user = os.environ.get(email_cfg.get("smtp_user_env", ""), "")
-    smtp_pass = os.environ.get(email_cfg.get("smtp_pass_env", ""), "")
+    smtp_user_env = email_cfg.get("smtp_user_env", "")
+    smtp_pass_env = email_cfg.get("smtp_pass_env", "")
+    smtp_user = os.environ.get(smtp_user_env, "")
+    smtp_pass = os.environ.get(smtp_pass_env, "")
     to_addr = email_cfg.get("to") or smtp_user
     if not smtp_user or not smtp_pass:
-        log.error("user %s: smtp env vars not set -- cannot send health alert",
-                  name)
+        missing = [n for n, v in ((smtp_user_env, smtp_user),
+                                  (smtp_pass_env, smtp_pass)) if not v]
+        log.error("user %s: email channel OFF -- %s not set; cannot send "
+                  "the health alert", name, ", ".join(missing))
         return
     if send_email(smtp_user, smtp_pass, to_addr, subject, html_body, text_body,
                   user=name):

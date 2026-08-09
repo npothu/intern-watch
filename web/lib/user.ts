@@ -50,3 +50,28 @@ export async function resolveTrackerUser(): Promise<string | null> {
   if (!email) return null;
   return trackerUserMap()[email] ?? null;
 }
+
+/**
+ * Whether the current request may write deployment-wide configuration (the
+ * Google wizard's GMAIL_* / MAIL_* env vars).
+ *
+ * Admins are ADMIN_TRACKER_USERS: a comma-separated list of tracker user keys,
+ * the same keys TRACKER_USER_MAP resolves. Passing the already-resolved key
+ * avoids a second Clerk lookup on the actions that already have it.
+ *
+ * UNSET deliberately means "everyone is an admin": a single-user deployment
+ * that never declares the list would otherwise dead-end its only user in the
+ * wizard, since that user IS the admin. The list being set is the deployment
+ * declaring itself multi-user, and from then on only listed keys can write.
+ */
+export async function isAdminUser(user: string | null = null): Promise<boolean> {
+  const raw = process.env.ADMIN_TRACKER_USERS;
+  if (!raw) return true; // single-user deployment - never lock the solo admin out
+  const admins = raw
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+  if (admins.length === 0) return true; // empty list -> treat as unset
+  const key = user ?? (await resolveTrackerUser());
+  return key !== null && admins.includes(key);
+}

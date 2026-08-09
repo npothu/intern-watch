@@ -4,7 +4,7 @@
  * provides Web Crypto (crypto.subtle), which every environment here runs, so
  * there is deliberately no "use node" directive and no node `crypto` - a pure
  * JS runtime can both encrypt (putCredential) and decrypt (testCredential /
- * getCredentialFields / resolveGeminiKey).
+ * getCredentialFields / resolveProviderKey).
  *
  * The key is a 32-byte value, base64, supplied by the CREDENTIALS_KEY env var.
  * Rotating CREDENTIALS_KEY invalidates every stored secret (GCM fails the
@@ -36,6 +36,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
+}
+
+/**
+ * The deployment's AES key. Throwing on an unset key is the only way to
+ * guarantee we never silently store or read plaintext with a bogus key.
+ * Lives here rather than in credentials.ts because mail.ts needs it too - the
+ * Gmail refresh token is encrypted with the same key.
+ */
+export function credentialsKey(): string {
+  const k = process.env.CREDENTIALS_KEY;
+  if (!k) throw new Error("CREDENTIALS_KEY is not set on this deployment");
+  return k;
 }
 
 /** AES-256-GCM. The key is a 32-byte value, base64, from the CREDENTIALS_KEY env var. */

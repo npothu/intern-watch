@@ -604,7 +604,10 @@ class ConvexStore:
                          refresh_token: str) -> None:
         """Store the user's Gmail OAuth refresh token (only reachable through
         this Convex driver; used by the mail-auth setup CLI)."""
-        self._post("mutation", "setMailAccount",
+        # An action, not a mutation: the backend encrypts the token before
+        # storing it, and generating the AES IV needs randomness that only an
+        # action may use.
+        self._post("action", "setMailAccount",
                    {"user": user, "email": email,
                     "refreshToken": refresh_token, "secret": self.secret},
                    module="mail")

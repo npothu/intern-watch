@@ -107,6 +107,8 @@ def tailor(plan: ResumePlan, jd_text: str, llm_cfg: dict) -> ResumePlan:
     key_env = api_key_env_for(llm_cfg)
     api_key = os.environ.get(key_env)
     if not api_key:
+        log.info("resume tailor: LLM OFF - set %s to enable bullet rewriting; "
+                 "deterministic bullets used", key_env)
         plan.notes.append(f"llm: {key_env} not set, deterministic bullets used")
         return plan
     model = llm_cfg.get("model") or DEFAULT_MODEL[provider]

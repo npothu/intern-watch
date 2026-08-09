@@ -27,7 +27,8 @@ def _valid_user() -> dict:
             {"when": {"term": ["Fall 2026"]},
              "accept_if_any": [{"company_in_file": "data/top_companies.txt"}]},
         ],
-        "llm": {"provider": "gemini", "api_key_env": "GEMINI_API_KEY"},
+        "llm": {"enabled": True, "provider": "gemini",
+                "api_key_env": "GEMINI_API_KEY"},
         "resume_build": {"enabled": True, "modes": ["commit", "email"]},
     }
 
@@ -162,3 +163,114 @@ def test_apply_subsystem_yaml_is_skipped(tmp_path):
 def test_main_against_real_repo_passes():
     """The shipped users/example.yaml + watch.yml must validate clean."""
     assert cc.main([str(ROOT)]) == 0
+
+
+# ---- feature status report ------------------------------------------------
+
+# Every env var the feature report reads; tests wipe these so a dev machine
+# with a populated shell/.env can't leak into hermetic assertions.
+_FEATURE_ENV = [
+    "STORE", "CONVEX_URL", "CONVEX_SECRET",
+    "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD",
+    "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
+    "DISCORD_WEBHOOK_TESTER",
+    "JOBRIGHT_EMAIL", "JOBRIGHT_PASSWORD",
+    "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID",
+    "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET",
+]
+
+
+def _wash(monkeypatch) -> None:
+    for v in _FEATURE_ENV:
+        monkeypatch.delenv(v, raising=False)
+
+
+def _features(tmp_path, monkeypatch, **env):
+    _wash(monkeypatch)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    root = _make_repo(tmp_path, _valid_user())
+    return cc.check_features(root / "users",
+                             root / ".github" / "workflows" / "watch.yml",
+                             root=root)
+
+
+def test_required_features_report_enabled_when_set(tmp_path, monkeypatch):
+    feats = _features(tmp_path, monkeypatch, GMAIL_ADDRESS="u@x.co",
+                      GMAIL_APP_PASSWORD="p", GEMINI_API_KEY="k")
+    req = [f for f in feats if f.tier == cc.REQUIRED]
+    assert {f.name for f in req} == {"store", "email digest",
+                                     "llm classifier"}
+    assert all(f.enabled for f in req), [(f.name, f.missing) for f in req]
+    # optional rows are still listed, never asserted on -- a bare watcher
+    # really is enough for the preflight to be green.
+    assert any(f.name == "auto-apply" and not f.enabled for f in feats)
+
+
+def test_required_features_report_missing_vars(tmp_path, monkeypatch):
+    feats = _features(tmp_path, monkeypatch)  # none of the vars set
+    by_name = {f.name: f for f in feats}
+    assert not by_name["email digest"].enabled
+    assert set(by_name["email digest"].missing) == {
+        "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD"}
+    assert not by_name["llm classifier"].enabled
+    assert by_name["llm classifier"].missing == ["GEMINI_API_KEY"]
+    assert by_name["store"].enabled  # github driver needs nothing
+
+
+def test_render_features_says_which_vars_to_set(tmp_path, monkeypatch):
+    feats = _features(tmp_path, monkeypatch)
+    blob = cc.render_features(feats)
+    assert "required features: 1/3 ready" in blob
+    assert "email digest: add GMAIL_ADDRESS, GMAIL_APP_PASSWORD" in blob
+    assert "llm classifier: add GEMINI_API_KEY" in blob
+
+
+def test_optional_features_report_disabled_without_failing(tmp_path, monkeypatch):
+    """jobright / Browserbase are not set anywhere: the corresponding rows say
+    DISABLED with the exact vars, but main() still exits 0 (wiring is fine)."""
+    root = _make_repo(tmp_path, _valid_user())
+    _wash(monkeypatch)
+    feats = cc.check_features(root / "users",
+                              root / ".github" / "workflows" / "watch.yml",
+                              root=root)
+    jr = next(f for f in feats if f.name == "jobright resolution")
+    assert not jr.enabled
+    assert set(jr.missing) == {"JOBRIGHT_EMAIL", "JOBRIGHT_PASSWORD"}
+    assert cc.main([str(root)]) == 0
+
+
+def test_main_exits_zero_on_fresh_checkout_without_secrets(tmp_path, monkeypatch):
+    """CI runs `python -m src.config_check` before pytest with no secrets in
+    the process env (they only exist inside the watch job). The exit code must
+    ride on config + wiring, never on local secret presence."""
+    root = _make_repo(tmp_path, _valid_user())
+    _wash(monkeypatch)
+    assert cc.main([str(root)]) == 0
+
+
+def test_unknown_store_value_fails(tmp_path, monkeypatch, capsys):
+    root = _make_repo(tmp_path, _valid_user())
+    _wash(monkeypatch)
+    monkeypatch.setenv("STORE", "bogus")
+    assert cc.main([str(root)]) == 1
+    assert "unknown STORE='bogus'" in capsys.readouterr().out
+
+
+def test_store_convex_requires_convex_wiring(tmp_path, monkeypatch):
+    root = _make_repo(tmp_path, _valid_user())  # watch.yml: no CONVEX lines
+    _wash(monkeypatch)
+    monkeypatch.setenv("STORE", "convex")
+    monkeypatch.setenv("CONVEX_URL", "https://x.convex.cloud")
+    monkeypatch.setenv("CONVEX_SECRET", "s")
+    assert cc.main([str(root)]) == 1  # secrets set but not wired -> fail
+
+    # Same thing with CONVEX_URL/CONVEX_SECRET wired: green.
+    _write_watch(root / ".github" / "workflows" / "watch.yml",
+                 ["GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "GEMINI_API_KEY",
+                  "CONVEX_URL", "CONVEX_SECRET"])
+    _wash(monkeypatch)
+    monkeypatch.setenv("STORE", "convex")
+    monkeypatch.setenv("CONVEX_URL", "https://x.convex.cloud")
+    monkeypatch.setenv("CONVEX_SECRET", "s")
+    assert cc.main([str(root)]) == 0

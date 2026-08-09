@@ -512,3 +512,43 @@ export async function deleteCredential(
     "credentials"
   );
 }
+
+/** Whether mail-sync is configured on this deployment. It is opt-in: a
+ *  deployment that never sets it up should say so, not show a dead feature. */
+export type MailSyncStatus = { enabled: boolean; missing: string[] };
+
+export async function getMailSyncStatus(): Promise<MailSyncStatus> {
+  const value = await post("query", "getMailSyncStatus", {}, "mail");
+  return value as MailSyncStatus;
+}
+
+/** The user's resume-model preference plus today's shared-key usage. Contains
+ *  no secret - the optional API key behind a choice lives in `credentials`. */
+export type ResumeLlm = {
+  /** null means "whatever the operator provides" - the default for everyone. */
+  provider: string | null;
+  model: string | null;
+  defaultProvider: string;
+  defaultModel: string;
+  dailyCap: number;
+  usedToday: number;
+};
+
+export async function getResumeLlm(user: string): Promise<ResumeLlm> {
+  const value = await post("query", "getResumeLlm", { user }, "settings");
+  return value as ResumeLlm;
+}
+
+/** Save the resume-model preference. An empty provider resets to the default. */
+export async function setResumeLlm(
+  user: string,
+  provider: string | null,
+  model: string | null
+): Promise<void> {
+  await post(
+    "mutation",
+    "setResumeLlm",
+    { user, provider: provider ?? undefined, model: model ?? undefined },
+    "settings"
+  );
+}

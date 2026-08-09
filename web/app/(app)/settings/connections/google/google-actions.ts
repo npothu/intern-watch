@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { resolveTrackerUser } from "@/lib/user";
+import { isAdminUser, resolveTrackerUser } from "@/lib/user";
 import { getInboxActions } from "@/lib/convex";
 import { setDeploymentEnv } from "@/lib/convex-admin";
 
@@ -10,7 +10,21 @@ import { setDeploymentEnv } from "@/lib/convex-admin";
  * env vars through the allowlisted management client (never direct process.env
  * writes), and every mutation re-reads the resulting presence so the UI can
  * advance based on real server state rather than the checkbox's word.
+ *
+ * The env writes are deployment-wide - one user saving them sets them for every
+ * user - so each writer re-checks admin status server-side. The UI also hides
+ * the controls for non-admins, but never trusts that: a direct call to these
+ * actions must fail the same way.
  */
+
+/** Shared guard for the three deployment-writing actions. */
+async function requireAdminWrite(user: string | null): Promise<string | null> {
+  if (!user) return "Not signed in, or this account isn't provisioned.";
+  if (!(await isAdminUser(user))) {
+    return "Only an administrator can change the deployment's Google configuration.";
+  }
+  return null;
+}
 
 export type ActionResult =
   | { ok: true; detail?: string; presence?: EnvPresence }
@@ -51,7 +65,8 @@ export async function saveClientCredentials(
   clientSecret: string
 ): Promise<ActionResult> {
   const user = await requireUser();
-  if (!user) return { ok: false, error: "Not signed in, or this account isn't provisioned." };
+  const denied = await requireAdminWrite(user);
+  if (denied) return { ok: false, error: denied };
   try {
     await setDeploymentEnv({
       GMAIL_CLIENT_ID: clientId,
@@ -67,7 +82,8 @@ export async function saveClientCredentials(
 /** Step 6: save the generated push token to the deployment. */
 export async function savePushToken(token: string): Promise<ActionResult> {
   const user = await requireUser();
-  if (!user) return { ok: false, error: "Not signed in, or this account isn't provisioned." };
+  const denied = await requireAdminWrite(user);
+  if (denied) return { ok: false, error: denied };
   try {
     await setDeploymentEnv({ MAIL_PUSH_TOKEN: token });
     revalidatePath("/settings/connections");
@@ -83,7 +99,8 @@ export async function savePubSubTopic(topic: string): Promise<ActionResult> {
     return { ok: false, error: "Topic can't be empty." };
   }
   const user = await requireUser();
-  if (!user) return { ok: false, error: "Not signed in, or this account isn't provisioned." };
+  const denied = await requireAdminWrite(user);
+  if (denied) return { ok: false, error: denied };
   try {
     await setDeploymentEnv({ MAIL_PUBSUB_TOPIC: topic.trim() });
     revalidatePath("/settings/connections");

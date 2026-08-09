@@ -1,4 +1,5 @@
 import {
+  action,
   internalAction,
   internalMutation,
   internalQuery,
@@ -10,6 +11,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { classifyReply, decideTransition, scoreCandidates, stripHtml } from "./classify";
+import { credentialsKey, decryptJson, encryptJson } from "./credentials_crypto";
 import { applyStatus } from "./ledger";
 
 // Gmail push -> mail-sync backend.
@@ -48,18 +50,85 @@ const VALID_STATUSES = [
 
 // -- mail accounts ----------------------------------------------------------
 
+/**
+ * Whether mail-sync is configured on this deployment.
+ *
+ * Mail-sync is OPT-IN, and deliberately so. Standing it up costs a Google
+ * Cloud project, an OAuth consent screen, a Pub/Sub topic and a public push
+ * URL - by far the biggest barrier to self-hosting this template, and the only
+ * reason a hosted instance runs into Google's 100-user cap and its annual
+ * security assessment for the restricted gmail.readonly scope. A deployment
+ * that skips it should get a watcher that works, not a broken-looking Inbox.
+ *
+ * The client id and secret are the minimum: without them no token can be
+ * refreshed, so nothing downstream can function.
+ */
+export function mailSyncEnabled(): boolean {
+  return Boolean(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET);
+}
+
+/** Public, non-secret: lets the web app say "off" instead of showing a
+ *  feature that silently never fires. */
+export const getMailSyncStatus = query({
+  args: { secret: v.string() },
+  handler: async (_ctx, { secret }) => {
+    checkSecret(secret);
+    return {
+      enabled: mailSyncEnabled(),
+      // Named so the UI can tell a self-hoster exactly what is missing.
+      missing: [
+        !process.env.GMAIL_CLIENT_ID && "GMAIL_CLIENT_ID",
+        !process.env.GMAIL_CLIENT_SECRET && "GMAIL_CLIENT_SECRET",
+        !process.env.MAIL_PUBSUB_TOPIC && "MAIL_PUBSUB_TOPIC",
+        !process.env.MAIL_PUSH_TOKEN && "MAIL_PUSH_TOKEN",
+      ].filter((x): x is string => typeof x === "string"),
+    };
+  },
+});
+
 // Register (or refresh) a user's Gmail account. Upserts by user so re-running
 // idempotently; a refresh keeps the OAuth refresh token in sync and clears any
 // prior error so a healthy config isn't masked by a stale one.
-export const setMailAccount = mutation({
+// An ACTION rather than a mutation because it encrypts before storing, and
+// AES-GCM needs a fresh random IV - randomness belongs in an action, not in a
+// mutation that Convex may re-execute. The public name and arguments are
+// unchanged; only the endpoint kind moved, which src/store.py mirrors.
+export const setMailAccount = action({
   args: {
     user: v.string(),
     email: v.string(),
     refreshToken: v.string(),
     secret: v.string(),
   },
-  handler: async (ctx, { user, email, refreshToken, secret }) => {
+  handler: async (ctx, { user, email, refreshToken, secret }): Promise<void> => {
     checkSecret(secret);
+    // Fail loudly at the point of connection rather than accepting a token
+    // that nothing can ever use.
+    if (!mailSyncEnabled()) {
+      throw new Error(
+        "mail-sync is not enabled on this deployment - set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET first",
+      );
+    }
+    const { ciphertext, iv } = await encryptJson(credentialsKey(), refreshToken);
+    await ctx.runMutation(internal.mail.storeMailAccount, {
+      user,
+      email,
+      refreshToken: ciphertext,
+      refreshTokenIv: iv,
+    });
+  },
+});
+
+// The storage half of setMailAccount. Internal: the plaintext token must have
+// exactly one way in, and it is the action above.
+export const storeMailAccount = internalMutation({
+  args: {
+    user: v.string(),
+    email: v.string(),
+    refreshToken: v.string(),
+    refreshTokenIv: v.string(),
+  },
+  handler: async (ctx, { user, email, refreshToken, refreshTokenIv }) => {
     const existing = await ctx.db
       .query("mailAccounts")
       .withIndex("by_user", (q) => q.eq("user", user))
@@ -68,11 +137,12 @@ export const setMailAccount = mutation({
       await ctx.db.patch(existing._id, {
         email,
         refreshToken,
+        refreshTokenIv,
         lastError: undefined,
         lastErrorAt: undefined,
       });
     } else {
-      await ctx.db.insert("mailAccounts", { user, email, refreshToken });
+      await ctx.db.insert("mailAccounts", { user, email, refreshToken, refreshTokenIv });
     }
     // Kick the (idempotent) watch setup right away so a freshly configured
     // account starts receiving pushes without waiting for the daily cron.
@@ -669,6 +739,25 @@ async function llmClassify(
   }
 }
 
+/**
+ * The account's refresh token in plaintext, for use in an outbound token
+ * request and nowhere else.
+ *
+ * Rows written before the token was encrypted have no `refreshTokenIv` and
+ * still hold plaintext. Those keep working rather than locking a user out of
+ * their own mailbox - the alternative would have been a migration that forces
+ * everyone to re-run the OAuth flow. A legacy row is upgraded to ciphertext
+ * the next time setMailAccount runs for that user.
+ */
+async function readRefreshToken(account: Doc<"mailAccounts">): Promise<string> {
+  if (!account.refreshTokenIv) return account.refreshToken;
+  return decryptJson<string>(
+    credentialsKey(),
+    account.refreshToken,
+    account.refreshTokenIv,
+  );
+}
+
 // Refresh the OAuth access token for an account, persisting it via an internal
 // mutation. The access token is reused when it still has > 60s of life.
 async function refreshAccessToken(
@@ -685,7 +774,7 @@ async function refreshAccessToken(
   }
   const params = new URLSearchParams({
     grant_type: "refresh_token",
-    refresh_token: account.refreshToken,
+    refresh_token: await readRefreshToken(account),
     client_id: process.env.GMAIL_CLIENT_ID ?? "",
     client_secret: process.env.GMAIL_CLIENT_SECRET ?? "",
   });
@@ -1019,6 +1108,12 @@ export const startWatch = internalAction({
 export const renewWatches = internalAction({
   args: {},
   handler: async (ctx) => {
+    // Announce the skip rather than looping over zero accounts in silence -
+    // a self-hoster reading logs should be able to tell "off" from "broken".
+    if (!mailSyncEnabled()) {
+      console.log("mail-sync is off (no GMAIL_CLIENT_ID/SECRET) - skipping watch renewal");
+      return;
+    }
     const accounts = await ctx.runQuery(internal.mail.listAccounts, {});
     // One account failing (e.g. revoked grant) must not stop the rest.
     for (const account of accounts) {
@@ -1036,6 +1131,10 @@ export const renewWatches = internalAction({
 export const reconcile = internalAction({
   args: {},
   handler: async (ctx) => {
+    if (!mailSyncEnabled()) {
+      console.log("mail-sync is off (no GMAIL_CLIENT_ID/SECRET) - skipping reconcile sweep");
+      return;
+    }
     const accounts = await ctx.runQuery(internal.mail.listAccounts, {});
     // Backstop sync for accounts that missed a push (dropped notif, expired
     // watch, transient failure), jittered so N accounts don't burst together.

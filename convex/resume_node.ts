@@ -28,6 +28,7 @@ import {
   type ProjectPayload,
 } from "./resume_prompt";
 import { composeResumeDoc, projectEntries, resumeFilename, resumeOutline } from "./resume_docx";
+import { callModel, chooseLlm, llmNote, PROVIDER_LABEL } from "./llm_providers";
 import { bulletsFor, type ProfileV2, toV2 } from "./profile_schema";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
@@ -74,35 +75,9 @@ async function fetchJdText(url: string): Promise<string> {
   }
 }
 
-// Call Gemini (gemini-flash-lite-latest) with the tailor prompt, returning the
-// raw response text. Mirrors src/llm.py _call_gemini: JSON mime, temp 0.
-async function llmCall(system: string, user: string, apiKey: string): Promise<string> {
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent";
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        maxOutputTokens: 8192,
-        temperature: 0,
-      },
-    }),
-  });
-  if (!resp.ok) {
-    throw new Error(`gemini rejected the request: HTTP ${resp.status}`);
-  }
-  const data = (await resp.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const parts = data.candidates?.[0]?.content?.parts ?? [];
-  const text = parts.map((p) => p.text ?? "").join("");
-  if (!text.trim()) throw new Error("gemini returned an empty response");
-  return text;
-}
+// The provider-specific calls now live in ./llm_providers (the twin of
+// src/llm.py's _PROVIDERS table), so this file only decides WHICH model runs
+// and what to say about it afterwards.
 
 // Select which projects surface on the resume: JD-scored via resume_select
 // (the select.py port - tags x3, tech x2, prose x1, top MAX_PROJECTS),
@@ -246,12 +221,38 @@ async function performBuild(
   let llmError: string | undefined;
   const rewritten = new Set<string>();
   const notes: string[] = [];
-  // The key comes from the user's own Connections page, not from a deployment
-  // env var: this is a per-user store (see credentials.ts resolveGeminiKey for
-  // why there is deliberately no process.env fallback). Reading process.env
-  // here was the bug that made a key the Connections page had just tested
-  // successfully have no effect on a build.
-  const apiKey = await ctx.runAction(internal.credentials.resolveGeminiKey, { user });
+  // Which model tailors this build, and on whose quota.
+  //
+  // A user's own key always wins and is never capped - it is theirs to spend.
+  // Otherwise the operator's shared key runs a cheap default, metered by a
+  // per-user daily allowance. A user who has configured nothing still gets a
+  // resume; the LLM step is simply skipped and the report says so. That is the
+  // whole point of the design: the key is an upgrade, never a toll.
+  const settingsRow = await ctx.runQuery(internal.settings.getSettingsInternal, { user });
+  // The stored row uses resume-prefixed column names; chooseLlm takes the
+  // generic shape so it stays a pure function with no schema knowledge.
+  const preference = {
+    provider: settingsRow?.resumeProvider,
+    model: settingsRow?.resumeModel,
+  };
+  const userKey = preference.provider
+    ? await ctx.runAction(internal.credentials.resolveProviderKey, {
+        user,
+        provider: preference.provider,
+      })
+    : null;
+
+  const operatorKey = process.env.GEMINI_API_KEY ?? null;
+  let choice = chooseLlm({ preference, userKey, operatorKey });
+  // Charge the allowance only when the operator's key is the one about to run.
+  if (choice.source === "operator") {
+    const spend = await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
+    if (!spend.allowed) {
+      choice = chooseLlm({ preference, userKey, operatorKey, operatorCapReached: true });
+    }
+  }
+
+  const apiKey = choice.apiKey;
   if (apiKey) {
     try {
       // Free-form user guidance rides into the prompt alongside the JD, so
@@ -261,7 +262,12 @@ async function performBuild(
         ? `${jdText}\n\nAdditional instructions from the candidate (follow these):\n${opts.instructions.slice(0, 1000)}`
         : jdText;
       const { system, user: userMsg } = assemblePrompt(jdForPrompt, selected);
-      const text = await llmCall(system, userMsg, apiKey);
+      const text = await callModel(choice.provider, {
+        model: choice.model,
+        system,
+        user: userMsg,
+        apiKey,
+      });
       const rewrites = parseRewrites(text);
       const applied = applyRewrites(
         selected.map((p) => ({ name: p.name, bullets: p.bullets.map((b) => b.text) })),
@@ -279,14 +285,18 @@ async function performBuild(
         })),
       };
       usedLlm = true;
+      notes.push(llmNote(choice));
     } catch (err) {
       llmError = err instanceof Error ? err.message : String(err);
+      // Name the model that failed - "the LLM broke" is unactionable when the
+      // user chose the model themselves and can switch it in one click.
+      notes.push(
+        `${PROVIDER_LABEL[choice.provider]} ${choice.model} failed - bank text used verbatim`,
+      );
       console.warn("resume tailor fell back to bank text", err);
     }
   } else {
-    notes.push(
-      "No Gemini key on your Connections page - bank text used verbatim",
-    );
+    notes.push(llmNote(choice));
   }
 
   // Hand-edited bullet text wins over everything: it is the user's literal
