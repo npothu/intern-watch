@@ -246,7 +246,12 @@ async function performBuild(
   let llmError: string | undefined;
   const rewritten = new Set<string>();
   const notes: string[] = [];
-  const apiKey = process.env.GEMINI_API_KEY;
+  // The key comes from the user's own Connections page, not from a deployment
+  // env var: this is a per-user store (see credentials.ts resolveGeminiKey for
+  // why there is deliberately no process.env fallback). Reading process.env
+  // here was the bug that made a key the Connections page had just tested
+  // successfully have no effect on a build.
+  const apiKey = await ctx.runAction(internal.credentials.resolveGeminiKey, { user });
   if (apiKey) {
     try {
       // Free-form user guidance rides into the prompt alongside the JD, so
@@ -279,7 +284,9 @@ async function performBuild(
       console.warn("resume tailor fell back to bank text", err);
     }
   } else {
-    notes.push("GEMINI_API_KEY not set - bank text used verbatim");
+    notes.push(
+      "No Gemini key on your Connections page - bank text used verbatim",
+    );
   }
 
   // Hand-edited bullet text wins over everything: it is the user's literal

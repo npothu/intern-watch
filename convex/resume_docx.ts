@@ -43,6 +43,7 @@ import {
   Document,
   ExternalHyperlink,
   Paragraph,
+  Tab,
   TabStopType,
   TextRun,
 } from "docx";
@@ -154,6 +155,53 @@ function skillNamed(item: SkillItem): string {
   return typeof item === "string" ? item : item.name;
 }
 
+// --- education line composition -----------------------------------------------
+// v1 stored education as PRE-DECORATED strings, because the user typed them:
+// institution was "Georgia Institute of Technology | Atlanta, GA", grad_date was
+// "Expected Graduation May 2027", threads was "Concentrations: Systems & AI".
+// The v2 editor collects the same information as separate structured fields, so
+// the decoration has to be applied HERE instead.
+//
+// Every helper below is idempotent: it adds the decoration only when it is not
+// already present, so a migrated v1 profile (whose strings still carry it)
+// renders byte-identically instead of turning into "Graduation Expected
+// Graduation May 2027". Do not "simplify" these to unconditional concatenation.
+
+/** "Georgia Institute of Technology" + "Atlanta, GA" -> "... | Atlanta, GA". */
+function institutionLine(heading: string, location?: string): string {
+  const h = heading.trim();
+  const loc = (location ?? "").trim();
+  if (!loc || h.includes(loc)) return h;
+  return h ? `${h} | ${loc}` : loc;
+}
+
+/** "May 2027" -> "Graduation May 2027". */
+function graduationLine(date?: string): string {
+  const d = (date ?? "").trim();
+  if (!d) return "";
+  return /graduat/i.test(d) ? d : `Graduation ${d}`;
+}
+
+/** "Systems & AI" -> "Concentrations: Systems & AI". */
+function concentrationLine(text?: string): string {
+  const t = (text ?? "").trim();
+  if (!t) return "";
+  return /^concentrations?\s*:/i.test(t) ? t : `Concentrations: ${t}`;
+}
+
+/**
+ * The degree's own italic line, with the GPA folded onto its tail:
+ * "B.S Computer Science" + "3.7/4.0" -> "B.S Computer Science - GPA 3.7/4.0".
+ * A GPA already written into the degree text wins (v1 profiles did exactly
+ * that), and a bare "GPA " prefix on the gpa field is not doubled.
+ */
+function degreeLine(degree: string, gpa?: string): string {
+  const d = degree.trim();
+  const g = (gpa ?? "").trim().replace(/^gpa\s*:?\s*/i, "");
+  if (!g || /\bgpa\b/i.test(d)) return d;
+  return d ? `${d} - GPA ${g}` : `GPA ${g}`;
+}
+
 // --- per-section renderers ----------------------------------------------------
 // renderSection dispatches on section.kind and pushes the same nodes the v1
 // renderer produced. The generic `renderedCount > 0` separator rule down in
@@ -194,23 +242,35 @@ function renderSection(
     case "education": {
       const visible = visibleEntries(section, variant);
       visible.forEach((entry, ei) => {
-        nodes.push(
-          datedLineSpec([{ text: entry.heading, bold: true }], entry.date, SZ_EDU),
-        );
         const degrees = entry.degrees ?? [];
-        if (degrees[0]) {
-          for (const line of [degrees[0].degree, degrees[0].concentration, degrees[0].gpa]) {
-            if (line) nodes.push(plainSpec(line, SZ_EDU, { italics: true }));
+        // The heading line carries the institution, its location, and the FIRST
+        // degree's graduation date in the right-hand column. `entry.date` is the
+        // migrated-v1 fallback for profiles written before degrees[] existed.
+        nodes.push(
+          datedLineSpec(
+            [{ text: institutionLine(entry.heading, entry.location), bold: true }],
+            graduationLine(degrees[0]?.grad_date || entry.date),
+            SZ_EDU,
+          ),
+        );
+        degrees.forEach((d, di) => {
+          const text = degreeLine(d.degree, d.gpa);
+          // Degree 1 renders undated - its date is already on the heading line
+          // above it. Every later degree carries its own graduation date.
+          if (di === 0) {
+            if (text) nodes.push(plainSpec(text, SZ_EDU, { italics: true }));
+          } else if (text || d.grad_date) {
+            nodes.push(
+              datedLineSpec(
+                [{ text, italics: true }],
+                graduationLine(d.grad_date),
+                SZ_EDU,
+              ),
+            );
           }
-        }
-        for (const d of degrees.slice(1)) {
-          nodes.push(
-            datedLineSpec([{ text: d.degree, italics: true }], d.grad_date, SZ_EDU),
-          );
-          for (const line of [d.concentration, d.gpa]) {
-            if (line) nodes.push(plainSpec(line, SZ_EDU, { italics: true }));
-          }
-        }
+          const conc = concentrationLine(d.concentration);
+          if (conc) nodes.push(plainSpec(conc, SZ_EDU, { italics: true }));
+        });
         for (const x of entry.extras ?? []) {
           nodes.push(
             datedLineSpec([{ text: x.text, italics: x.italics ?? true }], x.date ?? "", SZ_EDU),
@@ -219,15 +279,18 @@ function renderSection(
         for (const b of bulletsFor(entry, variant)) nodes.push(bulletSpec(b));
         if (ei < visible.length - 1) nodes.push(separatorSpec());
       });
-      // Exactly once, unconditionally, after all education entries (even when
-      // coursework is empty - dropping it would change a no-coursework resume).
+      // Once, after all education entries, and ONLY when there is coursework to
+      // list - an empty list used to emit a bare "Coursework:" label with
+      // nothing after it, which reads as a bug on the printed page.
       const coursework = (profile.skills.coursework ?? []).map(skillNamed).join(", ");
-      nodes.push(
-        paraSpec([
-          run("Coursework:", SZ_EDU, { bold: true }),
-          run(` ${coursework}`, SZ_EDU),
-        ]),
-      );
+      if (coursework) {
+        nodes.push(
+          paraSpec([
+            run("Coursework:", SZ_EDU, { bold: true }),
+            run(` ${coursework}`, SZ_EDU),
+          ]),
+        );
+      }
       break;
     }
     case "experience":
@@ -358,6 +421,34 @@ export function projectEntries(p: ProfileV2): Entry[] {
   return section ? section.entries : [];
 }
 
+/**
+ * Split a run's text on tab characters into proper OOXML `<w:tab/>` elements.
+ *
+ * A RunSpec carries "\t" inline because that is what `resumeOutline` flattens
+ * (and what python-docx writes). Word honours a literal tab inside `<w:t>`, but
+ * `<w:tab/>` is the canonical element - every other OOXML consumer, including
+ * the in-app .docx preview, only recognises the element form and renders the
+ * bare character as a fixed-width space, collapsing every right-aligned date
+ * column onto its heading. Same bytes in Word, correct everywhere else.
+ *
+ * Applied ONLY to the right-tab dated lines (see toParagraph). Bullet
+ * paragraphs keep their literal tab: they combine a tab with a hanging indent,
+ * and docx-preview's tab-stop solver double-counts the paragraph's left margin
+ * in that case, blowing the "● <tab> text" gap out to well over an inch. Word
+ * renders both forms identically, so the narrower conversion is all upside.
+ *
+ * Returns undefined when there is no tab, so the plain `text` option is used.
+ */
+function runChildren(text: string): (string | Tab)[] | undefined {
+  if (!text.includes("\t")) return undefined;
+  const out: (string | Tab)[] = [];
+  text.split("\t").forEach((part, i) => {
+    if (i > 0) out.push(new Tab());
+    if (part) out.push(part);
+  });
+  return out;
+}
+
 /** Map one RenderNode to a docx Paragraph. */
 function toParagraph(node: ParaSpec): Paragraph {
   const spacing = {
@@ -367,8 +458,9 @@ function toParagraph(node: ParaSpec): Paragraph {
   };
   const children: (TextRun | ExternalHyperlink)[] = node.runs.map((r) => {
     const font = { ascii: FONT, hAnsi: FONT, cs: FONT };
+    const tabbed = node.rightTab ? runChildren(r.text) : undefined;
     const props = {
-      text: r.text,
+      ...(tabbed ? { children: tabbed } : { text: r.text }),
       bold: r.bold,
       italics: r.italics,
       color: r.color,

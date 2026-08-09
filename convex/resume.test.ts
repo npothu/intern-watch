@@ -98,9 +98,10 @@ const V1_GOLDEN_OUTLINE: string[] = [
   "US Citizen | linkedin.com/in/alex",
   "Education",
   "Georgia Institute of Technology | Atlanta, GA\tExpected Graduation May 2027",
-  "B.S Computer Science",
+  // The GPA folds onto the degree line ("- GPA x") instead of hanging on its
+  // own; the concentration keeps its own italic line under it.
+  "B.S Computer Science - GPA 3.7/4.0",
   "Concentrations: Systems & AI",
-  "GPA 3.7/4.0",
   "Coursework: Operating Systems, Data Structures & Algorithms",
   "",
   "Work Experience",
@@ -281,6 +282,63 @@ describe("resume_docx: section composition (render.py port)", () => {
     // The first degree renders undated, the second as a dated italic line.
     expect(at("B.S Computer Science")).toBeGreaterThan(-1);
     expect(at("M.S Machine Learning")).toBeGreaterThan(-1);
+  });
+
+  // The v2 editor collects education as separate fields (Institution, Location,
+  // Degree, Concentration, Graduation, GPA) where v1 stored one pre-decorated
+  // string per line. These two tests pin the decoration the renderer now has to
+  // add, and the fact that it is not doubled on already-decorated v1 text.
+  test("structured v2 education composes the institution, graduation and GPA lines", () => {
+    const p: ProfileV2 = {
+      version: 2,
+      header: { name: "Alex Example", contact_line: "alex@example.com" },
+      skills: {},
+      sections: [
+        {
+          id: "edu",
+          title: "Education",
+          kind: "education",
+          entries: [
+            {
+              id: "e1",
+              heading: "Georgia Institute of Technology",
+              location: "Atlanta, GA",
+              date: "",
+              degrees: [
+                {
+                  degree: "B.S. Computer Science",
+                  concentration: "Systems and Architecture",
+                  grad_date: "May 2027",
+                  gpa: "3.7/4.0",
+                },
+                { degree: "M.S. Computer Science", grad_date: "May 2028" },
+              ],
+              bullets: {},
+            },
+          ],
+        },
+      ],
+    };
+    const lines = resumeOutline(p, { projects: [] });
+    expect(lines.slice(lines.indexOf("Education") + 1)).toEqual([
+      "Georgia Institute of Technology | Atlanta, GA\tGraduation May 2027",
+      "B.S. Computer Science - GPA 3.7/4.0",
+      "Concentrations: Systems and Architecture",
+      "M.S. Computer Science\tGraduation May 2028",
+    ]);
+    // No coursework configured -> no bare "Coursework:" label on the page.
+    expect(lines.some((l) => l.startsWith("Coursework"))).toBe(false);
+  });
+
+  test("education decoration is idempotent on migrated v1 text", () => {
+    // v1 users typed the decoration themselves; re-adding it would produce
+    // "Graduation Expected Graduation May 2027" / "Concentrations: Concentrations: ...".
+    const lines = resumeOutline(migrateProfile(PROFILE), CONTENT);
+    expect(lines).toContain(
+      "Georgia Institute of Technology | Atlanta, GA\tExpected Graduation May 2027",
+    );
+    expect(lines).toContain("Concentrations: Systems & AI");
+    expect(lines.some((l) => /GPA\s+GPA/.test(l))).toBe(false);
   });
 
   test("hiddenIn excludes an entry for the swe variant but keeps it in base", () => {
