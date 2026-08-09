@@ -63,11 +63,16 @@ const KEY_PLACEHOLDER: Record<string, string> = {
 
 export function ResumeModelCard({
   llm,
-  keyRow,
+  keysByProvider,
 }: {
   llm: ResumeLlm;
-  /** The stored key for the CURRENTLY chosen provider, if any. */
-  keyRow?: CredentialRow;
+  /** Every stored credential, keyed by provider.
+   *
+   *  The whole map rather than one row: the dropdown changes provider in local
+   *  state, so a row resolved for the SAVED preference would report "no key on
+   *  file" the moment the user selects any other provider - including one they
+   *  already have a key for, which then invites them to overwrite it. */
+  keysByProvider: Record<string, CredentialRow>;
 }) {
   // "" means "use whatever the operator provides" - the default, and the state
   // a user who never touches this page is in.
@@ -78,7 +83,10 @@ export function ResumeModelCard({
   const [pending, start] = useTransition();
 
   const usingOwn = provider !== "";
-  const hasStoredKey = Boolean(keyRow && keyRow.provider === provider);
+  // Looked up by the CURRENTLY selected provider, so switching the dropdown
+  // reveals a key already on file instead of pretending there is none.
+  const keyRow = usingOwn ? keysByProvider[provider] : undefined;
+  const hasStoredKey = Boolean(keyRow);
   const remaining = Math.max(0, llm.dailyCap - llm.usedToday);
 
   const save = () => {
@@ -133,8 +141,10 @@ export function ResumeModelCard({
         <div className="min-w-0 flex-1">
           <div className="min-w-0 text-[13.5px] font-semibold text-ink">Resume model</div>
           <p className="mt-0.5 min-w-0 break-words text-[12px] text-ink-2">
-            Rewrites your bullets against each job description. This works out of
-            the box - there is nothing to set up.
+            Rewrites your bullets against each job description.
+            {llm.sharedAvailable
+              ? " This works out of the box - there is nothing to set up."
+              : " Add a key below to turn it on."}
           </p>
         </div>
       </div>
@@ -163,10 +173,19 @@ export function ResumeModelCard({
           </select>
         </label>
 
-        {!usingOwn && (
+        {!usingOwn && llm.sharedAvailable && (
           <p className="mt-2 text-[11.5px] text-ink-2">
             {remaining} of {llm.dailyCap} tailored builds left today on the shared
             model. Bring your own key to lift the limit and pick a different model.
+          </p>
+        )}
+        {/* Never advertise an allowance against a model that does not exist:
+            without an operator key every build silently returns bank text. */}
+        {!usingOwn && !llm.sharedAvailable && (
+          <p className="mt-2 text-[11.5px] text-amber">
+            No shared model is configured on this deployment, so resumes use your
+            bullet text as written. Pick a provider below and add a key to enable
+            tailoring.
           </p>
         )}
 

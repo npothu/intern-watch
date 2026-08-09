@@ -532,6 +532,9 @@ export type ResumeLlm = {
   defaultModel: string;
   dailyCap: number;
   usedToday: number;
+  /** Whether the deployment has a shared key at all. False means the quota is
+   *  meaningless and tailoring needs the user's own key. */
+  sharedAvailable: boolean;
 };
 
 export async function getResumeLlm(user: string): Promise<ResumeLlm> {

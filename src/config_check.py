@@ -29,12 +29,13 @@ from pathlib import Path
 
 import yaml
 
-# The is-this-a-watcher-config rule lives in filters (load_users must apply
-# it too, else apply answer-books become phantom watcher users).
-from .filters import is_watcher_config as _is_watcher_config
 # For the feature status we need the same key-env resolution main.py uses:
 # a user may omit llm.api_key_env and fall back to the provider default.
 from .envfile import load_dotenv
+
+# The is-this-a-watcher-config rule lives in filters (load_users must apply
+# it too, else apply answer-books become phantom watcher users).
+from .filters import is_watcher_config as _is_watcher_config
 from .llm import api_key_env_for
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -301,11 +302,16 @@ def check_features(users_dir: Path, watch_yml: Path, *,
             note="no watcher user enables notify.email - add it to "
                  "users/<you>.yaml"))
     else:
-        envs = sorted({email.get(k)
-                       for email in email_users for k in
-                       ("smtp_user_env", "smtp_pass_env")
-                       if isinstance(email.get(k), str) and email.get(k)})
-        missing = [n for n in envs if not present(n)]
+        # Bind each lookup once: narrowing an inline `email.get(k)` inside the
+        # comprehension's guard does not carry to the value expression, which
+        # is a separate call as far as the type checker is concerned.
+        envs: set[str] = set()
+        for email in email_users:
+            for key in ("smtp_user_env", "smtp_pass_env"):
+                name = email.get(key)
+                if isinstance(name, str) and name:
+                    envs.add(name)
+        missing = [n for n in sorted(envs) if not present(n)]
         if missing:
             feats.append(Feature("email digest", REQUIRED, False,
                                  missing=missing))

@@ -103,6 +103,10 @@ export default defineSchema({
     // path re-encrypts it on the next write. Do not write a new plaintext row.
     refreshToken: v.string(),
     refreshTokenIv: v.optional(v.string()),
+    // Deprecated and no longer written: caching a live bearer token in
+    // plaintext beside the encrypted refresh token defeated the point of
+    // encrypting it. Kept optional so rows written by older builds still
+    // validate; refreshAccessToken clears them on the next run.
     accessToken: v.optional(v.string()),
     accessTokenExpiry: v.optional(v.number()),
     historyId: v.optional(v.string()),

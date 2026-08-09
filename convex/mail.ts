@@ -61,10 +61,17 @@ const VALID_STATUSES = [
  * that skips it should get a watcher that works, not a broken-looking Inbox.
  *
  * The client id and secret are the minimum: without them no token can be
- * refreshed, so nothing downstream can function.
+ * refreshed, so nothing downstream can function. CREDENTIALS_KEY belongs in
+ * the same set because setMailAccount encrypts the refresh token with it -
+ * leaving it out let the page declare mail-sync "enabled" on a deployment
+ * where connecting a mailbox always died on a variable the setup never named.
  */
 export function mailSyncEnabled(): boolean {
-  return Boolean(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET);
+  return Boolean(
+    process.env.GMAIL_CLIENT_ID &&
+      process.env.GMAIL_CLIENT_SECRET &&
+      process.env.CREDENTIALS_KEY,
+  );
 }
 
 /** Public, non-secret: lets the web app say "off" instead of showing a
@@ -79,6 +86,7 @@ export const getMailSyncStatus = query({
       missing: [
         !process.env.GMAIL_CLIENT_ID && "GMAIL_CLIENT_ID",
         !process.env.GMAIL_CLIENT_SECRET && "GMAIL_CLIENT_SECRET",
+        !process.env.CREDENTIALS_KEY && "CREDENTIALS_KEY",
         !process.env.MAIL_PUBSUB_TOPIC && "MAIL_PUBSUB_TOPIC",
         !process.env.MAIL_PUSH_TOKEN && "MAIL_PUSH_TOKEN",
       ].filter((x): x is string => typeof x === "string"),
@@ -303,14 +311,16 @@ export const listApplications = internalQuery({
 // Persist a freshly issued OAuth access token + expiry. Refresh keeps a read-
 // token trust, so the access token only lives in the account row, never in the
 // request path.
-export const updateTokens = internalMutation({
-  args: {
-    rowId: v.id("mailAccounts"),
-    accessToken: v.string(),
-    accessTokenExpiry: v.number(),
-  },
-  handler: async (ctx, { rowId, accessToken, accessTokenExpiry }) => {
-    await ctx.db.patch(rowId, { accessToken, accessTokenExpiry });
+// Access tokens are no longer cached in the row (see refreshAccessToken).
+// This drops any value an older build left behind, so the plaintext bearer
+// token does not outlive the change that stopped writing it.
+export const clearCachedAccessToken = internalMutation({
+  args: { rowId: v.id("mailAccounts") },
+  handler: async (ctx, { rowId }) => {
+    await ctx.db.patch(rowId, {
+      accessToken: undefined,
+      accessTokenExpiry: undefined,
+    });
   },
 });
 
@@ -759,19 +769,20 @@ async function readRefreshToken(account: Doc<"mailAccounts">): Promise<string> {
 }
 
 // Refresh the OAuth access token for an account, persisting it via an internal
-// mutation. The access token is reused when it still has > 60s of life.
+// Mint a fresh OAuth access token for an account.
+//
+// This deliberately does NOT cache the token in the row any more. It used to,
+// which meant a live gmail.readonly bearer token sat in the database in
+// plaintext right next to the refresh token we just went to the trouble of
+// encrypting - the same database dump still bought mailbox access for the
+// token's remaining hour, so the protection was only half a protection.
+// Minting one costs a single POST per sync, which is nothing next to the Gmail
+// history and message reads it precedes.
 async function refreshAccessToken(
   ctx: ActionCtx,
   account: Doc<"mailAccounts"> & { _id: Id<"mailAccounts"> },
 ): Promise<string> {
   const now = Date.now();
-  if (
-    account.accessToken &&
-    account.accessTokenExpiry &&
-    account.accessTokenExpiry > now + 60_000
-  ) {
-    return account.accessToken;
-  }
   const params = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: await readRefreshToken(account),
@@ -807,14 +818,12 @@ async function refreshAccessToken(
   if (!data.access_token) {
     throw new Error("token refresh returned no access_token");
   }
-  const accessToken = data.access_token;
-  const accessTokenExpiry = now + (data.expires_in ?? 3600) * 1000;
-  await ctx.runMutation(internal.mail.updateTokens, {
-    rowId: account._id,
-    accessToken,
-    accessTokenExpiry,
-  });
-  return accessToken;
+  // Any access token cached by an older build is now dead weight; clear it so
+  // the plaintext does not linger in the row after this change ships.
+  if (account.accessToken) {
+    await ctx.runMutation(internal.mail.clearCachedAccessToken, { rowId: account._id });
+  }
+  return data.access_token;
 }
 
 // Arm a Gmail watch for an account (refreshes auth, POSTs users.watch) and

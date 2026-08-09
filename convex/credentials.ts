@@ -2,6 +2,7 @@ import { action, internalAction, internalMutation, internalQuery, mutation, quer
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { credentialsKey, decryptJson, encryptJson, maskTail } from "./credentials_crypto";
+import { isProvider, testProviderKey } from "./llm_providers";
 
 // Per-user third-party credentials for the Connections page.
 //
@@ -250,15 +251,20 @@ async function runTest(
     return { ok: true, detail: NO_TEST_DETAIL[provider], status: "untested" };
   }
   switch (provider) {
-    case "gemini":
-      return testGemini(fields.apiKey ?? "");
     case "browserbase":
       return testBrowserbase(fields.apiKey ?? "", fields.projectId ?? "");
     case "google":
       return testGoogle(fields.refreshToken ?? "");
-    default:
-      return { ok: false, detail: "unknown provider", status: "error" };
   }
+  // Every LLM provider the resume-model picker offers. Handled as a group
+  // rather than one case each, because a picker entry with no matching case
+  // here does not fail quietly - it tells the user their working key is
+  // broken and writes status "error" onto the row.
+  if (isProvider(provider)) {
+    const { ok, detail } = await testProviderKey(provider, fields.apiKey ?? "");
+    return { ok, detail, status: ok ? "ok" : "error" };
+  }
+  return { ok: false, detail: "unknown provider", status: "error" };
 }
 
 // Make the real outbound test call, then record the outcome. The secret is

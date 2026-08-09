@@ -59,19 +59,31 @@ export async function resolveTrackerUser(): Promise<string | null> {
  * the same keys TRACKER_USER_MAP resolves. Passing the already-resolved key
  * avoids a second Clerk lookup on the actions that already have it.
  *
- * UNSET deliberately means "everyone is an admin": a single-user deployment
- * that never declares the list would otherwise dead-end its only user in the
- * wizard, since that user IS the admin. The list being set is the deployment
- * declaring itself multi-user, and from then on only listed keys can write.
+ * When the list is UNSET the fallback is derived from TRACKER_USER_MAP rather
+ * than being a blanket yes: a deployment with exactly one mapped user is a solo
+ * self-hoster, who must not be dead-ended in their own wizard because they
+ * never declared themselves admin. With two or more mapped users, an unset list
+ * means nobody may write - growing from one user to several is exactly the
+ * moment a blanket yes would quietly hand every user the ability to overwrite
+ * the deployment-wide Gmail config and break mail-sync for everyone.
  */
 export async function isAdminUser(user: string | null = null): Promise<boolean> {
-  const raw = process.env.ADMIN_TRACKER_USERS;
-  if (!raw) return true; // single-user deployment - never lock the solo admin out
-  const admins = raw
+  const admins = (process.env.ADMIN_TRACKER_USERS ?? "")
     .split(",")
     .map((k) => k.trim())
     .filter(Boolean);
-  if (admins.length === 0) return true; // empty list -> treat as unset
+  if (admins.length === 0) return soleUserDeployment();
   const key = user ?? (await resolveTrackerUser());
   return key !== null && admins.includes(key);
+}
+
+/** True when TRACKER_USER_MAP maps exactly one user - the solo self-hoster. */
+function soleUserDeployment(): boolean {
+  try {
+    const map = JSON.parse(process.env.TRACKER_USER_MAP ?? "{}") as Record<string, string>;
+    return Object.keys(map).length <= 1;
+  } catch {
+    // An unparseable map is not evidence of a solo deployment; deny.
+    return false;
+  }
 }

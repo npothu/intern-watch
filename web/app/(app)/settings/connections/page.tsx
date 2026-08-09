@@ -59,6 +59,7 @@ export default async function ConnectionsPage() {
               defaultModel: "gemini-flash-lite-latest",
               dailyCap: 25,
               usedToday: 0,
+              sharedAvailable: true,
             }
           }
           mailSync={mailSync}

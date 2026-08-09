@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   chooseLlm,
   DEFAULT_MODEL,
+  effectiveProvider,
   isProvider,
   llmNote,
   OPERATOR_MODEL,
@@ -20,6 +21,22 @@ describe("chooseLlm", () => {
     expect(c.provider).toBe(OPERATOR_PROVIDER);
     expect(c.model).toBe(OPERATOR_MODEL);
     expect(c.apiKey).toBe("op");
+  });
+
+  test("a saved key with NO preference row still wins over the operator key", () => {
+    // The regression this guards: gating the key lookup on a settings row that
+    // did not exist before this feature orphaned every key saved earlier, and
+    // silently moved those users onto the shared key and its daily cap.
+    const c = chooseLlm({ preference: null, userKey: "sk-legacy", operatorKey: "op" });
+    expect(c.source).toBe("user");
+    expect(c.provider).toBe(OPERATOR_PROVIDER);
+    expect(c.apiKey).toBe("sk-legacy");
+  });
+
+  test("effectiveProvider defaults to the operator provider when unset", () => {
+    expect(effectiveProvider(null)).toBe(OPERATOR_PROVIDER);
+    expect(effectiveProvider({ provider: "nonsense" })).toBe(OPERATOR_PROVIDER);
+    expect(effectiveProvider({ provider: "anthropic" })).toBe("anthropic");
   });
 
   test("a user's own key wins over the operator key, on their chosen provider", () => {
@@ -54,13 +71,14 @@ describe("chooseLlm", () => {
     expect(c.provider).toBe(OPERATOR_PROVIDER);
   });
 
-  test("an unknown provider string is ignored rather than trusted", () => {
+  test("an unknown provider preference still uses a saved key, on the default provider", () => {
     const c = chooseLlm({
       preference: { provider: "definitely-not-a-provider" },
       userKey: "sk-user",
       operatorKey: "op",
     });
-    expect(c.source).toBe("operator");
+    expect(c.source).toBe("user");
+    expect(c.provider).toBe(OPERATOR_PROVIDER);
   });
 
   test("the daily cap disables the LLM but never fails the build", () => {

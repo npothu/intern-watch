@@ -59,7 +59,28 @@ export const getResumeLlm = query({
       defaultModel: OPERATOR_MODEL,
       dailyCap: OPERATOR_DAILY_CAP,
       usedToday: used,
+      // Whether a shared model exists at all on this deployment. Without it
+      // the UI would advertise "25 of 25 builds left" against a quota that can
+      // never be spent, and every build would come back as bank text with no
+      // hint from Settings that the shared model is simply absent.
+      sharedAvailable: Boolean(process.env.GEMINI_API_KEY),
     };
+  },
+});
+
+/** Read-only view of today's allowance, so a build can check before spending.
+ *  Kept separate from consumeOperatorLlm: charging happens only after a model
+ *  call has actually produced text. */
+export const operatorCapReached = internalQuery({
+  args: { user: v.string() },
+  handler: async (ctx, { user }) => {
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    const today = dayKey(Date.now());
+    const used = row?.llmDay === today ? (row.llmCount ?? 0) : 0;
+    return used >= OPERATOR_DAILY_CAP;
   },
 });
 

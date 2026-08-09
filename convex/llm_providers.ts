@@ -192,6 +192,71 @@ export async function callModel(
  *  user can always tell whose quota paid for their resume. */
 export type LlmSource = "user" | "operator" | "none";
 
+/**
+ * The provider a user's saved key should be looked up under.
+ *
+ * A user with no stored preference still gets one: the operator default. That
+ * is what lets a key saved before per-user model choice existed keep working -
+ * see the note in chooseLlm.
+ */
+export function effectiveProvider(
+  preference?: { provider?: string } | null,
+): Provider {
+  return isProvider(preference?.provider)
+    ? (preference!.provider as Provider)
+    : OPERATOR_PROVIDER;
+}
+
+/**
+ * Cheap credential check per provider: hit an authenticated endpoint that
+ * costs no tokens, so the Connections page's Test button never bills the user
+ * for pressing it. Returns a short human verdict either way.
+ */
+export async function testProviderKey(
+  provider: Provider,
+  apiKey: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const req: Record<Provider, { url: string; headers: Record<string, string> }> = {
+    gemini: {
+      url: "https://generativelanguage.googleapis.com/v1beta/models",
+      headers: { "x-goog-api-key": apiKey },
+    },
+    anthropic: {
+      url: "https://api.anthropic.com/v1/models?limit=1",
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    },
+    openai: {
+      url: "https://api.openai.com/v1/models",
+      headers: { Authorization: `Bearer ${apiKey}` },
+    },
+    openrouter: {
+      url: "https://openrouter.ai/api/v1/key",
+      headers: { Authorization: `Bearer ${apiKey}` },
+    },
+  };
+  const { url, headers } = req[provider];
+  try {
+    const started = Date.now();
+    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+    if (!resp.ok) {
+      const body = (await resp.text().catch(() => "")).slice(0, 160);
+      return {
+        ok: false,
+        detail: `${PROVIDER_LABEL[provider]} rejected the key (HTTP ${resp.status})${body ? ` - ${body}` : ""}`,
+      };
+    }
+    return {
+      ok: true,
+      detail: `${PROVIDER_LABEL[provider]} accepted the key in ${Date.now() - started} ms`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export type LlmChoice = {
   source: LlmSource;
   provider: Provider;
@@ -215,22 +280,25 @@ export type LlmChoice = {
 export function chooseLlm(opts: {
   /** The user's saved preference, if any. */
   preference?: { provider?: string; model?: string } | null;
-  /** The user's own API key for that provider, if they saved one. */
+  /** The user's own API key for `effectiveProvider(preference)`, if they saved one. */
   userKey?: string | null;
   /** The deployment's shared key. */
   operatorKey?: string | null;
   /** True when the user has already used up today's operator-key allowance. */
   operatorCapReached?: boolean;
 }): LlmChoice {
-  const prefProvider = isProvider(opts.preference?.provider)
-    ? (opts.preference!.provider as Provider)
-    : null;
+  const provider = effectiveProvider(opts.preference);
 
-  if (opts.userKey && prefProvider) {
+  // Note this does NOT require an explicit preference. Before per-user model
+  // choice existed, a user's Gemini key was read unconditionally; gating on a
+  // preference row would have silently orphaned every key saved before the
+  // settings table existed, downgrading those users to the shared key without
+  // a word. Falling back to the default provider keeps them on their own key.
+  if (opts.userKey) {
     return {
       source: "user",
-      provider: prefProvider,
-      model: opts.preference?.model?.trim() || DEFAULT_MODEL[prefProvider],
+      provider,
+      model: opts.preference?.model?.trim() || DEFAULT_MODEL[provider],
       apiKey: opts.userKey,
     };
   }

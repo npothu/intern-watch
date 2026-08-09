@@ -16,9 +16,16 @@
 // longer a required key, so it gets its own card (ResumeModelCard) that leads
 // with "this already works" instead of an empty password field.
 
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import { ConnectionCard, Pill, type ProviderDef } from "./connection-card";
 import { ResumeModelCard } from "./resume-model-card";
+import { Button } from "@/components/ui/button";
+import { removeCredential } from "@/app/(app)/settings/connections/connections-actions";
 import type { CredentialRow, MailSyncStatus, ResumeLlm } from "@/lib/convex";
+
+/** Providers the resume-model card owns. Their rows are keys, not orphans. */
+const LLM_PROVIDERS = ["gemini", "anthropic", "openai", "openrouter"];
 
 export const PROVIDERS: ProviderDef[] = [
   {
@@ -41,6 +48,12 @@ export function ConnectionsList({
   mailSync: MailSyncStatus;
 }) {
   const byProvider = new Map(rows.map((r) => [r.provider, r]));
+  // Anything stored that no card on this page can now show or delete.
+  const orphaned = rows.filter(
+    (r) =>
+      !LLM_PROVIDERS.includes(r.provider) &&
+      !PROVIDERS.some((p) => p.provider === r.provider),
+  );
 
   // These four buckets are exhaustive on purpose: every provider lands in
   // exactly one, so the counts always sum to PROVIDERS.length. An earlier
@@ -81,10 +94,7 @@ export function ConnectionsList({
       <div className="flex flex-col gap-2.5">
         {/* First, because it is the one every user has - it needs no setup and
             it is the card most likely to answer "can I change the model?". */}
-        <ResumeModelCard
-          llm={llm}
-          keyRow={llm.provider ? byProvider.get(llm.provider) : undefined}
-        />
+        <ResumeModelCard llm={llm} keysByProvider={Object.fromEntries(byProvider)} />
         {/* Mail-sync is opt-in. When the deployment never set it up, say so
             plainly and name the missing variables - a card that just sits
             there unconnected reads as broken rather than as switched off. */}
@@ -116,7 +126,64 @@ export function ConnectionsList({
         {PROVIDERS.map((def) => (
           <ConnectionCard key={def.provider} def={def} row={byProvider.get(def.provider)} />
         ))}
+
+        {/* Credentials saved through cards that no longer exist. Removing the
+            collection UI does not remove the collected data: those rows stay
+            encrypted in the database, and without this there would be nowhere
+            in the app to delete a jobright password or a Browserbase key the
+            backend never reads. Shown only when such a row actually exists. */}
+        <OrphanedCredentials rows={orphaned} />
       </div>
     </>
+  );
+}
+
+function OrphanedCredentials({ rows }: { rows: CredentialRow[] }) {
+  const [gone, setGone] = useState<string[]>([]);
+  const [pending, start] = useTransition();
+  const left = rows.filter((r) => !gone.includes(r.provider));
+  if (!left.length) return null;
+
+  const drop = (provider: string) => {
+    start(async () => {
+      const res = await removeCredential(provider);
+      if (res.ok) {
+        setGone((g) => [...g, provider]);
+        toast.success(`Removed the stored ${provider} credential.`);
+      } else {
+        toast.error(res.error);
+      }
+    });
+  };
+
+  return (
+    <div className="rounded-md border border-amber/45 bg-amber/5 px-4 py-3.5">
+      <div className="text-[13px] font-semibold text-ink">No longer used</div>
+      <p className="mt-1 text-[12px] text-ink-2">
+        These were saved by an older version of this page. Nothing reads them
+        any more, so they are worth deleting.
+      </p>
+      <div className="mt-2.5 flex flex-col gap-1.5">
+        {left.map((r) => (
+          <div key={r.provider} className="flex flex-wrap items-center gap-2">
+            <span className="text-[12.5px] font-medium text-ink">{r.provider}</span>
+            {r.hint && (
+              <code className="rounded bg-chip px-1.5 py-0.5 font-mono text-[11px] text-ink-2">
+                {r.hint}
+              </code>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-red"
+              disabled={pending}
+              onClick={() => drop(r.provider)}
+            >
+              Remove
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

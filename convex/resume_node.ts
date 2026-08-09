@@ -28,7 +28,13 @@ import {
   type ProjectPayload,
 } from "./resume_prompt";
 import { composeResumeDoc, projectEntries, resumeFilename, resumeOutline } from "./resume_docx";
-import { callModel, chooseLlm, llmNote, PROVIDER_LABEL } from "./llm_providers";
+import {
+  callModel,
+  chooseLlm,
+  effectiveProvider,
+  llmNote,
+  PROVIDER_LABEL,
+} from "./llm_providers";
 import { bulletsFor, type ProfileV2, toV2 } from "./profile_schema";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
@@ -235,22 +241,28 @@ async function performBuild(
     provider: settingsRow?.resumeProvider,
     model: settingsRow?.resumeModel,
   };
-  const userKey = preference.provider
-    ? await ctx.runAction(internal.credentials.resolveProviderKey, {
-        user,
-        provider: preference.provider,
-      })
-    : null;
+  // Always look one up, under the default provider when no preference is set.
+  // Gating this on a preference row would have orphaned every key saved before
+  // the settings table existed.
+  const userKey = await ctx.runAction(internal.credentials.resolveProviderKey, {
+    user,
+    provider: effectiveProvider(preference),
+  });
 
   const operatorKey = process.env.GEMINI_API_KEY ?? null;
-  let choice = chooseLlm({ preference, userKey, operatorKey });
-  // Charge the allowance only when the operator's key is the one about to run.
-  if (choice.source === "operator") {
-    const spend = await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
-    if (!spend.allowed) {
-      choice = chooseLlm({ preference, userKey, operatorKey, operatorCapReached: true });
-    }
-  }
+  // Read the allowance, but do not spend it yet: a build that never reaches a
+  // successful model call must not cost the user a slot, or a broken operator
+  // key would burn the whole day and then blame their usage for it.
+  const capReached =
+    !userKey && operatorKey
+      ? await ctx.runQuery(internal.settings.operatorCapReached, { user })
+      : false;
+  const choice = chooseLlm({
+    preference,
+    userKey,
+    operatorKey,
+    operatorCapReached: capReached,
+  });
 
   const apiKey = choice.apiKey;
   if (apiKey) {
@@ -286,6 +298,10 @@ async function performBuild(
       };
       usedLlm = true;
       notes.push(llmNote(choice));
+      // Charged only now, on a call that actually produced tailored text.
+      if (choice.source === "operator") {
+        await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
+      }
     } catch (err) {
       llmError = err instanceof Error ? err.message : String(err);
       // Name the model that failed - "the LLM broke" is unactionable when the
