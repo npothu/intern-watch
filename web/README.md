@@ -39,8 +39,10 @@ to the browser.
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key (public) |
 | `CLERK_SECRET_KEY` | Clerk secret key (server only) |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` / `..._SIGN_UP_URL` | Clerk route paths |
-| `CONVEX_URL` | Convex deployment origin (server only) |
+| `CONVEX_URL` | Convex deployment origin, the client API (server only) |
+| `CONVEX_SITE_URL` | Convex HTTP-actions origin - the `.convex.site` domain, or the sibling port of a local deployment. NOT the same host as `CONVEX_URL`. The Google wizard builds the OAuth redirect URI and the Gmail push endpoint from it, and both must match character for character, so it refuses to guess when this is unset (server only) |
 | `CONVEX_SECRET` | Secret matching the deployment's `TRACKER_SECRET` (server only) |
+| `CONVEX_ADMIN_KEY` | Optional. Lets the Google wizard write `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `MAIL_PUBSUB_TOPIC` / `MAIL_PUSH_TOKEN` to the deployment via the Convex management API. Restricted to exactly those four names by `web/lib/convex-admin.ts`. Unset disables the wizard's write path (server only) |
 | `TRACKER_USER_MAP` | JSON email -> tracker user key mapping (server only) |
 | `GITHUB_TOKEN` | Fine-grained PAT with "Actions: write" on `GITHUB_REPOSITORY` (server only) |
 | `GITHUB_REPOSITORY` | `owner/repo` the web app dispatches builds against (server only) |

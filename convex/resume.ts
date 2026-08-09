@@ -57,13 +57,16 @@ export const requestBuild = mutation({
     // override a bad fetch). instructions: free-form guidance forwarded to the
     // tailor LLM ("emphasize the Go work"). overrides: literal bullet text the
     // user edited by hand, applied after the LLM pass per project name.
+    // variant: when set, forces that bullet variant for every project instead
+    // of the per-project JD auto-pick.
     jdText: v.optional(v.string()),
     instructions: v.optional(v.string()),
     overrides: v.optional(
       v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
     ),
+    variant: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, secret, jdText, instructions, overrides }) => {
+  handler: async (ctx, { user, short, secret, jdText, instructions, overrides, variant }) => {
     checkSecret(secret);
     // Validate the preconditions before spending a scheduler slot: the user
     // must have a resume profile AND a matching match row to build from.
@@ -108,13 +111,57 @@ export const requestBuild = mutation({
       jdText,
       instructions,
       overrides,
+      variant,
     });
     return { ok: true as const };
   },
 });
 
 // ---------------------------------------------------------------------------
-// Public query: the user's resume profile (bank) JSON string, for the web
+// Public mutation: delete a built resume for one (user, short). Deletes both
+// kept storage artifacts (current + previous) so keep-N=2 orphans nothing,
+// then removes the resumes row and any stale resumeBuilds marker, so a
+// "building"/"failed" badge cannot outlive its artifact.
+// ---------------------------------------------------------------------------
+export const deleteResume = mutation({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("resumes")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (!row) {
+      return { ok: false as const, reason: "not_found" };
+    }
+    // Delete every blob this row points at (the current artifact and the
+    // kept previous one) - leaving either behind orphans a file forever.
+    if (row.storageId) {
+      await ctx.storage.delete(row.storageId);
+    }
+    if (row.prevStorageId) {
+      await ctx.storage.delete(row.prevStorageId);
+    }
+    await ctx.db.delete(row._id);
+    // A leftover in-flight/failed build row would keep a stale badge in the
+    // UI for an artifact that no longer exists, so clear it too.
+    const build = await ctx.db
+      .query("resumeBuilds")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (build) {
+      await ctx.db.delete(build._id);
+    }
+    return { ok: true as const };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// The user's stored resume profile (bank) JSON string, for the web
 // app's profile editor. Secret-gated like every read - the bank is personal
 // data. Legacy rows written as raw objects are serialized on the way out so
 // the caller always receives a string.

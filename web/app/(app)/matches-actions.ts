@@ -6,11 +6,13 @@
  * from the client - so a signed-in user can only ever write their own rows.
  */
 
+import { revalidatePath } from "next/cache";
 import { resolveTrackerUser } from "@/lib/user";
 import {
   setTicks,
   getResumeUrls,
   restoreResume,
+  deleteResume as convexDeleteResume,
   requestResumeBuild as convexRequestBuild,
   fetchBuildStatus as convexFetchBuildStatus,
   type TickWrite,
@@ -141,6 +143,7 @@ export async function requestResumeRebuild(
     jdText?: string;
     instructions?: string;
     overrides?: { name: string; bullets: string[] }[];
+    variant?: string;
   }
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await resolveTrackerUser();
@@ -165,11 +168,16 @@ export async function requestResumeRebuild(
         )
         .slice(0, 12)
     : undefined;
+  const variant =
+    typeof opts.variant === "string" && opts.variant.trim()
+      ? opts.variant.trim().slice(0, 40)
+      : undefined;
   try {
     return await convexRequestBuild(user, short, {
       jdText,
       instructions,
       overrides,
+      variant,
     });
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -189,5 +197,38 @@ export async function requestResumeRestore(
     return await restoreResume(user, short);
   } catch (err) {
     return { ok: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Delete a built resume for one match (the report dialog's Delete button).
+ * Re-resolves the tracker user server-side, and invalidates the page cache so
+ * the match's document icon / resume count reflect the deletion immediately.
+ */
+export async function removeResume(
+  short: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "This account isn't provisioned - no tracker user to delete for.",
+    };
+  }
+  if (typeof short !== "string" || !SHORT_RE.test(short)) {
+    return { ok: false, error: "Invalid short key." };
+  }
+  try {
+    const res = await convexDeleteResume(user, short);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: res.reason === "not_found" ? "This resume is already gone." : "Couldn't delete the resume.",
+      };
+    }
+    revalidatePath("/");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || "Delete request failed." };
   }
 }

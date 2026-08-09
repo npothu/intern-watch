@@ -102,3 +102,45 @@ progressed past "applied". NEVER pruned — do not "clean it up".
   avoid committing local edits to them; branch from origin/main.
 - Prefer branch + PR over pushing straight to main: Actions commits state to
   main between your pull and your push, so direct pushes race it.
+
+## Shipping a change (template → instance → deployed)
+
+This repo is the TEMPLATE. It has no hosted Convex deployment of its own —
+local work runs against an anonymous deployment (`CONVEX_DEPLOYMENT=anonymous:…`
+in `.env.local`), and `dev` / `prod` belong to the downstream INSTANCE repo.
+So "deploy this" is never one step here; it is this chain:
+
+1. **Branch + PR here.** Worktree, tests green, no Claude/Co-Authored-By
+   trailers. Merge once CI is green (`test`, `convex-test`, `web` — `web` only
+   runs when `web/**` changed).
+2. **Sync template → instance.** In the instance repo, dispatch the
+   `sync-template` workflow (`gh workflow run sync-template.yml`); it opens a
+   PR merging `template/main`. It also runs weekly on its own.
+   **Merge that PR with a MERGE COMMIT, never squash** — squashing severs the
+   shared ancestry and turns the next sync into unrelated-histories surgery.
+   Never push instance-specific things the other way: no deployment names, team
+   names, personal config, or real URLs in this repo.
+3. **Deploy from the instance**, from a checkout of its `main` that contains
+   ALL merged `convex/` work — deploying from a stale tree silently reverts
+   whatever it is missing:
+   - dev: `npx convex dev --once` (the `CONVEX_DEPLOYMENT` in the instance's
+     root `.env.local`)
+   - prod: `npx convex deploy`
+   Convex `deploy` pushes schema + functions together; a schema change lands on
+   live data, so deploy dev first and exercise the changed path there.
+
+### Deployment env vars are per-deployment and do NOT travel
+
+`npx convex env list` / `--prod` shows what each one has. A new
+`process.env.X` in `convex/` is a deploy blocker until it is set on BOTH:
+`npx convex env set X <value>` and `npx convex env set --prod X <value>`.
+Check this BEFORE deploying — a missing var surfaces as a runtime throw in
+whatever feature reads it, not as a failed deploy.
+
+`CREDENTIALS_KEY` is the AES root for `credentials` (see `credentials.ts`).
+Generate a DIFFERENT random key per deployment so a dev leak cannot decrypt
+prod, e.g.
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+It is an encryption root, not a rotatable setting: change or lose it and every
+credential stored under it becomes permanently undecryptable — record both
+values somewhere durable before setting them.

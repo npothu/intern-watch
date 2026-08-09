@@ -27,7 +27,8 @@ import {
   parseRewrites,
   type ProjectPayload,
 } from "./resume_prompt";
-import { composeResumeDoc, resumeFilename, resumeOutline, type Profile } from "./resume_docx";
+import { composeResumeDoc, projectEntries, resumeFilename, resumeOutline } from "./resume_docx";
+import { bulletsFor, type ProfileV2, toV2 } from "./profile_schema";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
@@ -110,8 +111,9 @@ async function llmCall(system: string, user: string, apiKey: string): Promise<st
 // Scores and variants ride along into the build report so the user can see
 // why a project was picked, dropped, or shown in a non-base voice.
 function selectForBuild(
-  profile: Profile,
+  profile: ProfileV2,
   jdText: string,
+  forcedVariant?: string,
 ): {
   payload: ProjectPayload[];
   scores: Record<string, number>;
@@ -121,13 +123,17 @@ function selectForBuild(
   const jd = analyze(jdText);
   const variants: Record<string, string> = {};
   const payload = buildProjectPayload(
-    selected.map(([name, p]) => {
-      const variant = pickVariant(p, jd);
+    selected.map(([name, e]) => {
+      // A forced variant (user picked it in the report dialog's Edit tab)
+      // replaces the per-project JD auto-pick everywhere. bulletsFor falls
+      // back to "base" when a project has no array for that variant, so a
+      // variant with sparse coverage still renders.
+      const variant = forcedVariant ?? pickVariant(e, jd);
       variants[name] = variant;
       return {
         name,
-        tech: (p.tech ?? []).join(", "),
-        bullets: p.bullets[variant] ?? p.bullets.base ?? [],
+        tech: (e.tech ?? []).join(", "),
+        bullets: bulletsFor(e, variant),
       };
     }),
   );
@@ -143,6 +149,9 @@ type BuildReport = {
   jdSource: "manual" | "fetched" | "stub";
   jdChars: number;
   instructions?: string;
+  // The user-forced bullet variant, when one was picked instead of the
+  // per-project JD auto-pick. Undefined = auto.
+  variant?: string;
   scores: Record<string, number>;
   notes: string[];
   projects: {
@@ -164,7 +173,12 @@ async function performBuild(
   ctx: ActionCtx,
   user: string,
   short: string,
-  opts: { jdText?: string; instructions?: string; overrides?: BuildOverride[] } = {},
+  opts: {
+    jdText?: string;
+    instructions?: string;
+    overrides?: BuildOverride[];
+    variant?: string;
+  } = {},
 ): Promise<void> {
   const match = await ctx.runQuery(internal.resume.getMatchInternal, { user, short });
   if (!match) throw new Error("match not found");
@@ -182,9 +196,9 @@ async function performBuild(
   if (!profileRow) throw new Error("profile not found");
   // `data` is a JSON string (putProfile's contract - object storage rejects
   // non-ASCII dict keys); tolerate legacy rows written as a raw object.
-  const profile = (
-    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data
-  ) as Profile;
+  const profile: ProfileV2 = toV2(
+    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data,
+  );
 
   // JD text, most trustworthy source first: user-pasted (a rebuild after the
   // report said acquisition failed, or an override of a bad fetch), then the
@@ -209,9 +223,13 @@ async function performBuild(
 
   // Tailor the selected project bullets with the LLM (all failures fall back
   // to the deterministic bank text, exactly like tailor.py never raising).
-  const { payload: selected, scores, variants } = selectForBuild(profile, jdText);
+  const { payload: selected, scores, variants } = selectForBuild(
+    profile,
+    jdText,
+    opts.variant,
+  );
   const projectDates = new Map(
-    Object.entries(profile.projects ?? {}).map(([n, p]) => [n, p.date]),
+    projectEntries(profile).map((e) => [e.heading, e.date]),
   );
   const before = new Map(
     selected.map((p) => [p.name, p.bullets.map((b) => b.text)]),
@@ -228,7 +246,12 @@ async function performBuild(
   let llmError: string | undefined;
   const rewritten = new Set<string>();
   const notes: string[] = [];
-  const apiKey = process.env.GEMINI_API_KEY;
+  // The key comes from the user's own Connections page, not from a deployment
+  // env var: this is a per-user store (see credentials.ts resolveGeminiKey for
+  // why there is deliberately no process.env fallback). Reading process.env
+  // here was the bug that made a key the Connections page had just tested
+  // successfully have no effect on a build.
+  const apiKey = await ctx.runAction(internal.credentials.resolveGeminiKey, { user });
   if (apiKey) {
     try {
       // Free-form user guidance rides into the prompt alongside the JD, so
@@ -261,7 +284,9 @@ async function performBuild(
       console.warn("resume tailor fell back to bank text", err);
     }
   } else {
-    notes.push("GEMINI_API_KEY not set - bank text used verbatim");
+    notes.push(
+      "No Gemini key on your Connections page - bank text used verbatim",
+    );
   }
 
   // Hand-edited bullet text wins over everything: it is the user's literal
@@ -295,6 +320,7 @@ async function performBuild(
     jdSource,
     jdChars: jdText.length,
     instructions: opts.instructions,
+    variant: opts.variant,
     scores,
     notes,
     projects: content.projects.map((p) => ({
@@ -333,10 +359,16 @@ export const runBuild = internalAction({
     overrides: v.optional(
       v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
     ),
+    variant: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, jdText, instructions, overrides }) => {
+  handler: async (ctx, { user, short, jdText, instructions, overrides, variant }) => {
     try {
-      await performBuild(ctx, user, short, { jdText, instructions, overrides });
+      await performBuild(ctx, user, short, {
+        jdText,
+        instructions,
+        overrides,
+        variant,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("resume build failed", err);

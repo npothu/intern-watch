@@ -3,7 +3,14 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "strict": true
+    "strict": true,
+    "skipLibCheck": true,
+    // Without this, `tsc -p convex/tsconfig.json` emits a .js beside every .ts
+    // in this directory. Convex then bundles BOTH the .ts and the stale .js as
+    // separate modules that want the same output path, and the push dies with
+    // "Two output files share the same path but have different contents".
+    // This config is only ever used to typecheck, so never emit.
+    "noEmit": true
   },
   "include": ["./**/*"]
 }

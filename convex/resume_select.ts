@@ -4,8 +4,9 @@
 // picking) plus the JD analysis it depends on (src/resume/jd.py). It scores
 // the bank's projects against the raw JD text, sorts them, and returns the
 // subset that should surface on the resume, deterministic for a given bank +
-// JD. Its only dependency is the `Project`/`Profile` shapes from ./resume_docx
-// so it stays directly unit-testable without a Convex backend.
+// JD. Its only dependency is the v2 profile shapes from ./profile_schema plus
+// the projectEntries helper from ./resume_docx, so it stays directly
+// unit-testable without a Convex backend.
 //
 // It MUST stay in lockstep with the Python sources: if you change the lexicon,
 // the W_* multipliers, MAX/MIN_PROJECTS, or the score/sort rules here, mirror
@@ -19,7 +20,8 @@
 //    score above zero, pad with the remaining (zero-score) projects in bank
 //    order up to MAX_PROJECTS.
 
-import type { Profile, Project } from "./resume_docx";
+import type { ProfileV2, Entry } from "./profile_schema";
+import { projectEntries } from "./resume_docx";
 
 // match-strength multipliers: where in the project a JD skill was found
 export const W_TAG = 3; // explicit tags are the strongest signal
@@ -273,10 +275,10 @@ export function analyze(jdText: string): JDProfile {
 export type Searchable = { tags: string; tech: string; text: string };
 
 /** The three searchable strings for a project: tags, tech, prose (select.py._searchable). */
-export function searchable(project: Project): Searchable {
-  const tags = (project.tags ?? []).join(" ");
-  const tech = (project.tech ?? []).join(" ");
-  const text = Object.values(project.bullets)
+export function searchable(entry: Entry): Searchable {
+  const tags = (entry.tags ?? []).join(" ");
+  const tech = (entry.tech ?? []).join(" ");
+  const text = Object.values(entry.bullets)
     .flat()
     .join(" ");
   return { tags, tech, text };
@@ -287,8 +289,8 @@ export function searchable(project: Project): Searchable {
  * For each JD skill: W_TAG if it appears in tags, else W_TECH in tech, else
  * W_TEXT in bullet prose; contributes weight * strength.
  */
-export function scoreProject(project: Project, jd: JDProfile): number {
-  const { tags, tech, text } = searchable(project);
+export function scoreProject(entry: Entry, jd: JDProfile): number {
+  const { tags, tech, text } = searchable(entry);
   let total = 0;
   for (const [skill, weight] of Object.entries(jd.weights)) {
     let strength: number;
@@ -305,9 +307,9 @@ export function scoreProject(project: Project, jd: JDProfile): number {
  * The bullet variant whose text hits the most JD weight; ties go to "base"
  * (select.py.pick_variant).
  */
-export function pickVariant(project: Project, jd: JDProfile): string {
+export function pickVariant(entry: Entry, jd: JDProfile): string {
   const variantScore = (name: string): number => {
-    const text = (project.bullets[name] ?? []).join(" ");
+    const text = (entry.bullets[name] ?? []).join(" ");
     let sum = 0;
     for (const [skill, weight] of Object.entries(jd.weights)) {
       if (matches(skill, text)) sum += weight;
@@ -315,7 +317,7 @@ export function pickVariant(project: Project, jd: JDProfile): string {
     return sum;
   };
   // "base" sorts first so ties resolve to it; otherwise dict insertion order.
-  const keys = Object.keys(project.bullets).sort(
+  const keys = Object.keys(entry.bullets).sort(
     (a, b) => (a === "base" ? 0 : 1) - (b === "base" ? 0 : 1),
   );
   let best = keys[0] ?? "base";
@@ -333,7 +335,7 @@ export function pickVariant(project: Project, jd: JDProfile): string {
 // --- selection (port of select.py build_plan's project part) ---------------
 
 export type SelectResult = {
-  selected: [string, Project][];
+  selected: [string, Entry][];
   scores: Record<string, number>;
 };
 
@@ -347,20 +349,21 @@ export type SelectResult = {
  * The `scores` map reports every project's score (including unpicked ones)
  * for the build report.
  */
-export function selectProjects(profile: Profile, jdText: string): SelectResult {
+export function selectProjects(profile: ProfileV2, jdText: string): SelectResult {
   const jd = analyze(jdText);
-  const projects = profile.projects ?? {};
-  const names = Object.keys(projects);
+  const entries = projectEntries(profile);
 
   const scores: Record<string, number> = {};
-  for (const n of names) scores[n] = scoreProject(projects[n], jd);
+  for (const e of entries) scores[e.heading] = scoreProject(e, jd);
 
-  // score desc, then bank order - zero-score projects sort after scored ones
-  // and inherit bank order among themselves, which is exactly the pad rule.
-  const chosen = [...names]
-    .sort((a, b) => scores[b] - scores[a] || names.indexOf(a) - names.indexOf(b))
+  // score desc, then bank order (the entry index) - zero-score projects sort
+  // after scored ones and inherit bank order among themselves, which is
+  // exactly the pad rule.
+  const indexed = entries.map((e, i) => [e, i] as const);
+  const chosen = [...indexed]
+    .sort((a, b) => scores[b[0].heading] - scores[a[0].heading] || a[1] - b[1])
     .slice(0, MAX_PROJECTS);
 
-  const selected: [string, Project][] = chosen.map((n) => [n, projects[n]]);
+  const selected: [string, Entry][] = chosen.map(([e]) => [e.heading, e]);
   return { selected, scores };
 }

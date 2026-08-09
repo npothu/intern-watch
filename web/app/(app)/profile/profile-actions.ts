@@ -2,6 +2,7 @@
 
 import { resolveTrackerUser } from "@/lib/user";
 import { getProfile, putProfile } from "@/lib/convex";
+import { toV2 } from "../../../../convex/profile_schema";
 
 /**
  * Profile-page server actions. The profile is a resume "bank" JSON stored as
@@ -59,5 +60,35 @@ export async function saveProfile(data: string): Promise<SaveProfileResult> {
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message || "Couldn't save the profile." };
+  }
+}
+
+/**
+ * Upgrade the stored profile JSON to v2 if it is still v1, then save it back.
+ *
+ * Server actions only ever run on the server and are never bundled to the
+ * browser, so this file can import convex/profile_schema.ts (which has zero
+ * imports of its own) directly - unlike the client bundle, which must use the
+ * mirror types/helpers in lib/profile.ts. A missing or already-v2 profile is a
+ * no-op success.
+ */
+export async function upgradeProfile(): Promise<SaveProfileResult> {
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "Not signed in, or this account isn't provisioned.",
+    };
+  }
+  try {
+    const { data } = await getProfile(user);
+    if (data) {
+      const parsed: unknown = JSON.parse(data);
+      const v2 = toV2(parsed);
+      await putProfile(user, JSON.stringify(v2, null, 2));
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message || "Couldn't upgrade the profile." };
   }
 }

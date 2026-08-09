@@ -25,7 +25,7 @@ export class ConvexError extends Error {
 type ConvexStatus = { status?: string; value?: unknown; errorMessage?: string };
 
 async function post(
-  kind: "query" | "mutation",
+  kind: "query" | "mutation" | "action",
   fn: string,
   args: Record<string, unknown>,
   module: string = "tracker"
@@ -115,6 +115,8 @@ export type ResumeReport = {
   jdSource: "manual" | "fetched" | "stub";
   jdChars: number;
   instructions?: string;
+  /** The user-forced bullet variant for this build (undefined = JD auto-pick). */
+  variant?: string;
   scores: Record<string, number>;
   notes: string[];
   projects: {
@@ -226,6 +228,24 @@ export async function restoreResume(
     : { ok: true };
 }
 
+/** Delete a built resume for one match via `resume:deleteResume`. The
+ * mutation removes both kept storage artifacts and the resumeBuilds marker.
+ * Returns the same {ok, reason} shape the mutation returns. */
+export async function deleteResume(
+  user: string,
+  short: string
+): Promise<{ ok: boolean; reason?: string }> {
+  const value = await post("mutation", "deleteResume", { user, short }, "resume");
+  const res = value as { ok?: boolean; reason?: string } | null;
+  // Default to FAILURE on an unrecognised response, not success: reporting a
+  // delete that may not have happened would leave the user believing an
+  // artifact is gone while it is still in storage.
+  if (!res || typeof res.ok !== "boolean") {
+    return { ok: false, reason: "unexpected_response" };
+  }
+  return { ok: res.ok, reason: res.reason };
+}
+
 /** Convenience: the full per-user bundle the pages need. */
 export async function getTrackerUserData(user: string): Promise<TrackerUserData> {
   const [matches, ticks, ledger, resumes] = await Promise.all([
@@ -246,6 +266,7 @@ export type ResumeBuildOpts = {
   jdText?: string;
   instructions?: string;
   overrides?: { name: string; bullets: string[] }[];
+  variant?: string;
 };
 
 /** Kick off an on-demand resume build for one match inside Convex. */
@@ -429,3 +450,65 @@ export async function getHealth(user: string): Promise<TrackerHealth | null> {
   return value as TrackerHealth | null;
 }
 
+
+// -- credentials (connections) ------------------------------------------------
+
+/** One stored provider credential row, per `credentials:listCredentials`.
+ *  `status` is one of "ok" | "error" | "untested" and tells the Connections
+ *  page which pill to draw; the secret itself is never returned. */
+export type CredentialRow = {
+  provider: string;
+  hint?: string;
+  label?: string;
+  status: "ok" | "error" | "untested";
+  lastCheckedAt?: number;
+  lastError?: string;
+  updatedAt?: number;
+};
+
+/** All of the user's provider credentials, keyed by provider name. */
+export async function listCredentials(user: string): Promise<CredentialRow[]> {
+  const value = await post("query", "listCredentials", { user }, "credentials");
+  return (value as CredentialRow[] | null) ?? [];
+}
+
+/** Save (or replace) one provider's secret fields. */
+export async function putCredential(
+  user: string,
+  provider: string,
+  fields: Record<string, string>
+): Promise<void> {
+  await post(
+    "action",
+    "putCredential",
+    { user, provider, fields },
+    "credentials"
+  );
+}
+
+/** Ping the provider with the saved credential. Returns ok + a human detail. */
+export async function testCredential(
+  user: string,
+  provider: string
+): Promise<{ ok: boolean; detail: string }> {
+  const value = await post(
+    "action",
+    "testCredential",
+    { user, provider },
+    "credentials"
+  );
+  return value as { ok: boolean; detail: string };
+}
+
+/** Delete one provider's stored credential. */
+export async function deleteCredential(
+  user: string,
+  provider: string
+): Promise<void> {
+  await post(
+    "mutation",
+    "deleteCredential",
+    { user, provider },
+    "credentials"
+  );
+}
