@@ -31,5 +31,12 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // Test files colocated under web/ are run by the ROOT vitest suite and import
+  // `vitest`, which is a root devDependency. They must stay out of the Next.js
+  // build's type check: `next build` only ever installs web/package.json, both
+  // on Vercel (Root Directory = web) and in CI, so type-checking them here fails
+  // the production build on a module that is correct in every real checkout.
+  // vitest is deliberately NOT added to web/package.json - a second copy under
+  // web/node_modules would shadow the root one and break the root runner.
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx"]
 }
