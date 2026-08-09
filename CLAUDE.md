@@ -127,7 +127,28 @@ So "deploy this" is never one step here; it is this chain:
      root `.env.local`)
    - prod: `npx convex deploy`
    Convex `deploy` pushes schema + functions together; a schema change lands on
-   live data, so deploy dev first and exercise the changed path there.
+   live data, so deploy dev first and exercise the changed path there. Do not
+   trust the "deployed" line — run one real call against the changed path
+   (`npx convex run <fn> '<json>'`, add `--prod`) and clean up any test row.
+4. **Deploy the web app** — it is a SEPARATE deploy and it is NOT automatic.
+   There is no git integration; every production release is
+   `npx vercel --prod` run **from the repo root** (the project's Root Directory
+   is already `web`, so running it inside `web/` resolves `web/web` and fails).
+   Convex and Vercel drifting apart is a half-released state: the backend is
+   additive so the old UI keeps working, but nothing new is visible until this
+   step runs.
+
+### The web build only ever installs `web/package.json`
+
+Vercel builds with Root Directory `web`, so the root `node_modules` does not
+exist there. Anything under `web/` that `next build` type-checks must resolve
+against `web/package.json` alone. Colocated `*.test.ts` files import `vitest`
+(a ROOT devDependency) and are therefore excluded in `web/tsconfig.json`; the
+root vitest suite still runs them. Do not "fix" a missing-module error in the
+web build by installing the root deps in CI — that makes CI pass and leaves
+Vercel broken, which is precisely the trap: **web CI must mirror Vercel's
+install, not your laptop's.** And never add `vitest` to `web/package.json` — a
+second copy shadows the root one and breaks the root runner.
 
 ### Deployment env vars are per-deployment and do NOT travel
 
