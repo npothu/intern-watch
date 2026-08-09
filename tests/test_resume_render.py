@@ -6,8 +6,7 @@ from docx.oxml.ns import qn
 
 from src.resume import jd, render, select
 from src.resume.bank import load_bank
-from src.resume.spec import (CONTENT_W_TW, FONT, MARGIN_TW, PAGE_H_TW,
-                             PAGE_W_TW)
+from src.resume.spec import CONTENT_W_TW, FONT, MARGIN_TW, PAGE_H_TW, PAGE_W_TW
 
 BANK = load_bank("tests/fixtures/resume_bank.json")
 
@@ -98,7 +97,7 @@ def test_hyperlinks_present(fixtures, tmp_path):
     rels = doc.part.rels
     urls = {r.target_ref for r in rels.values()
             if r.reltype.endswith("/hyperlink")}
-    assert {l["url"] for l in plan.links} <= urls
+    assert {link["url"] for link in plan.links} <= urls
 
 
 def test_no_spacing_surprises(fixtures, tmp_path):

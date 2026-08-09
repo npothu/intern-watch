@@ -6,9 +6,9 @@ import json
 
 import pytest
 
+from src.apply.base import ATSFamily
 from src.apply.fillers.agent import AgentFiller, _apply_mapping, _llm_cfg, map_fields
 from src.apply.profile import ApplyProfile
-from src.apply.base import ATSFamily
 
 
 def test_llm_cfg_resolves_example_when_user_yaml_absent():
@@ -384,7 +384,7 @@ def test_boolean_button_pair_extracted_and_clicked():
     extracted as a boolean field and the correct button clicked for the mapped
     value, and left untouched when unmapped."""
     pw = pytest.importorskip("playwright.sync_api")
-    from src.apply.fillers.agent import _extract_fields, _apply_mapping
+    from src.apply.fillers.agent import _apply_mapping, _extract_fields
     html = ("<div id='q'>"
             "<label>Are you legally eligible to work in Canada?</label>"
             "<div><button>Yes</button><button>No</button></div>"
@@ -517,7 +517,7 @@ def test_apply_mapping_combobox_llm_second_chance(monkeypatch):
 
 def test_parse_and_format_date():
     """Date answers we actually store must parse; a vague answer must not."""
-    from src.apply.fillers.agent import _parse_date, _format_date
+    from src.apply.fillers.agent import _format_date, _parse_date
     assert _parse_date("2027-05-10") == (2027, 5, 10)
     assert _parse_date("05/10/2027") == (2027, 5, 10)
     assert _parse_date("May 10, 2027") == (2027, 5, 10)
@@ -1011,8 +1011,9 @@ class _VerifyPage:
 
 
 def _verify_ctx(final_url="https://x.io/apply"):
-    from src.apply.base import ApplyContext, ATSFamily
     import pathlib
+
+    from src.apply.base import ApplyContext, ATSFamily
     return ApplyContext(job={"key": "jr:x"}, profile=_profile(),
                         resume_path=pathlib.Path("nope.docx"),
                         mode=None, final_url=final_url, family=ATSFamily.unknown)
@@ -1357,7 +1358,7 @@ def test_wait_for_form_stable_returns_when_count_settles():
     changing (SPA/remote render) rather than a fixed sleep — a form that grows
     from a handful of fields to its full set must be seen complete."""
     pw = pytest.importorskip("playwright.sync_api")
-    from src.apply.fillers.agent import _wait_for_form_stable, _extract_fields
+    from src.apply.fillers.agent import _extract_fields, _wait_for_form_stable
     # A page that injects the rest of its fields ~500ms after load.
     html = """
     <form id='f'><label for='a'>A</label><input id='a'></form>

@@ -1,9 +1,15 @@
 import datetime as dt
 
 from src import state as st
-from src.content_dedup import (SUPPRESS_WINDOW_DAYS, _parse_sig, compatible,
-                               content_signature, find_compatible,
-                               seed_from_matches, signature_from_item)
+from src.content_dedup import (
+    SUPPRESS_WINDOW_DAYS,
+    _parse_sig,
+    compatible,
+    content_signature,
+    find_compatible,
+    seed_from_matches,
+    signature_from_item,
+)
 from src.filters import location_bucket
 from src.main import _drop_content_dupes
 from src.models import Job
@@ -11,8 +17,8 @@ from src.normalize import norm_title
 
 
 def _job(**kw):
-    base = dict(company="Acme", title="SWE Intern", url="https://acme.com/j/1",
-                source="jobright-swe", terms=["Summer 2027"])
+    base = {"company": "Acme", "title": "SWE Intern", "url": "https://acme.com/j/1",
+            "source": "jobright-swe", "terms": ["Summer 2027"]}
     base.update(kw)
     return Job(**base)
 
@@ -129,8 +135,10 @@ def test_gate_suppresses_second_duplicate_keeps_first():
 def test_gate_keeps_per_state_siblings():
     state = st.empty_state()
     day = dt.date(2026, 6, 1)
-    atl = _job(locations=["Atlanta, GA"]); atl.dedup_key = "jr:atl"
-    aus = _job(locations=["Austin, TX"]); aus.dedup_key = "jr:aus"
+    atl = _job(locations=["Atlanta, GA"])
+    atl.dedup_key = "jr:atl"
+    aus = _job(locations=["Austin, TX"])
+    aus.dedup_key = "jr:aus"
     kept = _drop_content_dupes(state, "example", [(atl, []), (aus, [])],
                                ["Summer 2027"], day)
     assert len(kept) == 2
@@ -139,8 +147,10 @@ def test_gate_keeps_per_state_siblings():
 def test_gate_redelivers_after_window():
     state = st.empty_state()
     day0 = dt.date(2026, 6, 1)
-    a = _job(locations=["United States"], terms=["Fall 2026"]); a.dedup_key = "jr:a"
-    b = _job(locations=["United States"], terms=["Fall 2026"]); b.dedup_key = "jr:b"
+    a = _job(locations=["United States"], terms=["Fall 2026"])
+    a.dedup_key = "jr:a"
+    b = _job(locations=["United States"], terms=["Fall 2026"])
+    b.dedup_key = "jr:b"
     terms = ["Fall 2026"]
     assert _drop_content_dupes(state, "example", [(a, [])], terms, day0)
     later = day0 + dt.timedelta(days=SUPPRESS_WINDOW_DAYS + 1)

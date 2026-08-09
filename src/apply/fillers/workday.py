@@ -40,7 +40,7 @@ class WorkdayFiller:
     family: ATSFamily = ATSFamily.workday
 
     # ----------------------------------------------------------------- public
-    def apply(self, page: "Page", ctx: ApplyContext) -> ApplyResult:
+    def apply(self, page: Page, ctx: ApplyContext) -> ApplyResult:
         try:
             if ctx.mode is ApplyMode.submit and self._is_captcha(page):
                 return self._blocked(
@@ -51,18 +51,19 @@ class WorkdayFiller:
             # advance on the *actual* auth form / application form — NOT on
             # _is_login_wall, which also fires on the posting page's header
             # "Sign In" link and would wrongly skip the Apply click.
-            if not self._is_application_form(page) and not self._has_auth_form(page):
-                if advance_to_application_form(page):
-                    log.info("workday: advanced past posting via Apply for %s",
-                             ctx.dedup_key)
-                    try:
-                        page.wait_for_selector(
-                            "[data-automation-id='password'], "
-                            "[data-automation-id='email'], "
-                            "[data-automation-id='legalNameSection_firstName'], "
-                            "input[type='password']", timeout=12000)
-                    except Exception:
-                        pass
+            if (not self._is_application_form(page)
+                    and not self._has_auth_form(page)
+                    and advance_to_application_form(page)):
+                log.info("workday: advanced past posting via Apply for %s",
+                         ctx.dedup_key)
+                try:
+                    page.wait_for_selector(
+                        "[data-automation-id='password'], "
+                        "[data-automation-id='email'], "
+                        "[data-automation-id='legalNameSection_firstName'], "
+                        "input[type='password']", timeout=12000)
+                except Exception:
+                    pass
 
             # A real sign-in / create-account FORM (not just a header link) ->
             # authenticate or register.
@@ -103,7 +104,7 @@ class WorkdayFiller:
             )
 
     # ------------------------------------------------------------------- auth
-    def _handle_wall(self, page: "Page", ctx: ApplyContext) -> "ApplyResult | None":
+    def _handle_wall(self, page: Page, ctx: ApplyContext) -> ApplyResult | None:
         """Try to sign in (or register) using ctx.account. Returns a terminal
         ApplyResult when we cannot proceed, or None once we are past the wall
         (so apply() continues into form-filling)."""
@@ -127,6 +128,9 @@ class WorkdayFiller:
                 "session will be reused on later runs.",
             AuthStatus.blocked_captcha:
                 "CAPTCHA on the Workday sign-in — cannot proceed unattended.",
+            AuthStatus.blocked_login:
+                "Google sign-in asked for a password. Complete it once "
+                "interactively; the session will be reused on later runs.",
             AuthStatus.failed:
                 "Could not sign in or create a Workday account automatically. "
                 "Log in once interactively; the session will be reused.",
@@ -135,7 +139,7 @@ class WorkdayFiller:
               else ApplyStatus.blocked_login)
         return self._blocked(st, page, msgs.get(status, "Workday auth failed."))
 
-    def _has_auth_form(self, page: "Page") -> bool:
+    def _has_auth_form(self, page: Page) -> bool:
         """A real sign-in / create-account FORM is on the page — distinct from a
         header 'Sign In' link on a job posting (which _is_login_wall also flags)."""
         for sel in ("input[type='password']",
@@ -148,7 +152,7 @@ class WorkdayFiller:
         return False
 
     # --------------------------------------------------------------- wall detect
-    def _is_login_wall(self, page: "Page") -> bool:
+    def _is_login_wall(self, page: Page) -> bool:
         """A sign-in / create-account wall blocks the application form."""
         try:
             url = (page.url or "").lower()
@@ -174,12 +178,12 @@ class WorkdayFiller:
                     return True
         return False
 
-    def _is_captcha(self, page: "Page") -> bool:
+    def _is_captcha(self, page: Page) -> bool:
         # Only a *visible* widget blocks — an invisible/passive captcha that
         # auto-passes must not stop a fillable form (see src/apply/dom.py).
         return has_visible_captcha(page)
 
-    def _is_application_form(self, page: "Page") -> bool:
+    def _is_application_form(self, page: Page) -> bool:
         """Heuristic: at least one known application field is present."""
         for aid in ("legalNameSection_firstName", "email", "phone-number",
                     "fileUploadField"):
@@ -189,7 +193,7 @@ class WorkdayFiller:
 
     # ------------------------------------------------------------------- fill
     def _fill_fields(
-        self, page: "Page", ctx: ApplyContext
+        self, page: Page, ctx: ApplyContext
     ) -> tuple[list[str], list[str]]:
         profile = ctx.profile
         filled: list[str] = []
@@ -233,7 +237,7 @@ class WorkdayFiller:
 
         return filled, unfilled
 
-    def _attach_resume(self, page: "Page", resume_path: Path) -> bool:
+    def _attach_resume(self, page: Page, resume_path: Path) -> bool:
         if not resume_path or not Path(resume_path).exists():
             return False
         loc = self._find_input(
@@ -253,7 +257,7 @@ class WorkdayFiller:
     # ----------------------------------------------------------------- submit
     def _advance_to_submit(
         self,
-        page: "Page",
+        page: Page,
         ctx: ApplyContext,
         filled: list[str],
         unfilled: list[str],
@@ -366,7 +370,7 @@ class WorkdayFiller:
     _NEXT_AIDS = ("bottom-navigation-next-button", "next")
     _NEXT_NAMES = ("Next", "Continue")
 
-    def _submit_button(self, page: "Page") -> "tuple[Locator | None, bool]":
+    def _submit_button(self, page: Page) -> tuple[Locator | None, bool]:
         """The next control to click and whether it is the FINAL submit.
 
         Prefer a Next/Continue control (advance the wizard) over a Submit one so
@@ -391,7 +395,7 @@ class WorkdayFiller:
         return None, False
 
     # ------------------------------------------------------------ submit gate
-    def _gate_block_labels(self, page: "Page", enabled: bool) -> list[str]:
+    def _gate_block_labels(self, page: Page, enabled: bool) -> list[str]:
         """Labels of unfilled REQUIRED fields on the current step that must block
         a final submit. Empty when the gate is off or nothing required is blank
         (submit may proceed). Detected-required is a lower bound (an undetected
@@ -411,11 +415,11 @@ class WorkdayFiller:
                 labels.append(label)
         return labels
 
-    def _required_widgets(self, page: "Page") -> list["Locator"]:
+    def _required_widgets(self, page: Page) -> list[Locator]:
         """Every visible required INPUT/SELECT/TEXTAREA on the current step.
         Workday marks required with aria-required, a required attribute, or a
         sibling asterisk (data-automation-id='required' / a * abbr)."""
-        out: list["Locator"] = []
+        out: list[Locator] = []
         selectors = (
             "input[aria-required='true']",
             "select[aria-required='true']",
@@ -442,7 +446,7 @@ class WorkdayFiller:
                 continue
         return out
 
-    def _widget_filled(self, loc: "Locator") -> bool:
+    def _widget_filled(self, loc: Locator) -> bool:
         try:
             val = loc.input_value(timeout=PROBE_MS)
         except Exception:
@@ -457,7 +461,7 @@ class WorkdayFiller:
                 return False
         return bool(val and val.strip())
 
-    def _widget_label(self, page: "Page", loc: "Locator") -> str:
+    def _widget_label(self, page: Page, loc: Locator) -> str:
         """A human-readable label for a required widget, best-effort."""
         for attr in ("aria-label", "data-automation-id", "name", "id"):
             try:
@@ -468,12 +472,12 @@ class WorkdayFiller:
                 return v.strip()
         return "required field"
 
-    def _submit_attempt(self, page: "Page") -> dict:
+    def _submit_attempt(self, page: Page) -> dict:
         """The attempt record persisted the moment a final submit is clicked, so
         the queue writes a permanent ledger entry and never re-submits this job.
         Same shape the agent path uses (queue keys off `.submit_attempt`)."""
         return {
-            "on": dt.datetime.now(dt.timezone.utc).date().isoformat(),
+            "on": dt.datetime.now(dt.UTC).date().isoformat(),
             "family": self.family.value,
             "final_url": _safe_url(page),
             # Built BEFORE the click, so this starts False; the submitted
@@ -483,7 +487,7 @@ class WorkdayFiller:
             "screenshot": None,
         }
 
-    def _confirmation_present(self, page: "Page") -> bool:
+    def _confirmation_present(self, page: Page) -> bool:
         for sel in (
             "[data-automation-id='confirmationPage']",
             "[data-automation-id='applicationSubmitted']",
@@ -504,11 +508,11 @@ class WorkdayFiller:
     # --------------------------------------------------------------- locating
     def _find_input(
         self,
-        page: "Page",
+        page: Page,
         aids: list[str],
         label_rx: str,
         input_type: str | None = None,
-    ) -> "Locator | None":
+    ) -> Locator | None:
         for aid in aids:
             loc = page.locator(f"[data-automation-id='{aid}']")
             if self._visible(loc) or (input_type == "file" and loc.count() > 0):
@@ -525,26 +529,26 @@ class WorkdayFiller:
         return None
 
     # ----------------------------------------------------------------- probes
-    def _present(self, page: "Page", selector: str) -> bool:
+    def _present(self, page: Page, selector: str) -> bool:
         try:
             return page.locator(selector).count() > 0
         except Exception:
             return False
 
-    def _present_button(self, page: "Page", name: str) -> bool:
+    def _present_button(self, page: Page, name: str) -> bool:
         try:
             return page.get_by_role("button", name=name).count() > 0
         except Exception:
             return False
 
-    def _visible(self, loc: "Locator") -> bool:
+    def _visible(self, loc: Locator) -> bool:
         try:
             return loc.count() > 0 and loc.first.is_visible()
         except Exception:
             return False
 
     # ----------------------------------------------------------------- helpers
-    def _screenshot(self, page: "Page", ctx: ApplyContext) -> Path | None:
+    def _screenshot(self, page: Page, ctx: ApplyContext) -> Path | None:
         out_dir = ctx.artifacts_dir
         if out_dir is None:
             return None
@@ -562,7 +566,7 @@ class WorkdayFiller:
     def _blocked(
         self,
         status: ApplyStatus,
-        page: "Page",
+        page: Page,
         message: str,
         filled: list[str] | None = None,
         unfilled: list[str] | None = None,
@@ -579,7 +583,7 @@ class WorkdayFiller:
     def _blocked_attempt(
         self,
         status: ApplyStatus,
-        page: "Page",
+        page: Page,
         message: str,
         filled: list[str] | None,
         unfilled: list[str] | None,
@@ -593,7 +597,7 @@ class WorkdayFiller:
         return res
 
 
-def _safe_url(page: "Page") -> str:
+def _safe_url(page: Page) -> str:
     try:
         return page.url or ""
     except Exception:

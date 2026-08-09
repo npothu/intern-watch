@@ -6,9 +6,11 @@ import json
 import httpx
 import yaml
 
-from src import dashboard as db, main, state as st, store
+from src import dashboard as db
+from src import main, store
+from src import state as st
 
-NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.UTC)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
 
 

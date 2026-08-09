@@ -1,6 +1,5 @@
 """Provider abstraction for the ambiguous-case classifier."""
 
-import json
 
 import httpx
 import pytest

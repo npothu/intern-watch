@@ -2,7 +2,8 @@
 
 import json
 
-from src import dashboard, state as st, statewrite
+from src import dashboard, statewrite
+from src import state as st
 from src.webui import core
 
 

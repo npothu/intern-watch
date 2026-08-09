@@ -1,0 +1,8 @@
+# Lint/type tooling. Kept OUT of requirements.txt on purpose: the six
+# production workflows (watch, resume*, dashboard-write, refresh-boards) all
+# `pip install -r requirements.txt` on every cron run and must not pay for
+# tools they never invoke. Only test.yml installs this file.
+# Config for both lives in pyproject.toml.
+-r requirements.txt
+ruff>=0.16
+mypy>=1.11

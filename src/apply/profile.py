@@ -15,8 +15,10 @@ import yaml
 from pydantic import BaseModel, Field
 
 # Re-export the shared .env loader so existing callers of
-# `from .profile import load_dotenv` keep working unchanged.
-from ..envfile import load_dotenv
+# `from .profile import load_dotenv` keep working unchanged. The redundant
+# `as load_dotenv` is the explicit-re-export form (PEP 484): it tells ruff and
+# mypy this unused-looking import is the module's public surface, not dead.
+from ..envfile import load_dotenv as load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
 

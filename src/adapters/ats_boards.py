@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -90,7 +91,10 @@ class AtsBoardsAdapter(Adapter):
         those jobs get a jd_url for main.enrich_jds to fetch lazily."""
         ats, slug, company = path.split(":", 2)
         data = json.loads(raw)
-        rows = {
+        # Annotated so the per-ATS builders share one row shape
+        # (title, url, location, date_posted, description, jd_url) instead of
+        # widening to `object` on the join of three differently-typed lambdas.
+        builders: dict[str, Callable[[], list[tuple]]] = {
             "greenhouse": lambda: [
                 (j.get("title"), j.get("absolute_url"),
                  (j.get("location") or {}).get("name", ""),
@@ -103,7 +107,7 @@ class AtsBoardsAdapter(Adapter):
                 (j.get("text"), j.get("hostedUrl"),
                  (j.get("categories") or {}).get("location", ""),
                  dt.datetime.fromtimestamp(j["createdAt"] / 1000,
-                                           tz=dt.timezone.utc).date()
+                                           tz=dt.UTC).date()
                  if j.get("createdAt") else None,
                  _lever_jd(j), None)
                 for j in data if isinstance(j, dict)],
@@ -124,7 +128,8 @@ class AtsBoardsAdapter(Adapter):
                  sr.DETAIL_URL.format(slug=slug, posting_id=j["id"])
                  if j.get("id") else None)
                 for j in data.get("content", [])],
-        }[ats]()
+        }
+        rows = builders[ats]()
 
         jobs: list[Job] = []
         for title, url, location, date_posted, description, jd_url in rows:

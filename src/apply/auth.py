@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 from .base import ATSFamily
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import Page
 
 ROOT = Path(__file__).resolve().parents[2]
 log = logging.getLogger(__name__)
@@ -72,6 +72,11 @@ class AuthStatus(str, Enum):
     needs_verification = "needs_verification"  # account made; verify email first
     blocked_mfa = "blocked_mfa"         # MFA challenge — do it once interactively
     blocked_captcha = "blocked_captcha"
+    # Google SSO demanded a password: there is no usable session and no
+    # password flow to fall back to, so bail out to a manual login. Distinct
+    # from `failed`, which lets ensure_account try the family's own password
+    # flow after Google SSO turns out to be unavailable.
+    blocked_login = "blocked_login"
     no_credentials = "no_credentials"   # no account configured for this URL
     failed = "failed"                   # sign-in and create both failed
 
@@ -107,7 +112,7 @@ def account_for(logins: Logins, url: str) -> LoginAccount | None:
 
 # ----------------------------------------------------------------- dispatch
 
-def ensure_account(page: "Page", family: ATSFamily,
+def ensure_account(page: Page, family: ATSFamily,
                    account: LoginAccount | None, inbox=None) -> AuthStatus:
     """Single entry point: get past `family`'s auth wall, creating an account if
     needed. `inbox` (an inbox.Inbox or None) lets us resolve emailed
@@ -148,7 +153,7 @@ _WD = {
 }
 
 
-def _ensure_workday(page: "Page", account: LoginAccount | None,
+def _ensure_workday(page: Page, account: LoginAccount | None,
                     inbox=None) -> AuthStatus:
     if _wd_captcha(page):
         return AuthStatus.blocked_captcha
@@ -175,7 +180,7 @@ def _ensure_workday(page: "Page", account: LoginAccount | None,
     return status
 
 
-def _wd_sign_in(page: "Page", account: LoginAccount) -> AuthStatus:
+def _wd_sign_in(page: Page, account: LoginAccount) -> AuthStatus:
     try:
         page.locator(_WD["email"]).first.fill(account.email, timeout=PROBE_MS)
         page.locator(_WD["password"]).first.fill(account.password, timeout=PROBE_MS)
@@ -186,7 +191,7 @@ def _wd_sign_in(page: "Page", account: LoginAccount) -> AuthStatus:
     return _wd_post_auth(page)
 
 
-def _wd_create_account(page: "Page", account: LoginAccount) -> AuthStatus:
+def _wd_create_account(page: Page, account: LoginAccount) -> AuthStatus:
     try:
         # Navigate from sign-in to the create-account form if needed.
         if not _present(page, _WD["verify_password"]):
@@ -234,7 +239,7 @@ _GOOGLE_BTN_TEXT = ("Continue with Google", "Sign in with Google",
                     "Sign up with Google", "Apply with Google", "Google")
 
 
-def _try_google_sso(page: "Page", account: LoginAccount) -> AuthStatus:
+def _try_google_sso(page: Page, account: LoginAccount) -> AuthStatus:
     """Click a Google SSO button and rely on a persisted Google session.
     Returns failed if no Google button is present (so caller can fall back)."""
     if not _wd_at_wall(page) and not _any_google_button(page):
@@ -265,7 +270,7 @@ def _try_google_sso(page: "Page", account: LoginAccount) -> AuthStatus:
     return AuthStatus.authed if not _wd_at_wall(page) else AuthStatus.failed
 
 
-def _any_google_button(page: "Page") -> bool:
+def _any_google_button(page: Page) -> bool:
     for sel in _GOOGLE_BTN:
         if _present(page, sel):
             return True
@@ -278,16 +283,13 @@ def _any_google_button(page: "Page") -> bool:
     return False
 
 
-def _click_google_button(page: "Page"):
+def _click_google_button(page: Page):
     """Click the Google button; return a popup Page if one opened, else None."""
     def do_click() -> bool:
         for sel in _GOOGLE_BTN:
             if _click(page, sel):
                 return True
-        for name in _GOOGLE_BTN_TEXT:
-            if _click_button(page, name):
-                return True
-        return False
+        return any(_click_button(page, name) for name in _GOOGLE_BTN_TEXT)
 
     try:
         with page.expect_popup(timeout=PROBE_MS) as pinfo:
@@ -298,7 +300,7 @@ def _click_google_button(page: "Page"):
         return None                         # same-tab redirect (already clicked)
 
 
-def _google_password_screen(page: "Page") -> bool:
+def _google_password_screen(page: Page) -> bool:
     try:
         url = (page.url or "").lower()
     except Exception:
@@ -310,7 +312,7 @@ def _google_password_screen(page: "Page") -> bool:
 
 # ------------------------------------------------------- inbox resolution
 
-def _resolve_email_verification(page: "Page", inbox) -> AuthStatus | None:
+def _resolve_email_verification(page: Page, inbox) -> AuthStatus | None:
     """Poll the inbox for a verification link, open it, and re-check the wall."""
     from .inbox import poll
     link = poll(lambda: inbox.find_verification_link(
@@ -325,7 +327,7 @@ def _resolve_email_verification(page: "Page", inbox) -> AuthStatus | None:
     return AuthStatus.created if not _wd_at_wall(page) else AuthStatus.needs_verification
 
 
-def _resolve_email_otp(page: "Page", inbox) -> AuthStatus | None:
+def _resolve_email_otp(page: Page, inbox) -> AuthStatus | None:
     """Poll for an emailed OTP and submit it. Returns authed on success."""
     from .inbox import poll
     code = poll(lambda: inbox.find_otp_code())
@@ -345,7 +347,7 @@ def _resolve_email_otp(page: "Page", inbox) -> AuthStatus | None:
     return AuthStatus.authed if not _wd_at_wall(page) else None
 
 
-def _wd_post_auth(page: "Page") -> AuthStatus:
+def _wd_post_auth(page: Page) -> AuthStatus:
     """Classify the state right after a sign-in / create submission."""
     if _wd_captcha(page):
         return AuthStatus.blocked_captcha
@@ -363,7 +365,7 @@ def _wd_post_auth(page: "Page") -> AuthStatus:
     return AuthStatus.failed
 
 
-def _wd_at_wall(page: "Page") -> bool:
+def _wd_at_wall(page: Page) -> bool:
     try:
         url = (page.url or "").lower()
     except Exception:
@@ -377,7 +379,7 @@ def _wd_at_wall(page: "Page") -> bool:
     return False
 
 
-def _wd_captcha(page: "Page") -> bool:
+def _wd_captcha(page: Page) -> bool:
     for sel in ("iframe[src*='recaptcha']", "iframe[src*='hcaptcha']",
                 "[data-automation-id='captcha']", ".g-recaptcha", "#h-captcha"):
         if _present(page, sel):
@@ -387,14 +389,14 @@ def _wd_captcha(page: "Page") -> bool:
 
 # ----------------------------------------------------------------- DOM helpers
 
-def _present(page: "Page", selector: str) -> bool:
+def _present(page: Page, selector: str) -> bool:
     try:
         return page.locator(selector).count() > 0
     except Exception:
         return False
 
 
-def _click(page: "Page", selector: str) -> bool:
+def _click(page: Page, selector: str) -> bool:
     try:
         loc = page.locator(selector)
         if loc.count() > 0:
@@ -405,7 +407,7 @@ def _click(page: "Page", selector: str) -> bool:
     return False
 
 
-def _click_button(page: "Page", name: str) -> bool:
+def _click_button(page: Page, name: str) -> bool:
     try:
         loc = page.get_by_role("button", name=re.compile(name, re.I))
         if loc.count() > 0:
@@ -416,7 +418,7 @@ def _click_button(page: "Page", name: str) -> bool:
     return False
 
 
-def _has_text(page: "Page", *needles: str) -> bool:
+def _has_text(page: Page, *needles: str) -> bool:
     for n in needles:
         try:
             if page.get_by_text(re.compile(re.escape(n), re.I)).count() > 0:
@@ -426,7 +428,7 @@ def _has_text(page: "Page", *needles: str) -> bool:
     return False
 
 
-def _settle(page: "Page") -> None:
+def _settle(page: Page) -> None:
     try:
         page.wait_for_load_state("networkidle", timeout=NAV_MS)
     except Exception:

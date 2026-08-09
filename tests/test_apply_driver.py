@@ -26,17 +26,19 @@ def test_browserbase_missing_api_key_raises(monkeypatch):
     pytest.importorskip("playwright.sync_api")
     monkeypatch.delenv("BROWSERBASE_API_KEY", raising=False)
     monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "P")
-    profile = load_profile(path=Path(__file__).resolve().parents[1] / "users" / "apply.example.yaml")
+    profile = load_profile(
+        path=Path(__file__).resolve().parents[1] / "users" / "apply.example.yaml")
     profile.cloud.provider = "browserbase"
-    with pytest.raises(RuntimeError, match="BROWSERBASE_API_KEY"):
-        with browser_session(profile, ATSFamily.unknown):
-            pass
+    with (pytest.raises(RuntimeError, match="BROWSERBASE_API_KEY"),
+          browser_session(profile, ATSFamily.unknown)):
+        pass
 
 
 def test_unknown_provider_raises(monkeypatch):
     pytest.importorskip("playwright.sync_api")
-    profile = load_profile(path=Path(__file__).resolve().parents[1] / "users" / "apply.example.yaml")
+    profile = load_profile(
+        path=Path(__file__).resolve().parents[1] / "users" / "apply.example.yaml")
     profile.cloud.provider = "bogus"
-    with pytest.raises(RuntimeError, match="unknown browser provider"):
-        with browser_session(profile, ATSFamily.unknown):
-            pass
+    with (pytest.raises(RuntimeError, match="unknown browser provider"),
+          browser_session(profile, ATSFamily.unknown)):
+        pass

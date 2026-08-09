@@ -90,8 +90,9 @@ def test_smartrecruiters_parse(fixtures):
 
 
 def test_smartrecruiters_jd_enrichment(fixtures):
-    from src.adapters.smartrecruiters_api import jd_text
     import json
+
+    from src.adapters.smartrecruiters_api import jd_text
     detail = json.loads(
         (fixtures / "ats_smartrecruiters_visa_detail.json").read_text(encoding="utf-8"))
     body = jd_text(detail)
@@ -103,8 +104,9 @@ def test_smartrecruiters_jd_enrichment(fixtures):
 
 
 def test_boards_yaml_is_loadable_and_clean():
-    import yaml
     from pathlib import Path
+
+    import yaml
     boards = yaml.safe_load(
         (Path(__file__).parent.parent / "data" / "ats_boards.yaml")
         .read_text(encoding="utf-8"))["boards"]

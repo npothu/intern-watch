@@ -14,9 +14,9 @@ from src.resume import jd_source
 
 
 def _job(**kw) -> Job:
-    base = dict(company="Acme", title="SWE Intern",
-                url="https://acme.test/job", source="dashboard",
-                dedup_key="jr:" + "0" * 24)
+    base = {"company": "Acme", "title": "SWE Intern",
+            "url": "https://acme.test/job", "source": "dashboard",
+            "dedup_key": "jr:" + "0" * 24}
     base.update(kw)
     return Job(**base)
 

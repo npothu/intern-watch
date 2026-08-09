@@ -8,7 +8,8 @@ import logging
 import httpx
 import pytest
 
-from src import dashboard, state as st, store
+from src import dashboard, store
+from src import state as st
 
 
 def _item(i, **kw):
@@ -21,7 +22,7 @@ def _item(i, **kw):
 
 
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
-NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.UTC)
 
 
 def _mock_client(monkeypatch, handler):

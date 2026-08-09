@@ -1,0 +1,56 @@
+# Lint/type config only - intern-watch is run as `python -m src.main`, not
+# installed as a package, so there is deliberately no [build-system] here.
+# Both tools are pinned in requirements-dev.txt and enforced by test.yml.
+
+[tool.ruff]
+line-length = 100
+# CI runs 3.12 (see test.yml); target the floor, not the local interpreter.
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes - unused imports/names, undefined names
+    "I",    # isort - import ordering
+    "UP",   # pyupgrade - modern syntax for the target version
+    "B",    # flake8-bugbear - likely bugs (mutable defaults, bad except, ...)
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RET",  # flake8-return
+]
+ignore = [
+    # `try: ... except Exception: pass` around a Playwright call is the
+    # deliberate house style in src/apply and src/browser - a best-effort DOM
+    # poke whose failure is not interesting. contextlib.suppress reads worse
+    # over multi-statement blocks and would churn ~18 call sites for no
+    # correctness gain.
+    "SIM105",
+    # `class X(str, Enum)` -> StrEnum changes what str(member) returns
+    # ("X.a" vs "a"). These enums are logged and persisted by value, so the
+    # rewrite is a silent behaviour change with no upside.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts are run directly (`python scripts/foo.py`), so they must bootstrap
+# sys.path with the repo root before importing src.*.
+"scripts/*.py" = ["E402"]
+# These two embed another language in a triple-quoted literal - the form-
+# extraction JS and the Workday sign-in HTML fixtures. A `# noqa` inside such a
+# literal would become part of the JS/HTML, so an over-long line there can only
+# be exempted per-file. Both offenders are single unbreakable tokens (a date
+# regex; an onclick= attribute), not Python that wants wrapping.
+"src/apply/fillers/agent.py" = ["E501"]
+"tests/test_apply_auth.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+# Third-party deps ship no stubs (playwright, stagehand, docx, yaml).
+ignore_missing_imports = true
+# The codebase is already almost fully annotated, so checking the bodies of
+# unannotated functions costs nothing and is where the None-handling bugs are.
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true

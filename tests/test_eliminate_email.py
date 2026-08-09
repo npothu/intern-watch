@@ -12,7 +12,7 @@ from src.models import Job
 from src.notify import build_email, outbox_item
 
 ROOT = Path(__file__).parent.parent
-NOW = dt.datetime(2026, 6, 12, 12, 40, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 40, tzinfo=dt.UTC)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
 
 
@@ -23,9 +23,9 @@ def uf() -> UserFilter:
 
 
 def _job(**kw):
-    base = dict(company="Stripe", title="Software Engineer Intern Fall 2026",
-                terms=["Fall 2026"], url="https://x.com/1", source="s",
-                locations=["New York, NY"])
+    base = {"company": "Stripe", "title": "Software Engineer Intern Fall 2026",
+            "terms": ["Fall 2026"], "url": "https://x.com/1", "source": "s",
+            "locations": ["New York, NY"]}
     base.update(kw)
     return Job(**base)
 
@@ -167,7 +167,7 @@ def _due(last_iso, now):
 
 
 def test_email_due_slot_logic():
-    base = dt.datetime(2026, 6, 12, tzinfo=dt.timezone.utc)
+    base = dt.datetime(2026, 6, 12, tzinfo=dt.UTC)
     assert _due(None, base.replace(hour=12, minute=5)) is True       # never sent
     sent_8am_slot = base.replace(hour=12, minute=10).isoformat()
     assert _due(sent_8am_slot, base.replace(hour=13, minute=0)) is False  # same slot
@@ -191,14 +191,14 @@ def test_email_due_local_tz_tracks_dst():
         return st.email_due(last_iso, hours, now, et)
 
     # --- summer (EDT, UTC-4): 8am ET == 12:00 UTC ---
-    jul = dt.datetime(2026, 7, 15, tzinfo=dt.timezone.utc)
+    jul = dt.datetime(2026, 7, 15, tzinfo=dt.UTC)
     assert due(None, jul.replace(hour=11, minute=55)) is True   # never sent -> due
     sent = jul.replace(hour=10).isoformat()
     assert due(sent, jul.replace(hour=11, minute=55)) is False  # 7:55am ET, pre-slot
     assert due(sent, jul.replace(hour=12, minute=5)) is True    # 8:05am ET slot
 
     # --- winter (EST, UTC-5): 8am ET == 13:00 UTC ---
-    jan = dt.datetime(2027, 1, 15, tzinfo=dt.timezone.utc)
+    jan = dt.datetime(2027, 1, 15, tzinfo=dt.UTC)
     sent_w = jan.replace(hour=11).isoformat()
     assert due(sent_w, jan.replace(hour=12, minute=5)) is False  # 7:05am EST, pre-slot
     assert due(sent_w, jan.replace(hour=13, minute=5)) is True   # 8:05am EST slot

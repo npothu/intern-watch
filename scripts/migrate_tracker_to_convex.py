@@ -34,8 +34,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src import dashboard, ledger, state as st, store  # noqa: E402
-from src.store import TickWrite                       # noqa: E402
+from src import dashboard, ledger, store  # noqa: E402
+from src import state as st
+from src.store import TickWrite  # noqa: E402
 
 
 def _state_on_main(root: Path) -> dict:

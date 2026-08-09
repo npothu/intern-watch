@@ -5,7 +5,7 @@ from src import state as st
 from src.models import Job
 from src.notify import CHUNK_LIMIT, build_digest, match_item
 
-NOW = dt.datetime(2026, 6, 11, 18, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 11, 18, 0, tzinfo=dt.UTC)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
 
 

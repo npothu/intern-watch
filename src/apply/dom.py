@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import re
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -53,7 +52,7 @@ _FORM_STEP_RES = (
 )
 
 
-def has_visible_captcha(page: "Page") -> bool:
+def has_visible_captcha(page: Page) -> bool:
     for sel in _CAPTCHA_WIDGETS:
         try:
             for el in page.query_selector_all(sel):
@@ -67,14 +66,14 @@ def has_visible_captcha(page: "Page") -> bool:
     return False
 
 
-def _settle(page: "Page") -> None:
+def _settle(page: Page) -> None:
     try:
         page.wait_for_load_state("networkidle", timeout=SETTLE_MS)
     except Exception:
         pass
 
 
-def _click_first(page: "Page", rx: "re.Pattern") -> bool:
+def _click_first(page: Page, rx: re.Pattern) -> bool:
     for role in ("button", "link", "menuitem"):
         try:
             loc = page.get_by_role(role, name=rx)
@@ -93,7 +92,7 @@ def _click_first(page: "Page", rx: "re.Pattern") -> bool:
     return False
 
 
-def advance_to_application_form(page: "Page", max_steps: int = 3) -> bool:
+def advance_to_application_form(page: Page, max_steps: int = 3) -> bool:
     """Click Apply-style controls to move from a posting to its form, following
     multi-step menus (e.g. Workday Apply -> Apply Manually). Returns True if
     anything was clicked. Never clicks a submit button."""

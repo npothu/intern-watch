@@ -3,7 +3,8 @@
 import datetime as dt
 import json
 
-from src import dashboard, ledger, state as st, statewrite
+from src import dashboard, ledger, statewrite
+from src import state as st
 from src.webui import core
 
 TODAY = dt.date(2026, 7, 2)

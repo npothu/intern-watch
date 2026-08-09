@@ -46,7 +46,7 @@ def main(argv: list[str]) -> int:
 
     updated = 0
     still_jobright = 0
-    for user, matches in seen.get("matches", {}).items():
+    for _user, matches in seen.get("matches", {}).items():
         for m in matches:
             jid = None
             key = m.get("key") or ""
@@ -72,9 +72,8 @@ def main(argv: list[str]) -> int:
     for key, entry in seen.get("jobs", {}).items():
         if key.startswith("jr:"):
             jid = key[3:]
-            if jid in merged and merged.get(jid):
-                if entry.get("apply_url") != merged[jid]:
-                    entry["apply_url"] = merged[jid]
+            if merged.get(jid) and entry.get("apply_url") != merged[jid]:
+                entry["apply_url"] = merged[jid]
 
     # match src/state.py:save_state serialization exactly (indent=1, sort_keys)
     seen_path.write_text(json.dumps(seen, indent=1, sort_keys=True) + "\n",

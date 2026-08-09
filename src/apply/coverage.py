@@ -50,7 +50,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_ROOT = ROOT / "state" / "apply_coverage"
 
 
-def _skip_labels(profile: "ApplyProfile") -> list[str]:
+def _skip_labels(profile: ApplyProfile) -> list[str]:
     """The do-not-fill substrings, lower-cased - the same set map_fields drops
     before BOTH the answer book and the LLM see a field."""
     return [s.lower() for s in getattr(profile, "do_not_fill", []) if s]
@@ -62,7 +62,7 @@ def _is_skipped(field: dict, skip: list[str]) -> bool:
 
 
 def attribute_fields(form_fields: list[dict],
-                     profile: "ApplyProfile") -> list[dict[str, Any]]:
+                     profile: ApplyProfile) -> list[dict[str, Any]]:
     """Classify each extracted field as resolved_by book / llm / none.
 
     Pure: mirrors map_fields' own book pass (llm_cfg=None) and its do-not-fill
@@ -123,7 +123,7 @@ def build_report(key: str, final_url: str, family: ATSFamily,
 def report_path(key: str, today: dt.date | None = None,
                 root: Path | None = None) -> Path:
     """Where a report is written: <root>/<YYYY-MM-DD>/<short-key>.json."""
-    today = today or dt.datetime.now(dt.timezone.utc).date()
+    today = today or dt.datetime.now(dt.UTC).date()
     root = root or COVERAGE_ROOT
     return root / today.isoformat() / f"{dashboard.short_key(key)}.json"
 
@@ -164,9 +164,9 @@ def format_table(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def coverage_for_page(page: "Page", key: str, final_url: str,
+def coverage_for_page(page: Page, key: str, final_url: str,
                       family: ATSFamily,
-                      profile: "ApplyProfile") -> dict[str, Any]:
+                      profile: ApplyProfile) -> dict[str, Any]:
     """Extract the live form's fields and attribute them - the browser-touching
     half. Read-only apart from Apply-style navigation clicks: when the URL is a
     job POSTING rather than the form, we advance to the form exactly like the
@@ -183,7 +183,7 @@ def coverage_for_page(page: "Page", key: str, final_url: str,
 
 
 def run_coverage(key: str, final_url: str, family: ATSFamily,
-                 profile: "ApplyProfile",
+                 profile: ApplyProfile,
                  today: dt.date | None = None,
                  root: Path | None = None) -> tuple[dict[str, Any], Path]:
     """The whole preflight for one job: Workday short-circuits BEFORE any
@@ -193,7 +193,7 @@ def run_coverage(key: str, final_url: str, family: ATSFamily,
         report = build_report(key, final_url, family, None, supported=False)
         return report, write_report(report, key, today=today, root=root)
 
-    from .driver import browser_session    # lazy: needs Playwright
+    from .driver import browser_session  # lazy: needs Playwright
 
     with browser_session(profile, family) as page:
         page.goto(final_url, wait_until="domcontentloaded")

@@ -20,8 +20,8 @@ def uf() -> UserFilter:
 
 
 def _job(**kw):
-    base = dict(company="SomeCo", title="Software Engineer Intern",
-                url="https://x.com/1", source="jobright-swe")
+    base = {"company": "SomeCo", "title": "Software Engineer Intern",
+            "url": "https://x.com/1", "source": "jobright-swe"}
     base.update(kw)
     return Job(**base)
 

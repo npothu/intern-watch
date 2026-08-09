@@ -2,9 +2,17 @@ import datetime as dt
 
 import pytest
 
-from src.normalize import (canonical_url, extract_jobright_id, infer_terms,
-                           norm_company, normalize_url, parse_month_day,
-                           split_locations, strip_html, strip_tracking)
+from src.normalize import (
+    canonical_url,
+    extract_jobright_id,
+    infer_terms,
+    norm_company,
+    normalize_url,
+    parse_month_day,
+    split_locations,
+    strip_html,
+    strip_tracking,
+)
 
 TODAY = dt.date(2026, 6, 11)
 

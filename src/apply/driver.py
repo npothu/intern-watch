@@ -10,11 +10,11 @@ one-time interactive login (Workday, Google) is reused across runs.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
-from src.browser import (BrowserConfig, connect_url,          # noqa: F401
-                         save_artifact_screenshot)
+from src.browser import BrowserConfig, connect_url, save_artifact_screenshot  # noqa: F401
 from src.browser import browser_session as _shared_session
 
 from .base import ATSFamily
@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 
 
 @contextmanager
-def browser_session(profile: "ApplyProfile",
-                    family: ATSFamily) -> "Iterator[Page]":
+def browser_session(profile: ApplyProfile,
+                    family: ATSFamily) -> Iterator[Page]:
     """Yield a Playwright Page for `family`, persisting storage_state on exit."""
     config = BrowserConfig(provider=profile.cloud.provider,
                            headless=profile.cloud.headless,

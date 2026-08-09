@@ -3,8 +3,8 @@ from src.models import Job
 
 
 def _job(**kw):
-    base = dict(company="Acme", title="SWE Intern", url="https://acme.com/j/1",
-                source="jobright-swe")
+    base = {"company": "Acme", "title": "SWE Intern", "url": "https://acme.com/j/1",
+            "source": "jobright-swe"}
     base.update(kw)
     return Job(**base)
 

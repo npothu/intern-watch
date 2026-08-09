@@ -17,7 +17,7 @@ def _item(key, company="Acme", applied=False, **kw):
 
 
 def _body(items):
-    now = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+    now = dt.datetime(2026, 7, 1, tzinfo=dt.UTC)
     return dashboard.build_body(items, ["Fall 2026"], now)
 
 

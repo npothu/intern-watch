@@ -14,7 +14,6 @@ layers of protection:
    future keyword edit reopens a hole, this fails.
 """
 
-import json
 import re
 from pathlib import Path
 
@@ -39,9 +38,9 @@ def uf() -> UserFilter:
 
 
 def _job(title, company, source, **kw):
-    base = dict(title=title, company=company, source=source, sources=[source],
-                terms=["Fall 2026"], url="https://example.com/x",
-                locations=["San Francisco, CA"])
+    base = {"title": title, "company": company, "source": source, "sources": [source],
+            "terms": ["Fall 2026"], "url": "https://example.com/x",
+            "locations": ["San Francisco, CA"]}
     base.update(kw)
     return Job(**base)
 

@@ -19,14 +19,14 @@ def uf() -> UserFilter:
 
 
 def _gm_job(**kw) -> Job:
-    base = dict(
-        company="General Motors",
-        title="2026 Fall Intern - Research & Development: AI/ML",
-        locations=["Warren, Michigan, United States of America"],
-        terms=["Fall 2026"],
-        url="https://jobright.ai/jobs/info/6a2c14d0fc06447490548159",
-        source="jobright-swe",
-    )
+    base = {
+        "company": "General Motors",
+        "title": "2026 Fall Intern - Research & Development: AI/ML",
+        "locations": ["Warren, Michigan, United States of America"],
+        "terms": ["Fall 2026"],
+        "url": "https://jobright.ai/jobs/info/6a2c14d0fc06447490548159",
+        "source": "jobright-swe",
+    }
     base.update(kw)
     return Job(**base)
 

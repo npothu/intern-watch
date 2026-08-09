@@ -24,15 +24,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src import ledger as ledger_mod                              # noqa: E402
-from src.apply.auth import Logins, LoginAccount, load_logins      # noqa: E402
-from src.apply.base import ApplyContext, ApplyMode, ATSFamily     # noqa: E402
-from src.apply.driver import browser_session                      # noqa: E402
-from src.apply.fillers import get_filler                          # noqa: E402
-from src.apply.inbox import Inbox                                  # noqa: E402
+from src import ledger as ledger_mod  # noqa: E402
+from src.apply.auth import LoginAccount  # noqa: E402
+from src.apply.base import ApplyContext, ApplyMode, ATSFamily  # noqa: E402
+from src.apply.driver import browser_session  # noqa: E402
+from src.apply.fillers import get_filler  # noqa: E402
+from src.apply.inbox import Inbox  # noqa: E402
 from src.apply.profile import detect_user, load_dotenv, load_profile  # noqa: E402
 from src.apply.queue import _already_done, _record_submit_attempt  # noqa: E402
-from src.apply.resolve import resolve                             # noqa: E402
+from src.apply.resolve import resolve  # noqa: E402
 
 JOBS: list[tuple[str, str]] = [
     # user-provided
@@ -140,7 +140,7 @@ def run_one(profile, user: str, slug: str, url: str, mode: ApplyMode,
             # ledger write run_item does — so this slug is never re-submittable.
             if (mode is ApplyMode.submit and ledger_path is not None
                     and res.submit_attempt is not None):
-                today = dt.datetime.now(dt.timezone.utc).date()
+                today = dt.datetime.now(dt.UTC).date()
                 _record_submit_attempt(match, res, user, today, ledger_path)
     except Exception as exc:
         out.update(status="error", message=f"{type(exc).__name__}: {exc}")
@@ -167,7 +167,7 @@ def main(argv=None) -> int:
     profile.cloud.provider = args.provider
     inbox = Inbox.from_config(profile.inbox)
     mode = ApplyMode(args.mode)
-    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    today = dt.datetime.now(dt.UTC).date().isoformat()
     art_root = ROOT / "state" / "apply_artifacts" / today
     store = ROOT / "state" / "apply_sessions" / "created_accounts.json"
 
