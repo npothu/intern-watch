@@ -71,8 +71,8 @@ origin/main:state/seen.json`). Per job entry:
   yaml and deleting that entry.
 
 `python -m src.main --dry-run` runs the full pipeline locally without
-notifying or writing state. `pytest -q` and `python -m src.config_check`
-must stay green.
+notifying or writing state. `ruff check .`, `python -m mypy`, `pytest -q`
+and `python -m src.config_check` must all stay green (see Code review).
 
 ## Local web UI (`python -m src.webui`)
 
@@ -102,6 +102,63 @@ progressed past "applied". NEVER pruned — do not "clean it up".
   avoid committing local edits to them; branch from origin/main.
 - Prefer branch + PR over pushing straight to main: Actions commits state to
   main between your pull and your push, so direct pushes race it.
+
+## Code review
+
+Two layers. The automated gates catch mechanical defects so review attention
+goes to judgment; the review loop runs before the PR is opened.
+
+### Layer 1 - automated gates (`test.yml`)
+
+`ruff check .` then `python -m mypy` then `src.config_check` then `pytest -q`,
+cheapest first.
+Install the tooling with `pip install -r requirements-dev.txt` (kept out of
+`requirements.txt` so the six cron workflows don't install tools they never
+run); both tools are configured in `pyproject.toml`.
+
+mypy covers `src/` only.
+`tests/` and `scripts/` are not yet clean and are deliberately out of scope -
+if you bring one to zero errors, add it to `files` in `pyproject.toml` rather
+than leaving it uncovered.
+
+Ruff's `E501` is exempted per-file for `src/apply/fillers/agent.py` and
+`tests/test_apply_auth.py`, which embed JS and HTML in triple-quoted literals
+where a `# noqa` would become part of the embedded source.
+Prefer fixing a long line over widening that list.
+
+### Layer 2 - review before the PR
+
+Run `/code-review` on the branch diff before opening a PR: it has the session
+context for *why* the change was made, which a fresh reviewer lacks.
+For changes touching `src/filters.py`, `src/state.py`, `src/ledger.py`, or
+anything that writes `state/`, follow with `/codex-review` for an independent
+model - two models disagreeing is the signal worth reading.
+
+### What review must check in this repo
+
+The failure modes here are silent, so check these explicitly. Generic review
+will not find them:
+
+- **Rejected jobs are final.** A job is evaluated only when first seen (or
+  while pending), so a filter fix does NOT retroactively deliver previously
+  rejected jobs. Any change claiming to "fix" a filter must say what happens
+  to the jobs already rejected by the old one - usually nothing.
+- **Top-company verdicts stick.** `state["companies"][<norm>]["top"]` is
+  per-employer, per-user, first-verdict-wins for ~120 days. Editing the prose
+  definition in a user yaml does not re-judge cached employers; the entry has
+  to be deleted.
+- **Filter order is load-bearing.** Role filter → eliminations → term → rules
+  → LLM. Moving a check earlier or later changes which jobs reach the
+  cost-capped LLM step, not just whether they pass.
+- **Substring matching, not word matching.** "data science" does not match
+  "Data Scientist"; `strict_sources` additionally require a
+  `strict_include_keywords` hit. New keywords need both forms considered.
+- **`state/applications.json` is never pruned.** Reject anything that prunes,
+  compacts, or "cleans up" the ledger. seen.json is the prunable cache.
+- **`state/*.json` belongs to Actions.** Local edits to those files in a diff
+  are a mistake; branches come from origin/main.
+- **The webui is local-only.** It must never be reachable from the watcher
+  cron.
 
 ## Shipping a change (template → instance → deployed)
 
