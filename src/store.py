@@ -27,7 +27,8 @@ from typing import Protocol
 
 import httpx
 
-from . import dashboard, ledger, state as st
+from . import dashboard, ledger
+from . import state as st
 from .webui import core
 
 API = "https://api.github.com"
@@ -73,6 +74,14 @@ class TrackerStore(Protocol):
     returns None when the driver doesn't serve a match snapshot. Drivers also
     expose the repo/token/issue_number/issue_url plumbing fields the webui
     reads from them."""
+
+    # The issue plumbing the webui reads straight off the driver. A driver with
+    # no dashboard issue (ConvexStore) leaves these empty/None rather than
+    # omitting them, which is what keeps the issue-specific webui paths off.
+    repo: str
+    token: str
+    issue_number: int | None
+    issue_url: str
 
     def get_ticks(self, user: str) -> TicksView | None: ...
 
@@ -568,7 +577,9 @@ class ConvexStore:
                                {"user": user, "secret": self.secret})
         except ApiError:
             return None
-        return items or []
+        # _post returns whatever JSON the deployment sent; treat a non-list as
+        # an empty snapshot rather than handing callers the wrong shape.
+        return items if isinstance(items, list) else []
 
     # -- mail sync ----------------------------------------------------------
 
@@ -577,11 +588,12 @@ class ConvexStore:
         None when the read fails (like get_matches: the webui hides the inbox
         tab when it can't get actions)."""
         try:
-            return self._post("query", "getActions",
-                              {"user": user, "secret": self.secret},
-                              module="mail")
+            actions = self._post("query", "getActions",
+                                 {"user": user, "secret": self.secret},
+                                 module="mail")
         except ApiError:
             return None
+        return actions if isinstance(actions, dict) else None
 
     def resolve_action(self, user: str, action_id: str, short: str = "",
                        status: str = "", dismiss: bool = False) -> None:

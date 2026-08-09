@@ -6,8 +6,7 @@ from email.message import EmailMessage
 
 import pytest
 
-from src.apply.inbox import (Inbox, classify_reply, extract_link, extract_otp,
-                             message_text, poll)
+from src.apply.inbox import Inbox, classify_reply, extract_link, extract_otp, message_text, poll
 from src.apply.profile import InboxConfig
 
 

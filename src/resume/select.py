@@ -10,8 +10,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from . import jd as jdmod
-from .bank import (Bank, CommunityEntry, HeadingRun, Project, SkillItem,
-                   WorkExperience)
+from .bank import Bank, CommunityEntry, HeadingRun, Project, SkillItem, WorkExperience
 
 # match-strength multipliers: where in the project a JD skill was found
 W_TAG = 3.0      # explicit tags (maps-to) are the strongest signal

@@ -7,8 +7,9 @@ from pathlib import Path
 
 import yaml
 
-from src import dashboard, state as st
-from src.resume import build, ondemand
+from src import dashboard
+from src import state as st
+from src.resume import ondemand
 from src.resume.build import BuildResult
 
 ROOT = Path(__file__).resolve().parents[1]

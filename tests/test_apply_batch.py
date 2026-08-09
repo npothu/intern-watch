@@ -5,13 +5,11 @@ click — so running it twice with --mode submit can never double-submit. Autofi
 
 from __future__ import annotations
 
-import datetime as dt
 from pathlib import Path
 
-import pytest
-
 from scripts import apply_batch
-from src import dashboard, ledger as ledger_mod
+from src import dashboard
+from src import ledger as ledger_mod
 from src.apply.base import ApplyMode, ApplyResult, ApplyStatus, ATSFamily
 
 USER = "example"

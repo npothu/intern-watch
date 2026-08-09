@@ -52,7 +52,7 @@ def dedupe(jobs: list[Job]) -> list[Job]:
         groups.setdefault(key, []).append(job)
 
     merged: list[Job] = []
-    for key, group in groups.items():
+    for group in groups.values():
         group.sort(key=lambda j: (
             _CONF_RANK[j.term_confidence],
             sum(x is not None and x != [] for x in

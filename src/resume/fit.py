@@ -18,9 +18,19 @@ from __future__ import annotations
 import math
 
 from .select import MIN_PROJECTS, PlannedEntry, ResumePlan
-from .spec import (BULLET_INDENT_TW, CONTENT_H_TW, CONTENT_W_TW,
-                   LINE_HEIGHT_EM, SECTION_SPACE_AFTER_PT, SZ_BODY,
-                   SZ_CONTACT, SZ_EDU, SZ_NAME, SZ_SECTION, tw_to_pt)
+from .spec import (
+    BULLET_INDENT_TW,
+    CONTENT_H_TW,
+    CONTENT_W_TW,
+    LINE_HEIGHT_EM,
+    SECTION_SPACE_AFTER_PT,
+    SZ_BODY,
+    SZ_CONTACT,
+    SZ_EDU,
+    SZ_NAME,
+    SZ_SECTION,
+    tw_to_pt,
+)
 
 # Width tables: units per 1000 em, chars 32..126.
 _ROMAN = [
@@ -129,7 +139,7 @@ def estimate_height_pt(plan: ResumePlan) -> float:
     # header
     h += wrap_lines(plan.header_name, w, SZ_NAME, bold=True) * _line(SZ_NAME)
     h += wrap_lines(plan.contact_line, w, SZ_CONTACT) * _line(SZ_CONTACT)
-    links = plan.citizen_prefix + " | ".join(l["text"] for l in plan.links)
+    links = plan.citizen_prefix + " | ".join(link["text"] for link in plan.links)
     h += wrap_lines(links, w, SZ_CONTACT) * _line(SZ_CONTACT)
     # education
     h += _line(SZ_SECTION) + SECTION_SPACE_AFTER_PT

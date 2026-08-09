@@ -36,18 +36,19 @@ def in_atlanta_metro(location: str) -> bool:
     loc = location.casefold()
     if any(city in loc for city in _METRO_UNAMBIGUOUS):
         return True
-    if _GA_HINT_RE.search(loc) and any(city in loc for city in _METRO_AMBIGUOUS):
-        return True
-    return False
+    return bool(_GA_HINT_RE.search(loc) and any(city in loc for city in _METRO_AMBIGUOUS))
 
 
 # --- Country detection for elimination rules. Conservative: a location we
 # can't classify is "unknown" and never causes elimination on its own.
 _US_HINTS = ("united states", "usa", "u.s.", "us-", "remote (us")
-_US_STATE_ABBREV = (
-    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS "
-    "MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV "
-    "WI WY DC").split()
+_US_STATE_ABBREV = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+]
 _US_STATE_NAMES = (
     "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
     "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",

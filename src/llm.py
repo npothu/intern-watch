@@ -211,6 +211,7 @@ def _call_with_retry(call, *args, max_attempts: int, base_delay: float):
                         "sleeping %.2fs", attempt, max_attempts,
                         type(exc).__name__, wait)
             time.sleep(wait)
+    return None
 
 
 # ------------------------------------------------------------------ main

@@ -10,7 +10,7 @@ webui reads.
 
 from __future__ import annotations
 
-from src.store import TickWrite, TicksView
+from src.store import TicksView, TickWrite
 
 
 class FakeStore:

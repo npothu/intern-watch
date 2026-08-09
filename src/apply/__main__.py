@@ -33,16 +33,16 @@ from pathlib import Path
 
 from .. import ledger as ledger_mod
 from .auth import load_logins
-from .base import ApplyMode, ApplyStatus
+from .base import ApplyMode
 from .coverage import format_table, run_coverage
 from .profile import load_dotenv, load_profile
-from .queue import (DEFAULT_STATE, ROOT, build_plan, load_matches,
-                    approve as approve_match, run_item, save)
+from .queue import DEFAULT_STATE, ROOT, build_plan, load_matches, run_item, save
+from .queue import approve as approve_match
 from .resolve import resolve
 
 
 def _today() -> dt.date:
-    return dt.datetime.now(dt.timezone.utc).date()
+    return dt.datetime.now(dt.UTC).date()
 
 
 def _print_plan(plan, mode: ApplyMode) -> None:

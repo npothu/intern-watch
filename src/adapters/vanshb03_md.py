@@ -12,8 +12,13 @@ import datetime as dt
 import logging
 
 from ..models import Job
-from ..normalize import (extract_jobright_id, infer_terms, parse_month_day,
-                         split_locations, strip_tracking)
+from ..normalize import (
+    extract_jobright_id,
+    infer_terms,
+    parse_month_day,
+    split_locations,
+    strip_tracking,
+)
 from .base import Adapter
 from .md_utils import html_anchor, iter_tables, md_link, plain_text
 

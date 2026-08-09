@@ -6,7 +6,8 @@ it, so a regression that shifts the catch to a weaker layer is visible.
 
 import datetime as dt
 
-from src import main, state as st
+from src import main
+from src import state as st
 from src.models import Job
 
 TODAY = dt.date(2026, 8, 1)

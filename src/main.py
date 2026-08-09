@@ -19,19 +19,24 @@ from pathlib import Path
 import httpx
 import yaml
 
-from . import content_dedup
-from . import dashboard
-from . import ledger
+from . import content_dedup, dashboard, ledger
 from . import state as st
 from .adapters import make_adapter
-from .envfile import load_dotenv
 from .dedupe import dedupe
+from .envfile import load_dotenv
 from .filters import UserFilter, Verdict, load_users
 from .llm import api_key_env_for, classify
 from .models import Job, SourceConfig
 from .normalize import canonical_url, extract_jobright_id, norm_company
-from .notify import (build_digest, build_email, build_health_email,
-                     match_item, primary_term, send_discord, send_email)
+from .notify import (
+    build_digest,
+    build_email,
+    build_health_email,
+    match_item,
+    primary_term,
+    send_discord,
+    send_email,
+)
 from .resume.build import build_for_job, resume_build_cfg
 from .store import GitHubStore, make_store
 
@@ -82,8 +87,8 @@ def enrich_jds(jobs: list[Job]) -> int:
     Lever/Ashby descriptions arrive inline with the board listing). One small
     GET per job, new/pending jobs only by construction of the caller's list.
     Failures leave description None; the filters just see less."""
-    from .adapters.ats_boards import JD_MAX_CHARS
     from .adapters import smartrecruiters_api as sr
+    from .adapters.ats_boards import JD_MAX_CHARS
     from .normalize import strip_html
 
     targets = [j for j in jobs if j.jd_url and not j.description]
@@ -97,6 +102,8 @@ def enrich_jds(jobs: list[Job]) -> int:
     headers = {"User-Agent": "intern-watch (job alert bot)"}
     with httpx.Client(headers=headers, timeout=20.0) as client:
         for job in targets:
+            if not job.jd_url:          # targets are jd_url-bearing by
+                continue                # construction; keep it locally true
             try:
                 resp = client.get(job.jd_url)
                 resp.raise_for_status()
@@ -175,7 +182,7 @@ class _JobrightEnricher:
 
 
 def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
-                     enricher: "_JobrightEnricher | None",
+                     enricher: _JobrightEnricher | None,
                      today: dt.date | None = None) -> list[tuple[Job, list[str]]]:
     """Second-chance elimination: for jobright accepts with no JD yet, fetch
     the info page and re-run the rule engine; drop (logging the reason) any job
@@ -420,7 +427,7 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
 
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
-                 enricher: "_JobrightEnricher | None" = None,
+                 enricher: _JobrightEnricher | None = None,
                  resolver=None) -> None:
     uf = UserFilter(user_cfg, ROOT)
     name = uf.name
@@ -485,9 +492,9 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             norm = norm_company(job.company)
             prev = by_company.get(norm, (job.company, False))[1]
             by_company[norm] = (job.company, prev or facts["is_top_company"])
-        for company, verdict in by_company.values():
+        for company, is_top in by_company.values():
             if st.company_top_get(state, company, name) is None:
-                st.company_top_put(state, company, name, verdict, now.date())
+                st.company_top_put(state, company, name, is_top, now.date())
         for job in batch:
             facts = results.get(job.dedup_key)
             if facts is None:
@@ -632,14 +639,14 @@ def _send_tz(email_cfg: dict) -> dt.tzinfo:
     name falls back to UTC (logged) rather than crashing the send."""
     name = email_cfg.get("timezone")
     if not name:
-        return dt.timezone.utc
+        return dt.UTC
     try:
         from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError) as exc:
         log.warning("email: unusable timezone %r (%s) -- falling back to UTC",
                     name, exc)
-        return dt.timezone.utc
+        return dt.UTC
 
 
 def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
@@ -890,13 +897,15 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
 
     try:  # Windows consoles default to cp1252, which can't print the digest emoji
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        # Not on the TextIO protocol (only TextIOWrapper); the AttributeError
+        # catch is the runtime guard for a replaced/wrapped stdout.
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     except (AttributeError, OSError):
         pass
     logging.basicConfig(level=logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
     today = dt.date.today()
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     state_path = Path(args.state_file)
     state = st.load_state(state_path)
     # One-time: seed content-dedup history from prior deliveries so jobs emailed
@@ -969,11 +978,11 @@ def main(argv: list[str] | None = None) -> int:
         for key in st.pending_keys(state, name):
             if key in candidate_keys:
                 continue
-            job = merged_by_key.get(key)
-            if job is None or st.was_notified(state, key, name):
+            pending_job = merged_by_key.get(key)
+            if pending_job is None or st.was_notified(state, key, name):
                 st.clear_pending(state, key, name)  # vanished or already done
             else:
-                candidates.append(job)
+                candidates.append(pending_job)
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,

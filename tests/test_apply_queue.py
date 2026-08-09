@@ -5,14 +5,14 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import json
-
 from pathlib import Path
 
 import pytest
 
+from src import dashboard
+from src import ledger as ledger_mod
 from src.apply import queue as q
-from src.apply.base import (ApplyContext, ApplyMode, ApplyResult, ApplyStatus,
-                            ATSFamily)
+from src.apply.base import ApplyContext, ApplyMode, ApplyResult, ApplyStatus, ATSFamily
 from src.apply.profile import load_profile
 
 TODAY = dt.date(2026, 6, 17)
@@ -154,9 +154,6 @@ def test_run_item_threads_submit_gate_into_ctx(monkeypatch, profile):
     # No override -> profile default (on).
     q.run_item(item, profile, ApplyMode.autofill, "example", TODAY)
     assert seen["submit_gate"] is True
-
-
-from src import dashboard, ledger as ledger_mod
 
 
 def _ledger_with(user, key, **rec_extra):

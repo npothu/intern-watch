@@ -45,7 +45,11 @@ def resume_build_cfg(user_cfg: dict | None) -> dict:
     block = (user_cfg or {}).get("resume_build") or {}
     merged.update(block)
 
-    modes, valid = merged.get("modes") or [], []
+    # `modes` comes from user YAML: a scalar or mapping there must degrade to
+    # "no modes", not blow up the iteration below.
+    raw_modes = merged.get("modes") or []
+    modes = raw_modes if isinstance(raw_modes, list) else []
+    valid: list[str] = []
     for m in modes:
         if m in _VALID_MODES:
             valid.append(m)

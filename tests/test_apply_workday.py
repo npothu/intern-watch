@@ -31,7 +31,10 @@ def _ctx(mode, tmp_path, account=None) -> ApplyContext:
     r = tmp_path / "example_resume.docx"
     r.write_bytes(b"PK\x03\x04 dummy")
     return ApplyContext(job={"key": "wd", "company": "Acme"},
-                        profile=load_profile(path=Path(__file__).resolve().parents[1] / "users" / "apply.example.yaml"), resume_path=r, mode=mode,
+                        profile=load_profile(
+                            path=Path(__file__).resolve().parents[1]
+                            / "users" / "apply.example.yaml"),
+                        resume_path=r, mode=mode,
                         final_url="https://x", family=ATSFamily.workday,
                         artifacts_dir=tmp_path, account=account)
 

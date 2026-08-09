@@ -2,10 +2,17 @@
 Greenhouse/Lever/Ashby APIs), filter to Canadian/Fall on DIRECT ATS hosts
 (no bot-blocking redirects), write [slug,url] picks to state/open_jobs.json."""
 from __future__ import annotations
-import datetime as dt, json, re, sys
+
+import datetime as dt
+import json
+import re
+import sys
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]; sys.path.insert(0, str(ROOT))
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 import httpx
+
 from src.adapters.ats_boards import AtsBoardsAdapter
 from src.models import SourceConfig
 
@@ -39,5 +46,5 @@ out = ROOT / "state" / "open_jobs.json"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps([[s, u] for s, u, *_ in picks], indent=1))
 print(f"wrote {len(picks)} open direct-ATS jobs -> {out}\n")
-for s, u, comp, title, terms, locs in picks:
+for s, _u, comp, title, terms, locs in picks:
     print(f"{s:14} {comp} | {title[:45]} | {terms} | {locs}")

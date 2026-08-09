@@ -29,7 +29,7 @@ def _yn(b: bool) -> str:
     return "Yes" if b else "No"
 
 
-def canonical_answers(profile: "ApplyProfile") -> dict[str, str]:
+def canonical_answers(profile: ApplyProfile) -> dict[str, str]:
     wa, eeo, edu = profile.work_authorization, profile.eeo, profile.education
     comp, exp, log = profile.compensation, profile.experience, profile.logistics
     scr, ref, adr, per = (profile.screening, profile.referral,
@@ -334,7 +334,7 @@ def _split_group(label: str) -> tuple[str, str]:
     return raw, raw
 
 
-def _option_field_answer(field: dict, profile: "ApplyProfile") -> str | None:
+def _option_field_answer(field: dict, profile: ApplyProfile) -> str | None:
     """Deterministic radio/checkbox handling. Returns the option text to
     select/check, or None to defer to the LLM. Per-option: for a radio Yes/No we
     return only the affirmative option; for a multi-select we return each option
@@ -381,7 +381,7 @@ def _how_heard_fallback(options: list[str]) -> str | None:
     return real[0] if real else None
 
 
-def answer_for(field: dict, profile: "ApplyProfile") -> str | None:
+def answer_for(field: dict, profile: ApplyProfile) -> str | None:
     """Resolve one form field to a concrete value, or None if unknown.
     For selects/radios the returned value is one of the field's options."""
     label = (field.get("label") or "").strip().lower()

@@ -13,7 +13,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
+      # requirements-dev pulls in requirements.txt plus ruff/mypy.
+      - run: pip install -r requirements-dev.txt
+      # Cheapest checks first, so an obvious defect fails in seconds rather
+      # than after the ~2min suite. Config in pyproject.toml.
+      - name: Lint
+        run: python -m ruff check .
+      - name: Typecheck
+        run: python -m mypy
       # Preflight: schema + secret-wiring check on users/*.yaml. Runs before
       # pytest so a config/secret mistake fails fast with an actionable report.
       - run: python -m src.config_check

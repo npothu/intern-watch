@@ -18,4 +18,7 @@ def make_adapter(cfg) -> Adapter:
     try:
         return REGISTRY[cfg.adapter](cfg)
     except KeyError:
-        raise ValueError(f"unknown adapter '{cfg.adapter}' for source '{cfg.name}'")
+        # `from None`: the KeyError is an implementation detail of the registry
+        # lookup and only adds noise above the actionable message.
+        raise ValueError(
+            f"unknown adapter '{cfg.adapter}' for source '{cfg.name}'") from None

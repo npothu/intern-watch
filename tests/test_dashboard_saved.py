@@ -4,10 +4,11 @@ like `applied` -- no restored-marker/Hidden-section side effects."""
 
 import datetime as dt
 
-from src import dashboard, state as st
+from src import dashboard
+from src import state as st
 from src.webui import core
 
-NOW = dt.datetime(2026, 7, 2, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 2, tzinfo=dt.UTC)
 
 
 def _item(key, company="Acme", **kw):

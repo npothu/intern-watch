@@ -7,7 +7,7 @@ from src import main
 from src import state as st
 from src.notify import build_message
 
-NOW = dt.datetime(2026, 6, 11, 18, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 11, 18, 0, tzinfo=dt.UTC)
 DOCX = ("application/vnd.openxmlformats-officedocument."
         "wordprocessingml.document")
 
@@ -22,7 +22,7 @@ def test_build_message_attaches_docx_parts(tmp_path: Path):
     b = _docx(tmp_path / "First_Last_Beta.docx")
     msg = build_message("u@example.com", "to@example.com", "subj",
                         "<p>hi</p>", "hi", attachments=[a, b])
-    parts = [p for p in msg.iter_attachments()]
+    parts = list(msg.iter_attachments())
     assert len(parts) == 2
     assert {p.get_filename() for p in parts} == {a.name, b.name}
     for p in parts:

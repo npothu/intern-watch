@@ -23,7 +23,7 @@ ROOT = Path(__file__).parent.parent
 FIXTURE = ROOT / "tests" / "fixtures" / "jobright_gm_phd_page.html"
 GM_ID = "6a2c14d0fc06447490548159"
 OTHER_ID = "aaaaaaaaaaaaaaaaaaaaaaaa"
-NOW = dt.datetime(2026, 6, 12, 18, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 18, 0, tzinfo=dt.UTC)
 
 PHD_LINE = "Must be currently enrolled in a PhD program"
 
@@ -255,7 +255,7 @@ def test_both_routes_failing_is_a_miss_the_caller_can_handle():
         return httpx.Response(500)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    with pytest.raises(Exception):
+    with pytest.raises(httpx.HTTPStatusError):
         fetch_description(client, GM_ID)
     client.close()
 

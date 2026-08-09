@@ -26,10 +26,24 @@ from docx.shared import Pt, RGBColor, Twips
 
 from .bank import HeadingRun
 from .select import ResumePlan
-from .spec import (BULLET_CHAR, BULLET_HANG_TW, BULLET_INDENT_TW, FONT,
-                   LINK_COLOR, MARGIN_TW, PAGE_H_TW, PAGE_W_TW, RIGHT_TAB_TW,
-                   SECTION_BORDER_SZ8, SECTION_SPACE_AFTER_PT, SZ_BODY,
-                   SZ_CONTACT, SZ_EDU, SZ_NAME, SZ_SECTION)
+from .spec import (
+    BULLET_CHAR,
+    BULLET_HANG_TW,
+    BULLET_INDENT_TW,
+    FONT,
+    LINK_COLOR,
+    MARGIN_TW,
+    PAGE_H_TW,
+    PAGE_W_TW,
+    RIGHT_TAB_TW,
+    SECTION_BORDER_SZ8,
+    SECTION_SPACE_AFTER_PT,
+    SZ_BODY,
+    SZ_CONTACT,
+    SZ_EDU,
+    SZ_NAME,
+    SZ_SECTION,
+)
 
 
 def _para(doc, *, center=False, space_after_pt=0.0):

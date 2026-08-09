@@ -2,11 +2,12 @@
 
 import datetime as dt
 
-from src import main, state as st
+from src import main
+from src import state as st
 from src.notify import build_email, build_health_email
 
 TODAY = dt.date(2026, 6, 12)
-NOW = dt.datetime(2026, 6, 12, 12, 5, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 5, tzinfo=dt.UTC)
 
 
 def test_failure_counting_threshold_and_recovery(tmp_path):
