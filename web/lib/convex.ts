@@ -522,6 +522,15 @@ export async function getOAuthConfig(): Promise<OAuthConfig> {
   return value as OAuthConfig;
 }
 
+/** Arm the Gmail watch now - used once the Pub/Sub topic finally exists, since
+ *  a mailbox connected before it had its watch deferred. */
+export async function armMailWatch(
+  user: string
+): Promise<{ ok: boolean; reason?: string }> {
+  const value = await post("mutation", "armWatchNow", { user }, "mail");
+  return value as { ok: boolean; reason?: string };
+}
+
 /** Record a started OAuth flow so the callback can spend it exactly once. */
 export async function registerOAuthNonce(
   nonce: string,

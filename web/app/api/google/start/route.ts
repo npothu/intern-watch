@@ -69,13 +69,27 @@ export async function GET(req: Request) {
   // satisfy its own precondition: the value it had just saved lived in a
   // different process.
   const config = await getOAuthConfig().catch(() => null);
-  if (!config?.clientId) {
+  if (!config) {
     return backToWizard(req, {
-      googleError: config
-        ? `Not configured on the deployment yet: ${config.missing.join(", ")}.`
-        : "Could not reach the Convex deployment to read the Google client id.",
+      googleError: "Could not reach the Convex deployment to read the Google client id.",
     });
   }
+  // Check EVERY precondition before sending anyone to Google, not just the
+  // client id. Gating on the id alone meant a deployment missing the client
+  // secret or CREDENTIALS_KEY still walked the user through a real consent
+  // screen - so they handed over restricted gmail.readonly access, and only
+  // then did the callback fail. Never ask for a grant that cannot be used.
+  // `missing` is derived from the same env reads as clientId, so an empty list
+  // implies a client id - but assert it rather than assume, since these are two
+  // separate fields on the wire and only one of them is load-bearing here.
+  if (config.missing.length > 0 || !config.clientId) {
+    return backToWizard(req, {
+      googleError: `Not configured on the deployment yet: ${
+        config.missing.join(", ") || "GMAIL_CLIENT_ID"
+      }.`,
+    });
+  }
+  const clientId = config.clientId;
 
   const redirectUri = `${site}/gmail/callback`;
   // APP_ORIGIN over the request's own Host header: the Host is attacker
@@ -98,7 +112,7 @@ export async function GET(req: Request) {
   const signed = await signState(secret, state);
 
   const auth = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  auth.searchParams.set("client_id", config.clientId);
+  auth.searchParams.set("client_id", clientId);
   auth.searchParams.set("redirect_uri", redirectUri);
   auth.searchParams.set("response_type", "code");
   auth.searchParams.set("scope", SCOPE);

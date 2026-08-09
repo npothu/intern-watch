@@ -89,7 +89,18 @@ export default async function ConnectGooglePage({
       adminAvailable={Boolean(process.env.CONVEX_ADMIN_KEY)}
       routeWired={routeWired}
       routeBlockers={routeBlockers}
-      connectedEmail={connected ?? account?.email}
+      // Truth about step 4 comes from the CONVEX deployment, which is where
+      // those values live. getEnvPresence reads this server's env and reports
+      // false there, which kept step 5 disabled even after step 4 succeeded.
+      clientConfigured={Boolean(
+        oauth && !oauth.missing.includes("GMAIL_CLIENT_ID") &&
+          !oauth.missing.includes("GMAIL_CLIENT_SECRET"),
+      )}
+      // ONLY the query param. Falling back to the stored address made a failed
+      // return render the green "Connected" banner above the red failure one,
+      // and made every ordinary visit open on step 5 claiming success.
+      connectedEmail={connected}
+      alreadyConnectedEmail={account?.email}
       oauthError={googleError}
       admin={admin}
     />

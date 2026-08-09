@@ -137,6 +137,35 @@ export const getMailAccount = query({
   },
 });
 
+/**
+ * Arm the Gmail watch for a user now.
+ *
+ * The wizard collects the Pub/Sub topic one step AFTER the mailbox is
+ * connected, so at connect time there is nothing to point a watch at. Without
+ * this the watch waited for the 06:00 UTC cron: step 6's "Verify push" checks
+ * for a recent push, Gmail never sends one without a watch, and the final step
+ * could not be completed in the same session - mail-sync sat silently dead for
+ * up to a day while the UI said Connected.
+ *
+ * Idempotent, like startWatch itself, so pressing the step again is harmless.
+ */
+export const armWatchNow = mutation({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    if (!process.env.MAIL_PUBSUB_TOPIC) {
+      return { ok: false as const, reason: "MAIL_PUBSUB_TOPIC is not set yet" };
+    }
+    const account = await ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (!account) return { ok: false as const, reason: "no mailbox is connected yet" };
+    await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
+    return { ok: true as const };
+  },
+});
+
 /** Record a started flow so the callback can spend it exactly once. */
 export const registerOAuthNonce = mutation({
   args: { nonce: v.string(), user: v.string(), expiresAt: v.number(), secret: v.string() },
@@ -321,8 +350,13 @@ export const storeMailAccount = internalMutation({
     if (process.env.MAIL_PUBSUB_TOPIC) {
       await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
     } else {
+      // Deferred, not dropped: armWatchNow below is what picks it up once the
+      // topic exists. An earlier version of this comment claimed step 6 armed
+      // it, which was simply untrue - savePubSubTopic only wrote the env var,
+      // so the watch waited for the daily cron and step 6's push check could
+      // never pass in the same session.
       console.log(
-        "mailbox connected but MAIL_PUBSUB_TOPIC is not set - skipping watch until push is configured",
+        "mailbox connected but MAIL_PUBSUB_TOPIC is not set - watch deferred until push is configured",
       );
     }
   },

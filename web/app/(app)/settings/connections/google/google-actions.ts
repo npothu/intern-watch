@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { isAdminUser, resolveTrackerUser } from "@/lib/user";
-import { getInboxActions } from "@/lib/convex";
+import { armMailWatch, getInboxActions } from "@/lib/convex";
 import { setDeploymentEnv } from "@/lib/convex-admin";
 
 /**
@@ -103,6 +103,17 @@ export async function savePubSubTopic(topic: string): Promise<ActionResult> {
   if (denied) return { ok: false, error: denied };
   try {
     await setDeploymentEnv({ MAIL_PUBSUB_TOPIC: topic.trim() });
+    // A mailbox connected BEFORE the topic existed had its watch deferred, and
+    // nothing else would arm it until the next daily cron - so the very next
+    // step, "Verify push", could not pass in the same session. Arm it here,
+    // now that there is finally a topic to point at. Best effort: the topic is
+    // saved either way, and the cron remains the backstop.
+    try {
+      if (user) await armMailWatch(user);
+    } catch {
+      // Deliberately swallowed - failing the save would be worse than a
+      // slightly later watch, and verifyPush reports the real state anyway.
+    }
     revalidatePath("/settings/connections");
     return { ok: true, detail: "Saved to the deployment", presence: await getEnvPresence() };
   } catch (err) {

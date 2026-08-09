@@ -204,8 +204,10 @@ export function GoogleWizard({
   adminAvailable,
   routeWired,
   routeBlockers,
+  clientConfigured,
   admin,
   connectedEmail,
+  alreadyConnectedEmail,
   oauthError,
 }: {
   convexSiteUrl: string;
@@ -218,6 +220,13 @@ export function GoogleWizard({
   routeWired: boolean;
   /** Human names of the preconditions that are missing, when it cannot. */
   routeBlockers: string[];
+  /** Whether the CONVEX deployment has the client id and secret. This is the
+   *  authority for step 4, not getEnvPresence - those values are never set on
+   *  the web server, so presence there is always false. */
+  clientConfigured: boolean;
+  /** A mailbox already linked before this visit. Rendered as standing state,
+   *  never as "you just connected", which is what connectedEmail means. */
+  alreadyConnectedEmail?: string;
   /** Whether the signed-in user may write deployment-wide env vars. */
   admin: boolean;
   /** Set by the callback redirect on success - the mailbox that got linked. */
@@ -243,8 +252,13 @@ export function GoogleWizard({
   const [replacing, setReplacing] = useState(false);
   const [topic, setTopic] = useState("");
 
-  // Step 4's "done" derives from deployment presence, not a checkbox.
-  const step4Done = presenceState.clientId && presenceState.clientSecret;
+  // Step 4's "done" is what the CONVEX deployment holds - the values live
+  // there, not on this server, so getEnvPresence reports false for them no
+  // matter how many times the wizard saves. Reading presence here is what kept
+  // step 5 disabled after a successful step 4. `savedClient` lets an in-session
+  // save flip it without a reload.
+  const [savedClient, setSavedClient] = useState(false);
+  const step4Done = clientConfigured || savedClient;
 
   // Memoized so the rail badges compute against one stable snapshot.
   const done = useMemo<Record<StepIndex, boolean>>(
@@ -288,10 +302,12 @@ export function GoogleWizard({
       }
       setPresenceState(res.presence ?? presenceState);
       setSavedMsg("Saved to the deployment");
-      // Saving both from the pane itself completes step 4; move on to 5.
-      if (res.presence?.clientId && res.presence?.clientSecret && pane === 4) {
-        show(5);
-      }
+      // The write went to Convex, so this server's presence will not reflect
+      // it - trust the successful save instead of re-reading a value that
+      // lives somewhere else.
+      setSavedClient(true);
+      setReplacing(false);
+      if (pane === 4) show(5);
     } finally {
       setBusy(false);
     }
@@ -653,6 +669,21 @@ export function GoogleWizard({
                 here when it is done. Read-only access to Gmail, nothing else, and you can
                 revoke it at any time from your Google account.
               </p>
+              {/* Standing state, distinct from "you just connected". Showing
+                  the stored address as a success banner made a FAILED return
+                  render green and red at once, with a stale mailbox presented
+                  as the one just linked. */}
+              {!connectedEmail && !oauthError && alreadyConnectedEmail && (
+                <div className="mt-3 rounded-md border border-line bg-surface px-3 py-2.5">
+                  <p className="text-[12.5px] text-ink">
+                    Currently linked:{" "}
+                    <span className="font-mono">{alreadyConnectedEmail}</span>
+                  </p>
+                  <p className="mt-1 text-[11.5px] text-ink-2">
+                    Signing in again replaces it with whichever account you choose.
+                  </p>
+                </div>
+              )}
               {connectedEmail && (
                 <div className="mt-3 rounded-md border border-accent/45 bg-accent/10 px-3 py-2.5">
                   <p className="text-[12.5px] text-accent">

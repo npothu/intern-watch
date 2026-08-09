@@ -95,8 +95,22 @@ http.route({
       );
     }
 
+    // Never throws. state.origin is a free-text env var upstream (APP_ORIGIN),
+    // so a value like "jobs.example.com" with no scheme makes `new URL` throw -
+    // and it threw AFTER the mailbox was already connected, inside the try,
+    // whose catch called this same helper and threw identically. The user ended
+    // a successful consent flow on a bare 500 and retried, burning a nonce and
+    // re-storing the token each time.
     const back = (params: Record<string, string>) => {
-      const target = new URL("/settings/connections/google", state.origin);
+      let target: URL;
+      try {
+        target = new URL("/settings/connections/google", state.origin);
+      } catch {
+        return new Response(
+          "Your mailbox may have been connected, but this deployment's APP_ORIGIN is not a valid URL (it needs the https:// prefix), so you could not be redirected back. Check Settings.",
+          { status: 200, headers: { "Content-Type": "text/plain" } },
+        );
+      }
       for (const [k, v] of Object.entries(params)) target.searchParams.set(k, v);
       return new Response(null, { status: 302, headers: { Location: target.toString() } });
     };
