@@ -1,5 +1,10 @@
 import { resolveTrackerUser } from "@/lib/user";
-import { listCredentials, getResumeLlm, getMailSyncStatus } from "@/lib/convex";
+import {
+  listCredentials,
+  getResumeLlm,
+  getMailSyncStatus,
+  getMailAccount,
+} from "@/lib/convex";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { ConnectionsList } from "@/components/settings/connections-list";
@@ -21,13 +26,31 @@ export const dynamic = "force-dynamic";
 export default async function ConnectionsPage() {
   const user = await resolveTrackerUser();
   if (!user) return null; // layout already rendered NotProvisioned
-  const [rows, llm, mailSync] = await Promise.all([
+  const [rows, llm, mailSync, mailAccount] = await Promise.all([
     listCredentials(user).catch(() => []),
     getResumeLlm(user).catch(() => null),
     // Assume enabled if the check itself fails: claiming a working feature is
     // off is the more confusing of the two wrong answers.
     getMailSyncStatus().catch(() => ({ enabled: true, missing: [] })),
+    getMailAccount(user).catch(() => null),
   ]);
+
+  // The Google card's state lives in `mailAccounts`, which is what the OAuth
+  // flow writes - NOT in `credentials`, which nothing in that flow touches.
+  // Deriving it from credentials made this page say "not set up" one click
+  // away from a wizard saying "Connected you@gmail.com". Synthesised here so
+  // the card component keeps its single row-shaped input.
+  const cards = mailAccount
+    ? [
+        ...rows.filter((r) => r.provider !== "google"),
+        {
+          provider: "google",
+          status: (mailAccount.lastError ? "error" : "ok") as "ok" | "error",
+          label: mailAccount.email,
+          lastError: mailAccount.lastError ?? undefined,
+        },
+      ]
+    : rows;
 
   return (
     <div className="mx-auto w-full max-w-[640px] px-5 pb-24 pt-5">
@@ -50,7 +73,7 @@ export default async function ConnectionsPage() {
           </span>
         </div>
         <ConnectionsList
-          rows={rows}
+          rows={cards}
           llm={
             llm ?? {
               provider: null,
