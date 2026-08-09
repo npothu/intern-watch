@@ -8,12 +8,13 @@ stubbing mirrors tests/test_health.py and tests/test_jd.py.
 
 import datetime as dt
 
-from src import main, state as st
+from src import main
+from src import state as st
 from src.dedupe import dedup_key
 from src.models import Job, SourceConfig
 
 TODAY = dt.date(2026, 6, 12)
-NOW = dt.datetime(2026, 6, 12, 12, 5, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 5, tzinfo=dt.UTC)
 
 
 # --- minimal user config: accept-always Summer rule, no LLM/dashboard/resume,
@@ -294,14 +295,14 @@ def test_state_outbox_roundtrips_through_save_load(monkeypatch, tmp_path):
     # keep the match parked in the outbox instead, set last_email to NOW so no
     # slot is due, then verify the parked item survives a save/load roundtrip.
     _freeze_clock(monkeypatch, now=dt.datetime(2026, 6, 12, 6, 0,
-                                               tzinfo=dt.timezone.utc))
+                                               tzinfo=dt.UTC))
     rc1, state_file = _run(monkeypatch, tmp_path, ["--seed"])
     assert rc1 == 0
 
     # mark an email "just sent" so the upcoming run's 06:00 slot isn't due
     pre = st.load_state(state_file)
     st.set_last_email(pre, "example",
-                      dt.datetime(2026, 6, 12, 5, 30, tzinfo=dt.timezone.utc))
+                      dt.datetime(2026, 6, 12, 5, 30, tzinfo=dt.UTC))
     st.save_state(pre, state_file)
 
     # add a brand new listed job and run: it accepts, lands in the outbox, but

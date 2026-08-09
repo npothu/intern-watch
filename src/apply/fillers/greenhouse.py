@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 class GreenhouseFiller:
     family: ATSFamily = ATSFamily.greenhouse
 
-    def apply(self, page: "Page", ctx: ApplyContext) -> ApplyResult:
+    def apply(self, page: Page, ctx: ApplyContext) -> ApplyResult:
         res = AgentFiller().apply(page, ctx)
         res.family = self.family            # relabel from the agent's "unknown"
         return res

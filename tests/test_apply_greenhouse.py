@@ -36,7 +36,9 @@ def _resume(tmp_path) -> Path:
 
 def _ctx(mode, tmp_path) -> ApplyContext:
     return ApplyContext(job={"key": "gh", "company": "Acme"},
-                        profile=load_profile(path=Path(__file__).resolve().parents[1] / "users" / "apply.example.yaml"),
+                        profile=load_profile(
+                            path=Path(__file__).resolve().parents[1]
+                            / "users" / "apply.example.yaml"),
                         resume_path=_resume(tmp_path), mode=mode,
                         final_url=FIXTURE_URL, family=ATSFamily.greenhouse,
                         artifacts_dir=tmp_path)

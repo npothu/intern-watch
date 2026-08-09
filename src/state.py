@@ -485,7 +485,7 @@ def email_due(last_email_iso: str | None, send_hours: list[int],
     season and the send stays at a fixed local time across the DST change."""
     if not send_hours:
         return False
-    tz = tz or dt.timezone.utc
+    tz = tz or dt.UTC
     local_today = now.astimezone(tz).date()
     slots = [dt.datetime.combine(local_today - dt.timedelta(days=d),
                                  dt.time(h), tzinfo=tz)

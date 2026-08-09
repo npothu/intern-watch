@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from src.apply import __main__ as cli
 from src.apply import coverage as cov
 from src.apply.base import ATSFamily

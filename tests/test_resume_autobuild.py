@@ -8,11 +8,13 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from src import dashboard as db, main, state as st
+from src import dashboard as db
+from src import main
+from src import state as st
 from src.models import Job
 from src.resume.build import BuildResult
 
-NOW = dt.datetime(2026, 6, 12, 18, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 18, 0, tzinfo=dt.UTC)
 
 
 # ----------------------------------------------------------- fixtures/helpers

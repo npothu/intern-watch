@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from src.apply.auth import (AuthStatus, LoginAccount, Logins, account_for,
-                            ensure_account, load_logins)
+from src.apply.auth import (
+    AuthStatus,
+    LoginAccount,
+    Logins,
+    account_for,
+    ensure_account,
+    load_logins,
+)
 from src.apply.base import ATSFamily
 
 

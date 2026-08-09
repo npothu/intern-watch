@@ -166,7 +166,8 @@ def test_eighteen_select_yes():
 
 
 def test_felony_select_no():
-    assert answer_for(_select("Have you ever been convicted of a felony?", ["Yes", "No"]), _p()) == "No"
+    q = _select("Have you ever been convicted of a felony?", ["Yes", "No"])
+    assert answer_for(q, _p()) == "No"
 
 
 def test_degree_select_token_overlap():

@@ -75,7 +75,9 @@ def _cap(bullet: str) -> int:
     return max(len(bullet) + CAP_SLACK, CAP_FLOOR)
 
 
-def _apply(entry: PlannedEntry, rewrites: list, notes: list[str]) -> None:
+def _apply(entry: PlannedEntry, rewrites: object, notes: list[str]) -> None:
+    """`rewrites` is raw LLM output, so it is typed as `object`: the shape
+    check below is the contract, not the annotation."""
     if (not isinstance(rewrites, list)
             or len(rewrites) != len(entry.bullets)
             or not all(isinstance(b, str) and b.strip() for b in rewrites)):
@@ -83,7 +85,7 @@ def _apply(entry: PlannedEntry, rewrites: list, notes: list[str]) -> None:
         return
     new = []
     changed = False
-    for orig, rw in zip(entry.bullets, rewrites):
+    for orig, rw in zip(entry.bullets, rewrites, strict=False):
         rw = rw.strip()
         if len(rw) > _cap(orig):
             notes.append(f"llm: over-length rewrite in '{entry.name}', "
@@ -136,7 +138,8 @@ def tailor(plan: ResumePlan, jd_text: str, llm_cfg: dict) -> ResumePlan:
     for item in items:
         if not isinstance(item, dict):
             continue
-        entry = by_name.get(item.get("name"))
+        name = item.get("name")
+        entry = by_name.get(name) if isinstance(name, str) else None
         if entry is None or entry.name in seen:
             continue
         seen.add(entry.name)

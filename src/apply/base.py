@@ -63,7 +63,7 @@ class ApplyContext:
     """
 
     job: dict[str, Any]
-    profile: "ApplyProfile"
+    profile: ApplyProfile
     resume_path: Path
     mode: ApplyMode
     final_url: str
@@ -73,7 +73,7 @@ class ApplyContext:
     artifacts_dir: Path | None = None
     # Resolved login for this ATS, if the user supplied credentials. Fillers
     # behind an auth wall (Workday) sign in — or register — with this.
-    account: "LoginAccount | None" = None
+    account: LoginAccount | None = None
     # Optional inbox.Inbox for resolving emailed verification links / OTP codes
     # during account creation. None disables email resolution.
     inbox: Any = None
@@ -116,7 +116,7 @@ class Filler(Protocol):
 
     family: ATSFamily
 
-    def apply(self, page: "Page", ctx: ApplyContext) -> ApplyResult:
+    def apply(self, page: Page, ctx: ApplyContext) -> ApplyResult:
         """Drive `page` (already navigated to ctx.final_url) through the form.
 
         Must respect ctx.mode: in `autofill` mode fill + attach the resume and

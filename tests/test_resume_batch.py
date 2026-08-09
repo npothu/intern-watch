@@ -4,12 +4,13 @@ import datetime as dt
 
 import yaml
 
-from src import dashboard as db, state as st
+from src import dashboard as db
+from src import state as st
 from src.resume import batch
 from src.resume.build import BuildResult
 
 TERMS = ["Fall 2026", "Summer 2027"]
-NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.UTC)
 
 
 def _item(i, **kw):

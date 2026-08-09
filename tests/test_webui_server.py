@@ -260,9 +260,10 @@ def test_refresh_mail_failure_does_not_break_refresh(monkeypatch, tmp_path):
     """A get_actions exception is swallowed: inbox stays None, refresh keeps
     its other warnings, and the Hub stays fully usable."""
     import logging
+
     from src.webui import server as srv
 
-    store = _writable_store()
+    _writable_store()
 
     class _BrokenMail(FakeStore):
         def get_actions(self, user):
@@ -286,7 +287,7 @@ def _health(**kw):
 
 def _mills(hours_ago):
     import datetime as dt
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     return int((now - dt.timedelta(hours=hours_ago)).timestamp() * 1000)
 
 

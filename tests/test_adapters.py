@@ -71,7 +71,7 @@ def test_jobright_missing_marker_raises(today):
     adapter = JobrightMdAdapter(_cfg("x", "jobright_md", ["README.md"]))
     try:
         adapter.parse("# just a readme, no table", "README.md", today)
-        assert False, "expected RuntimeError"
+        raise AssertionError("expected RuntimeError")
     except RuntimeError:
         pass
 

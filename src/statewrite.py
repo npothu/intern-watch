@@ -30,7 +30,8 @@ import datetime as dt
 import sys
 from pathlib import Path
 
-from . import dashboard, ledger, state as st
+from . import dashboard, ledger
+from . import state as st
 
 ROOT = Path(__file__).resolve().parents[1]
 

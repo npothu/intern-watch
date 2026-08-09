@@ -19,8 +19,9 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -135,7 +136,7 @@ def _llm_cfg(user: str) -> dict:
 
 # ----------------------------------------------------------- profile payload
 
-def _profile_payload(profile: "ApplyProfile") -> dict[str, Any]:
+def _profile_payload(profile: ApplyProfile) -> dict[str, Any]:
     """A compact, LLM-friendly view of the answerable applicant data: the full
     canonical answer set plus the freeform question->answer bank."""
     payload: dict[str, Any] = dict(canonical_answers(profile))
@@ -147,7 +148,7 @@ def _profile_payload(profile: "ApplyProfile") -> dict[str, Any]:
 
 # ------------------------------------------------------ deterministic fallback
 
-def _deterministic_map(form_fields: list[dict], profile: "ApplyProfile",
+def _deterministic_map(form_fields: list[dict], profile: ApplyProfile,
                        ) -> dict[str, str]:
     """Resolve every field we can from the answer book (contact, work auth,
     EEO, education, salary, logistics, screening, custom Q&A) — no LLM needed.
@@ -165,7 +166,7 @@ def _deterministic_map(form_fields: list[dict], profile: "ApplyProfile",
 
 # ----------------------------------------------------------- field mapping
 
-def map_fields(form_fields: list[dict], profile: "ApplyProfile",
+def map_fields(form_fields: list[dict], profile: ApplyProfile,
                llm_cfg: dict | None,
                call: Callable[[str, str, str, str], str] | None = None,
                ) -> tuple[dict[str, str], list[str]]:
@@ -233,18 +234,19 @@ def map_fields(form_fields: list[dict], profile: "ApplyProfile",
             continue
         ref = item.get("ref")
         value = item.get("value")
-        if ref in valid_refs and value is not None and str(value) != "":
-            # LLM only FILLS refs the answer book couldn't resolve — it never
-            # overrides a deterministic answer. The bank's value is exact
-            # (e.g. "Graduation Date" -> 2027-05-10); the LLM's profile view
-            # carries only the coarse "May 2027" (day is dropped in the
-            # payload), so an override silently downgraded precision — the
-            # widget then parsed May 1 and committed the wrong day. Combobox
-            # option re-picking, which genuinely needs the model, runs later
-            # in _apply_mapping's pending pass, not here, so it is untouched.
-            if ref not in base:
-                llm_added += 1
-                mapping[ref] = str(value)
+        # `ref not in base`: the LLM only FILLS refs the answer book couldn't
+        # resolve — it never overrides a deterministic answer. The bank's value
+        # is exact (e.g. "Graduation Date" -> 2027-05-10); the LLM's profile
+        # view carries only the coarse "May 2027" (day is dropped in the
+        # payload), so an override silently downgraded precision — the widget
+        # then parsed May 1 and committed the wrong day. Combobox option
+        # re-picking, which genuinely needs the model, runs later in
+        # _apply_mapping's pending pass, not here, so it is untouched.
+        if (isinstance(ref, str) and ref in valid_refs
+                and value is not None and str(value) != ""
+                and ref not in base):
+            llm_added += 1
+            mapping[ref] = str(value)
     notes.append(f"answer book filled {len(base)}, LLM added {llm_added}")
     return mapping, notes
 
@@ -574,10 +576,11 @@ _EXTRACT_JS = r"""
   }
   return out;
 }
-""" % (MAX_FIELDS, MAX_OPTIONS)
+""" % (MAX_FIELDS, MAX_OPTIONS)  # noqa: UP031 - JS body is full of { }, so
+# %-formatting is the only interpolation that doesn't need every brace doubled.
 
 
-def _extract_fields(page: "Page") -> list[dict]:
+def _extract_fields(page: Page) -> list[dict]:
     try:
         return page.evaluate(_EXTRACT_JS) or []
     except Exception as exc:
@@ -592,7 +595,7 @@ _FIELD_COUNT_JS = (
     "'input, textarea, select, button').length")
 
 
-def _wait_for_form_stable(page: "Page", *, settle_ms: int = 700,
+def _wait_for_form_stable(page: Page, *, settle_ms: int = 700,
                           max_ms: int = 9000, poll_ms: int = 250) -> None:
     """Block until the candidate-field count stops changing before the FIRST
     extraction. A fixed sleep raced remote/Browserbase SPA renders — Palantir's
@@ -622,7 +625,7 @@ def _wait_for_form_stable(page: "Page", *, settle_ms: int = 700,
             return
 
 
-def _attach_resume(page: "Page", resume_path: Path) -> bool:
+def _attach_resume(page: Page, resume_path: Path) -> bool:
     try:
         file_inputs = page.query_selector_all("input[type=file]")
     except Exception:
@@ -669,7 +672,9 @@ def _selection_verified(chosen: str, want: str, options: list[str] | None) -> bo
     if _labels_equivalent(chosen, want):
         return True
     mapped = match_option(want, list(options or []))
-    return bool(mapped) and _labels_equivalent(chosen, mapped)
+    if not mapped:
+        return False
+    return _labels_equivalent(chosen, mapped)
 
 
 def _combobox_verified(displayed: str, clicked_option: str) -> bool:
@@ -689,7 +694,7 @@ def _select_label(loc) -> str:
         return ""
 
 
-def _set_field(page: "Page", ref: str, field: dict, value: str) -> bool:
+def _set_field(page: Page, ref: str, field: dict, value: str) -> bool:
     """Set one field robustly. Scroll into view, fill/select/check, and VERIFY
     the choice landed for EVERY type (Ashby's long SPA forms drop fills that
     aren't scrolled in; a select/check that selects nothing must not count as
@@ -794,7 +799,7 @@ def _format_date(ymd: tuple[int, int, int], placeholder: str) -> str:
     return f"{m:02d}{sep}{d:02d}{sep}{y:04d}"             # MM/DD/YYYY (default)
 
 
-def _set_date(page: "Page", ref: str, field: dict, value: str) -> bool:
+def _set_date(page: Page, ref: str, field: dict, value: str) -> bool:
     """Fill a date-picker input. Parse the answer, format it per the field's
     placeholder, and type it with REAL keystrokes (calendar widgets ignore a
     programmatic fill()). Verify the value stuck, then press Escape so any open
@@ -876,7 +881,7 @@ def _button_pressed(loc) -> bool | None:
     return any(str(s).strip().lower() in truthy for s in present)
 
 
-def _set_boolean(page: "Page", ref: str, value: str) -> bool:
+def _set_boolean(page: Page, ref: str, value: str) -> bool:
     """Click the Yes/No button matching `value` in an Ashby-style button-pair
     boolean widget. `ref` points at the Yes button; for "No" we click its
     sibling No button. Only Yes/No are valid — anything else fails honestly so
@@ -918,7 +923,7 @@ def _set_boolean(page: "Page", ref: str, value: str) -> bool:
     return _button_pressed(no) is not False
 
 
-def _visible_combobox_options(page: "Page") -> dict[str, Any]:
+def _visible_combobox_options(page: Page) -> dict[str, Any]:
     """Visible dropdown options right now, as {text: locator}. Visibility is
     established BEFORE the MAX_OPTIONS cap: Greenhouse job boards embed an
     intl-tel-input country list of ~244 HIDDEN [role=option] nodes early in the
@@ -952,7 +957,7 @@ def _visible_combobox_options(page: "Page") -> dict[str, Any]:
     return out
 
 
-def _open_and_filter_combobox(page: "Page", loc, query: str) -> dict[str, Any]:
+def _open_and_filter_combobox(page: Page, loc, query: str) -> dict[str, Any]:
     """Focus the combobox and type `query` with REAL keystrokes — programmatic
     fill() sets the value without the key events these widgets listen on
     (Ashby's autocomplete stays closed on fill). Returns the visible options."""
@@ -970,7 +975,7 @@ def _open_and_filter_combobox(page: "Page", loc, query: str) -> dict[str, Any]:
     return _visible_combobox_options(page)
 
 
-def _combobox_display(page: "Page", loc) -> str:
+def _combobox_display(page: Page, loc) -> str:
     """The value a combobox now shows after a selection.
 
     Ashby echoes the chosen label into the input's own value, so that is the
@@ -1018,7 +1023,7 @@ def _combobox_display(page: "Page", loc) -> str:
         return ""
 
 
-def _click_and_verify_option(page: "Page", loc, options: dict, target: str) -> bool:
+def _click_and_verify_option(page: Page, loc, options: dict, target: str) -> bool:
     """Click the matched option and confirm the combobox now displays it; a
     click that selected nothing (menu closed on an empty control) must not
     report success."""
@@ -1029,7 +1034,7 @@ def _click_and_verify_option(page: "Page", loc, options: dict, target: str) -> b
     return _combobox_verified(_combobox_display(page, loc), target)
 
 
-def _set_combobox(page: "Page", loc, value: str) -> bool:
+def _set_combobox(page: Page, loc, value: str) -> bool:
     """Drive a react-select/custom dropdown: open, type to filter, then CLICK
     the visible option that best matches `value`, and VERIFY the control now
     displays it. Blind Enter used to report success even when the filter matched
@@ -1058,7 +1063,7 @@ def _set_combobox(page: "Page", loc, value: str) -> bool:
     return _click_and_verify_option(page, loc, options, target)
 
 
-def _enumerate_combobox_options(page: "Page", loc) -> dict[str, Any]:
+def _enumerate_combobox_options(page: Page, loc) -> dict[str, Any]:
     """The combobox's FULL menu as {text: locator}: clear any filter, then
     ArrowDown (opens the menu even for widgets that ignore typing)."""
     _open_and_filter_combobox(page, loc, "")
@@ -1125,12 +1130,13 @@ def _pick_combobox_options_llm(pending: list[dict], llm_cfg: dict | None,
         if not isinstance(item, dict):
             continue
         ref, option = item.get("ref"), item.get("option")
-        if ref in allowed and option in allowed[ref]:   # no hallucinated options
-            out[ref] = option
+        if (isinstance(ref, str) and isinstance(option, str)
+                and ref in allowed and option in allowed[ref]):
+            out[ref] = option                   # no hallucinated options
     return out
 
 
-def _fill_combobox_field(page: "Page", ref: str, value: str,
+def _fill_combobox_field(page: Page, ref: str, value: str,
                          ) -> tuple[bool, list[str]]:
     """Fill one combobox; on a no-lexical-match failure also return the full
     option list so the LLM pass can pick among the real labels."""
@@ -1149,7 +1155,7 @@ def _fill_combobox_field(page: "Page", ref: str, value: str,
     return False, options
 
 
-def _apply_mapping(page: "Page", form_fields: list[dict],
+def _apply_mapping(page: Page, form_fields: list[dict],
                    mapping: dict[str, str], llm_cfg: dict | None = None,
                    ) -> tuple[list[str], list[str]]:
     """Fill each mapped field mechanically. Returns (filled refs, unfilled refs).
@@ -1215,8 +1221,8 @@ def _question_key(field: dict) -> tuple[str, str] | None:
     return (_norm(label), field.get("type") or "")
 
 
-def _fill_revealed_fields(page: "Page", seen_fields: list[dict],
-                          profile: "ApplyProfile", llm_cfg: dict | None,
+def _fill_revealed_fields(page: Page, seen_fields: list[dict],
+                          profile: ApplyProfile, llm_cfg: dict | None,
                           ) -> tuple[list[str], list[str], list[dict]]:
     """Fill fields that only APPEAR after earlier answers (conditional reveals).
 
@@ -1369,7 +1375,7 @@ def gate_block_labels(form_fields: list[dict], unfilled_refs,
     return required
 
 
-def _click_submit(page: "Page") -> bool:
+def _click_submit(page: Page) -> bool:
     for sel in _SUBMIT_SELECTORS:
         try:
             loc = page.locator(sel)
@@ -1389,7 +1395,7 @@ def _click_submit(page: "Page") -> bool:
     return False
 
 
-def _confirmation_present(page: "Page") -> bool:
+def _confirmation_present(page: Page) -> bool:
     for text in _CONFIRM_TEXTS:
         try:
             if page.get_by_text(re.compile(re.escape(text), re.I)).count() > 0:
@@ -1434,7 +1440,7 @@ def _url_moved_off_form(before: str, after: str) -> bool:
     return was_form and not still_form
 
 
-def _validation_error_present(page: "Page") -> bool:
+def _validation_error_present(page: Page) -> bool:
     for text in _VALIDATION_TEXTS:
         try:
             if page.get_by_text(re.compile(re.escape(text), re.I)).count() > 0:
@@ -1444,7 +1450,7 @@ def _validation_error_present(page: "Page") -> bool:
     return False
 
 
-def _submit_control_present(page: "Page") -> bool:
+def _submit_control_present(page: Page) -> bool:
     """Whether a submit control is still in the DOM. Its disappearance is a
     success signal only when NO validation-error state is showing (the form can
     also re-render without the button while surfacing errors)."""
@@ -1464,7 +1470,7 @@ def _submit_control_present(page: "Page") -> bool:
     return False
 
 
-def verify_submission(page: "Page", ctx: ApplyContext) -> tuple[bool, str]:
+def verify_submission(page: Page, ctx: ApplyContext) -> tuple[bool, str]:
     """Decide whether a just-clicked submit actually posted. Returns
     (confirmed, signal_name) where signal is the FIRST of these that fired:
       confirmation-text  a success phrase is on the page,
@@ -1481,7 +1487,7 @@ def verify_submission(page: "Page", ctx: ApplyContext) -> tuple[bool, str]:
     return False, "no-signal"
 
 
-def _screenshot(page: "Page", ctx: ApplyContext) -> Path | None:
+def _screenshot(page: Page, ctx: ApplyContext) -> Path | None:
     out_dir = ctx.artifacts_dir
     if out_dir is None:
         return None
@@ -1497,7 +1503,7 @@ def _screenshot(page: "Page", ctx: ApplyContext) -> Path | None:
         return None
 
 
-def _confirmation_screenshot(page: "Page", ctx: ApplyContext) -> Path | None:
+def _confirmation_screenshot(page: Page, ctx: ApplyContext) -> Path | None:
     """Capture the final page as confirmation.png in the run's artifacts dir so
     the user gets one-click visual proof the submission went through."""
     out_dir = ctx.artifacts_dir
@@ -1525,7 +1531,7 @@ def _repo_rel(path: Path | None) -> str | None:
         return Path(path).as_posix()
 
 
-def _safe_url(page: "Page") -> str:
+def _safe_url(page: Page) -> str:
     try:
         return page.url or ""
     except Exception:
@@ -1539,7 +1545,7 @@ class AgentFiller:
 
     family = ATSFamily.unknown
 
-    def apply(self, page: "Page", ctx: ApplyContext) -> ApplyResult:
+    def apply(self, page: Page, ctx: ApplyContext) -> ApplyResult:
         try:
             return self._apply(page, ctx)
         except Exception as exc:                     # last-resort guard
@@ -1548,7 +1554,7 @@ class AgentFiller:
                                message=f"{type(exc).__name__}: {exc}",
                                final_url=_safe_url(page))
 
-    def _apply(self, page: "Page", ctx: ApplyContext) -> ApplyResult:
+    def _apply(self, page: Page, ctx: ApplyContext) -> ApplyResult:
         # Captcha only blocks unattended submit; autofill fills and pauses, so an
         # ever-present reCAPTCHA badge must not stop us. (Submit re-checks below.)
         if ctx.mode is ApplyMode.submit and has_visible_captcha(page):
@@ -1562,15 +1568,14 @@ class AgentFiller:
         # half-populated form (Palantir Lever: 9 of 61+ fields at extract time).
         _wait_for_form_stable(page)
         form_fields = _extract_fields(page)
-        if not form_fields:
-            # The URL may be a job posting, not the form — try to open it.
-            if advance_to_application_form(page):
-                try:
-                    page.wait_for_timeout(1500)     # let a late SPA form render
-                except Exception:
-                    pass
-                _wait_for_form_stable(page)
-                form_fields = _extract_fields(page)
+        # The URL may be a job posting, not the form — try to open it.
+        if not form_fields and advance_to_application_form(page):
+            try:
+                page.wait_for_timeout(1500)         # let a late SPA form render
+            except Exception:
+                pass
+            _wait_for_form_stable(page)
+            form_fields = _extract_fields(page)
         if not form_fields:
             return ApplyResult(status=ApplyStatus.unsupported,
                                family=self.family,
@@ -1686,4 +1691,4 @@ class AgentFiller:
 
     @staticmethod
     def _today_iso() -> str:
-        return dt.datetime.now(dt.timezone.utc).date().isoformat()
+        return dt.datetime.now(dt.UTC).date().isoformat()

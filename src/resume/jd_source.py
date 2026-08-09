@@ -176,14 +176,15 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
     if got:
         return got
 
+    # A non-optional local: every tier below needs a real client, and `own`
+    # alone doesn't tell the type checker that `client` stopped being None.
     own = client is None
-    if own:
-        client = httpx.Client(timeout=20.0)
+    http = client if client is not None else httpx.Client(timeout=20.0)
     try:
         # Tier 2: Greenhouse per-job content API.
         if getattr(job, "jd_url", None):
             try:
-                got = _ok(_from_greenhouse(client, job.jd_url))
+                got = _ok(_from_greenhouse(http, job.jd_url))
                 if got:
                     return got
             except Exception as exc:  # noqa: BLE001 — fall through to next tier
@@ -198,24 +199,24 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
         scrape_first = bool(allow_scrape and url
                              and extract_jobright_id(url) is None)
 
-        if scrape_first:
-            got = _try_scrape(client, url, job)
+        if scrape_first and url:
+            got = _try_scrape(http, url, job)
             if got:
                 return got
 
         # jobright info page (composed __NEXT_DATA__ blob).
         if jobright_id:
-            got = _try_jobright(client, jobright_id, job)
+            got = _try_jobright(http, jobright_id, job)
             if got:
                 return got
 
         # generic scrape of the apply URL, if not already tried above.
         if not scrape_first and allow_scrape and url:
-            got = _try_scrape(client, url, job)
+            got = _try_scrape(http, url, job)
             if got:
                 return got
     finally:
         if own:
-            client.close()
+            http.close()
 
     return None

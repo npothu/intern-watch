@@ -26,10 +26,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .. import dashboard, ledger, state as st
+from .. import dashboard, ledger
+from .. import state as st
 from ..models import Job
 from ..resume.build import build_for_job
-from ..store import (ApiError, TickWrite, TrackerStore, _git, make_store)
+from ..store import ApiError, TickWrite, TrackerStore, _git, make_store
 from . import core
 
 log = logging.getLogger(__name__)
@@ -58,19 +59,19 @@ def _mail_health_warnings(health: dict) -> list[str]:
     (the Convex getActions contract). Callers pass {} when no Gmail account
     is set up yet."""
     out: list[str] = []
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     if health.get("lastError"):
         out.append(f"mail sync error: {health['lastError']}")
     # only flag a stalled sync once a real account exists AND has synced at
     # least once -- a fresh setup has no lastSyncAt yet and isn't stalled
     if health.get("email") and health.get("lastSyncAt"):
         last = dt.datetime.fromtimestamp(
-            health["lastSyncAt"] / 1000, tz=dt.timezone.utc)
+            health["lastSyncAt"] / 1000, tz=dt.UTC)
         if now - last > dt.timedelta(hours=_MAIL_STALL_HOURS):
             out.append("mail sync stalled (>48h)")
     if health.get("watchExpiration"):
         exp = dt.datetime.fromtimestamp(
-            health["watchExpiration"] / 1000, tz=dt.timezone.utc)
+            health["watchExpiration"] / 1000, tz=dt.UTC)
         if exp < now:
             out.append("gmail watch expired - rerun setup")
     return out
@@ -194,7 +195,7 @@ class Hub:
     # -- reads ----------------------------------------------------------
 
     def snapshot(self) -> dict:
-        today = dt.datetime.now(dt.timezone.utc).date()
+        today = dt.datetime.now(dt.UTC).date()
         with self.lock:
             matches = core.shape_matches(
                 st.matches_items(self.state, self.user),
@@ -206,7 +207,7 @@ class Hub:
             payload = {
                 "applications": book,
                 "user": self.user,
-                "generated": dt.datetime.now(dt.timezone.utc)
+                "generated": dt.datetime.now(dt.UTC)
                                .isoformat(timespec="seconds"),
                 "fetched_main": self.fetched_main,
                 "warnings": list(self.warnings),
@@ -369,7 +370,7 @@ class Hub:
                 self.pending.setdefault(short, {}).update(
                     {"status": status, "applied": True})
             actions = (self.inbox or {}).get("actions")
-            if actions is not None:
+            if self.inbox is not None and actions is not None:
                 self.inbox["actions"] = [
                     a for a in actions if a.get("id") != action_id]
         return {"ok": True, "id": action_id}

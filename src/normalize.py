@@ -7,6 +7,8 @@ import html as html_mod
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .models import TermConfidence
+
 # ------------------------------------------------------------------- html
 
 _SCRIPT_STYLE_RE = re.compile(
@@ -290,7 +292,7 @@ def _next_occurrence(season: str, today: dt.date) -> int:
     return today.year if today.month <= start_month else today.year + 1
 
 
-def infer_terms(title: str, today: dt.date) -> tuple[list[str], str]:
+def infer_terms(title: str, today: dt.date) -> tuple[list[str], TermConfidence]:
     """Regex term inference from a job title.
 
     Returns (terms, confidence). Priority per spec:
@@ -311,14 +313,14 @@ def infer_terms(title: str, today: dt.date) -> tuple[list[str], str]:
     if inferred:
         return sorted(set(inferred)), "inferred"
 
-    m = _SEASON_ONLY_RE.search(title)
-    if m:
-        season = _SEASONS[m.group(1).lower()]
+    season_m = _SEASON_ONLY_RE.search(title)
+    if season_m:
+        season = _SEASONS[season_m.group(1).lower()]
         return [f"{season} {_next_occurrence(season, today)}"], "inferred"
 
-    m = _BARE_YEAR_RE.search(title)
-    if m:
-        return [f"Summer 20{m.group(1)}"], "inferred"
+    year_m = _BARE_YEAR_RE.search(title)
+    if year_m:
+        return [f"Summer 20{year_m.group(1)}"], "inferred"
 
     return [], "unknown"
 

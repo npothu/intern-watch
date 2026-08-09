@@ -19,10 +19,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from playwright.sync_api import Page
@@ -49,7 +50,7 @@ class BrowserConfig:
     headless: bool = True
     api_key_env: str = "BROWSERBASE_API_KEY"
     project_id_env: str = "BROWSERBASE_PROJECT_ID"
-    session_timeout_s: "int | None" = None  # browserbase auto-end; None = default
+    session_timeout_s: int | None = None  # browserbase auto-end; None = default
 
 
 # Browserbase's timeout is clamped to [60, 21600] s (1 min – 6 h). Keep our
@@ -59,7 +60,7 @@ _BB_MAX_TIMEOUT_S = 21600
 
 
 def connect_url(api_key: str, project_id: str,
-                session_id: "str | None" = None) -> str:
+                session_id: str | None = None) -> str:
     """Browserbase CDP endpoint. Kept separate so it's testable without network.
 
     When `session_id` is given (a session pre-created via the REST API so we can
@@ -119,7 +120,7 @@ def _teardown(page, context, browser, pw) -> None:
 
 @contextmanager
 def browser_session(config: BrowserConfig, *,
-                    storage_path: "Path | None" = None) -> "Iterator[Page]":
+                    storage_path: Path | None = None) -> Iterator[Page]:
     """Yield a Playwright `Page` for `config`'s backend.
 
     If `storage_path` is given, the local provider loads Playwright
@@ -127,7 +128,7 @@ def browser_session(config: BrowserConfig, *,
     back on a clean exit — so a one-time interactive login can be reused. The
     page/context/browser are always closed in a `finally`.
     """
-    from playwright.sync_api import sync_playwright   # lazy import
+    from playwright.sync_api import sync_playwright  # lazy import
 
     storage = (str(storage_path)
                if storage_path is not None and Path(storage_path).exists()
@@ -177,7 +178,7 @@ def browser_session(config: BrowserConfig, *,
         _teardown(page, context, browser, pw)
 
 
-def save_artifact_screenshot(page, dir_or_obj, name: str) -> "Path | None":
+def save_artifact_screenshot(page, dir_or_obj, name: str) -> Path | None:
     """Full-page screenshot into a directory (or any object exposing an
     `artifacts_dir` attribute). Returns the path written, or None — tolerant of
     any failure / no directory."""

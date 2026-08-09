@@ -156,16 +156,21 @@ def message_text(msg: Message) -> str:
         for part in msg.walk():
             if part.get_content_type() in ("text/plain", "text/html"):
                 try:
-                    payload = part.get_payload(decode=True) or b""
+                    # decode=True yields bytes for a leaf part, but None (or a
+                    # nested Message) for anything it can't decode.
+                    payload = part.get_payload(decode=True)
+                    if not isinstance(payload, bytes):
+                        continue
                     parts.append(payload.decode(part.get_content_charset() or
                                                 "utf-8", "replace"))
                 except Exception:
                     continue
     else:
         try:
-            payload = msg.get_payload(decode=True) or b""
-            parts.append(payload.decode(msg.get_content_charset() or "utf-8",
-                                        "replace"))
+            payload = msg.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                parts.append(payload.decode(msg.get_content_charset() or "utf-8",
+                                            "replace"))
         except Exception:
             pass
     return "\n".join(parts)
@@ -191,7 +196,7 @@ class Inbox:
         self.host, self.port, self.user, self.password = host, port, user, password
 
     @classmethod
-    def from_config(cls, cfg: InboxConfig) -> "Inbox | None":
+    def from_config(cls, cfg: InboxConfig) -> Inbox | None:
         if not cfg.enabled:
             return None
         user = os.environ.get(cfg.user_env)
@@ -227,7 +232,12 @@ class Inbox:
                 typ, msg_data = conn.fetch(mid, "(RFC822)")
                 if typ != "OK" or not msg_data or not msg_data[0]:
                     continue
-                msg = email.message_from_bytes(msg_data[0][1])
+                # imaplib hands back (header, body) tuples for FETCH literals,
+                # but bare bytes for untagged flag responses - skip those.
+                raw = msg_data[0]
+                if not isinstance(raw, tuple) or not isinstance(raw[1], bytes):
+                    continue
+                msg = email.message_from_bytes(raw[1])
                 bodies.append(message_text(msg))
             return bodies
         except Exception as exc:

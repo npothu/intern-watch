@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import logging
 
-from ..models import Job
+from ..models import Job, TermConfidence
 from ..normalize import infer_terms, split_locations, strip_tracking
 from .base import Adapter
 
@@ -23,14 +23,15 @@ class SimplifyJsonAdapter(Adapter):
                     continue
                 terms = [t for t in entry.get("terms") or [] if t and t != "N/A"]
                 title = (entry.get("title") or "").strip()
+                confidence: TermConfidence
                 if terms:
-                    confidence = "explicit"
+                    confidence = "explicit"      # Simplify ships real terms
                 else:
                     terms, confidence = infer_terms(title, today)
                 date_posted = None
                 if entry.get("date_posted"):
                     date_posted = dt.datetime.fromtimestamp(
-                        entry["date_posted"], tz=dt.timezone.utc).date()
+                        entry["date_posted"], tz=dt.UTC).date()
                 locations: list[str] = []
                 for loc in entry.get("locations") or []:
                     locations.extend(split_locations(loc))

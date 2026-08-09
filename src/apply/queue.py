@@ -22,13 +22,15 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import dashboard, ledger as ledger_mod, state as state_mod
-from .auth import Logins, account_for, load_logins
+from .. import dashboard
+from .. import ledger as ledger_mod
+from .. import state as state_mod
+from .auth import Logins, account_for
 from .base import ApplyContext, ApplyMode, ApplyResult, ApplyStatus, ATSFamily
 from .driver import browser_session
 from .fillers import get_filler
 from .inbox import Inbox
-from .profile import ApplyProfile, load_profile
+from .profile import ApplyProfile
 from .resolve import resolve
 
 ROOT = Path(__file__).resolve().parents[2]

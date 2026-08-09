@@ -24,7 +24,8 @@ import os
 import sys
 from pathlib import Path
 
-from .. import dashboard, state as st
+from .. import dashboard
+from .. import state as st
 from ..models import Job
 from ..store import make_store
 from .build import ROOT, build_for_job, resume_build_cfg

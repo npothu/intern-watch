@@ -10,8 +10,7 @@ import httpx
 from src import main
 from src.adapters.ats_boards import JD_MAX_CHARS, AtsBoardsAdapter
 from src.dedupe import dedupe
-from src.filters import (UserFilter, jd_grad_only,
-                         jd_requires_active_clearance)
+from src.filters import UserFilter, jd_grad_only, jd_requires_active_clearance
 from src.models import Job, SourceConfig
 from src.normalize import strip_html
 

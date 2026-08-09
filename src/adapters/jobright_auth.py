@@ -16,9 +16,9 @@ from pathlib import Path
 
 import httpx
 
+from ..normalize import strip_tracking
 from . import jobright_page
 from .jobright_page import _PAGE_UA
-from ..normalize import strip_tracking
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class JobrightSession:
         try:
             self.session_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "saved_at": dt.datetime.now(dt.UTC).isoformat(),
                 "cookies": dict(self._client.cookies),
             }
             self.session_path.write_text(json.dumps(payload) + "\n",
@@ -120,16 +120,14 @@ class JobrightSession:
                 log.warning("jobright request cap %s reached", self.cap)
             return None
         try:
-            if _SESSION_COOKIE not in self._client.cookies:
-                if not self.login():
-                    self._memo[jobright_id] = None
-                    return None
+            if _SESSION_COOKIE not in self._client.cookies and not self.login():
+                self._memo[jobright_id] = None
+                return None
             result = jobright_page.fetch_job_result(self._client, jobright_id)
             self.calls += 1
-            if not result or result.get("applyLink") is None:
-                if self.login():
-                    result = jobright_page.fetch_job_result(self._client, jobright_id)
-                    self.calls += 1
+            if (not result or result.get("applyLink") is None) and self.login():
+                result = jobright_page.fetch_job_result(self._client, jobright_id)
+                self.calls += 1
             if result and result.get("applyLink"):
                 self.succeeded = True
             self._memo[jobright_id] = result

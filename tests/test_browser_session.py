@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.browser import (BrowserConfig, browser_session, connect_url,
-                         save_artifact_screenshot)
+from src.browser import BrowserConfig, browser_session, connect_url, save_artifact_screenshot
 
 
 def test_connect_url_format():
@@ -35,18 +34,18 @@ def test_browserbase_missing_api_key_raises(monkeypatch):
     pytest.importorskip("playwright.sync_api")
     monkeypatch.delenv("BROWSERBASE_API_KEY", raising=False)
     monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "P")
-    with pytest.raises(RuntimeError, match="BROWSERBASE_API_KEY"):
-        with browser_session(BrowserConfig(provider="browserbase")):
-            pass
+    with (pytest.raises(RuntimeError, match="BROWSERBASE_API_KEY"),
+          browser_session(BrowserConfig(provider="browserbase"))):
+        pass
 
 
 def test_browserbase_missing_project_id_raises(monkeypatch):
     pytest.importorskip("playwright.sync_api")
     monkeypatch.setenv("BROWSERBASE_API_KEY", "K")
     monkeypatch.delenv("BROWSERBASE_PROJECT_ID", raising=False)
-    with pytest.raises(RuntimeError, match="BROWSERBASE_PROJECT_ID"):
-        with browser_session(BrowserConfig(provider="browserbase")):
-            pass
+    with (pytest.raises(RuntimeError, match="BROWSERBASE_PROJECT_ID"),
+          browser_session(BrowserConfig(provider="browserbase"))):
+        pass
 
 
 def test_custom_env_var_names_are_honored(monkeypatch):
@@ -54,16 +53,15 @@ def test_custom_env_var_names_are_honored(monkeypatch):
     monkeypatch.delenv("BB_KEY", raising=False)
     cfg = BrowserConfig(provider="browserbase", api_key_env="BB_KEY",
                         project_id_env="BB_PROJ")
-    with pytest.raises(RuntimeError, match="BB_KEY"):
-        with browser_session(cfg):
-            pass
+    with pytest.raises(RuntimeError, match="BB_KEY"), browser_session(cfg):
+        pass
 
 
 def test_unknown_provider_raises():
     pytest.importorskip("playwright.sync_api")
-    with pytest.raises(RuntimeError, match="unknown browser provider"):
-        with browser_session(BrowserConfig(provider="bogus")):
-            pass
+    with (pytest.raises(RuntimeError, match="unknown browser provider"),
+          browser_session(BrowserConfig(provider="bogus"))):
+        pass
 
 
 class _FakePage:

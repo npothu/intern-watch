@@ -372,9 +372,9 @@ def dedup_existing_matches(state: dict, user: str) -> int:
 
 def sync_user(state: dict, user: str, terms_order: list[str],
               now: dt.datetime, repo: str, token: str,
-              ticks: "TicksView | None" = None,
+              ticks: TicksView | None = None,
               interactive: bool = True,
-              store: "TrackerStore | None" = None) -> None:
+              store: TrackerStore | None = None) -> None:
     """Read applied/hide checkboxes back into state, auto-hide stale rows,
     then rewrite (or create) the user's dashboard issue. Raises httpx errors
     to the caller.
@@ -501,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     from pathlib import Path
 
     from .filters import load_users
+
     # Local import: .store imports this module at runtime (via webui.core),
     # so a module-level import here would cycle (dashboard <-> store).
     from .store import GitHubStore, make_store
@@ -533,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     terms_order = list((users.get(args.user) or {}).get("terms_wanted", []))
     state_path = root / "state" / "seen.json"
     state = st.load_state(state_path)
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     store = make_store(root, users.get(args.user) or {"name": args.user})
     ticks = store.get_ticks(args.user)
     sync_user(state, args.user, terms_order, now, repo, token,

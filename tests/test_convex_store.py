@@ -7,10 +7,11 @@ import json
 import httpx
 import pytest
 
-from src import dashboard, ledger, state as st, store
+from src import dashboard, ledger, store
+from src import state as st
 
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
-NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.UTC)
 
 
 def _item(i, **kw):
