@@ -181,6 +181,26 @@ export const getProfile = query({
   },
 });
 
+export const generateProfileImportUploadUrl = mutation({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { secret }) => {
+    checkSecret(secret);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const discardProfileImportUpload = mutation({
+  args: {
+    user: v.string(),
+    storageId: v.id("_storage"),
+    secret: v.string(),
+  },
+  handler: async (ctx, { storageId, secret }) => {
+    checkSecret(secret);
+    await ctx.storage.delete(storageId);
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Public query: current build status for one (user, short).
 // Returns "building" | {status:"failed", error} | null (null = not building;

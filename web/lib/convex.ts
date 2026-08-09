@@ -1,4 +1,5 @@
 import "server-only";
+import type { ProfileV2, SectionKind } from "../../convex/profile_schema";
 
 /**
  * Server-only Convex client.
@@ -405,6 +406,56 @@ export async function getProfile(user: string): Promise<ProfileData> {
  * server-side by the mutation). */
 export async function putProfile(user: string, data: string): Promise<void> {
   await post("mutation", "putProfile", { user, data }, "resume");
+}
+
+export type ResumeImportPreview = {
+  profile: ProfileV2;
+  mappings: { lineId: string; targetPaths: string[] }[];
+  unmappedLines: { id: string; text: string }[];
+  sections: {
+    id: string;
+    title: string;
+    kind: SectionKind;
+    count: number;
+  }[];
+};
+
+export async function getResumeImportUploadUrl(user: string): Promise<string> {
+  const value = await post(
+    "mutation",
+    "generateProfileImportUploadUrl",
+    { user },
+    "resume"
+  );
+  if (typeof value !== "string" || !value) {
+    throw new ConvexError("Convex did not return a resume upload URL.");
+  }
+  return value;
+}
+
+export async function mapResumeImport(
+  user: string,
+  upload: { storageId: string; filename: string; contentType: string }
+): Promise<ResumeImportPreview> {
+  const value = await post(
+    "action",
+    "importProfileFromUpload",
+    { user, ...upload },
+    "resume_node"
+  );
+  return value as ResumeImportPreview;
+}
+
+export async function discardResumeImportUpload(
+  user: string,
+  storageId: string
+): Promise<void> {
+  await post(
+    "mutation",
+    "discardProfileImportUpload",
+    { user, storageId },
+    "resume"
+  );
 }
 
 // -- tracker deadlines -------------------------------------------------------

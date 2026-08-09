@@ -15,7 +15,7 @@
 // JD fetch -> Gemini call -> docx generation -> storage - runs here under
 // the Node runtime instead of risking a runtime-only failure in the isolate.
 
-import { internalAction } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -36,6 +36,11 @@ import {
   PROVIDER_LABEL,
 } from "./llm_providers";
 import { bulletsFor, type ProfileV2, toV2 } from "./profile_schema";
+import {
+  extractResume,
+  mapExtractionWithModel,
+  MAX_IMPORT_BYTES,
+} from "./resume_import";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
@@ -399,6 +404,92 @@ export const runBuild = internalAction({
       const message = err instanceof Error ? err.message : String(err);
       console.error("resume build failed", err);
       await ctx.runMutation(internal.resume.markBuildFailed, { user, short, error: message });
+    }
+  },
+});
+
+export const importProfileFromUpload = action({
+  args: {
+    user: v.string(),
+    storageId: v.id("_storage"),
+    filename: v.string(),
+    contentType: v.string(),
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, storageId, filename, contentType, secret }) => {
+    if (secret !== process.env.TRACKER_SECRET) throw new Error("bad secret");
+    try {
+      const blob = await ctx.storage.get(storageId);
+      if (!blob) throw new Error("The temporary resume upload could not be found. Upload it again.");
+      if (blob.size > MAX_IMPORT_BYTES) {
+        throw new Error("Resume files must be 5 MB or smaller.");
+      }
+      const storedType = blob.type.trim().toLowerCase();
+      const declaredType = contentType.trim().toLowerCase();
+      if (storedType && declaredType && storedType !== declaredType) {
+        throw new Error("The uploaded resume content type changed during upload.");
+      }
+      const extraction = await extractResume(
+        new Uint8Array(await blob.arrayBuffer()),
+        { filename, contentType: storedType || declaredType },
+      );
+
+      const settingsRow = await ctx.runQuery(internal.settings.getSettingsInternal, { user });
+      const preference = {
+        provider: settingsRow?.resumeProvider,
+        model: settingsRow?.resumeModel,
+      };
+      const userKey = await ctx.runAction(internal.credentials.resolveProviderKey, {
+        user,
+        provider: effectiveProvider(preference),
+      });
+      const operatorKey = process.env.GEMINI_API_KEY ?? null;
+      const operatorCapReached =
+        !userKey && operatorKey
+          ? await ctx.runQuery(internal.settings.operatorCapReached, { user })
+          : false;
+      const choice = chooseLlm({
+        preference,
+        userKey,
+        operatorKey,
+        operatorCapReached,
+      });
+      if (!choice.apiKey) {
+        throw new Error(
+          `Resume import needs semantic mapping from a configured model. ${choice.reason ?? "Add an API key in Settings and try again."}`,
+        );
+      }
+
+      const imported = await mapExtractionWithModel(extraction, async ({ system, user: userMsg }) => {
+        try {
+          return await callModel(choice.provider, {
+            model: choice.model,
+            system,
+            user: userMsg,
+            apiKey: choice.apiKey!,
+          });
+        } catch (error) {
+          throw new Error(
+            `${PROVIDER_LABEL[choice.provider]} ${choice.model} could not map this resume: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      });
+
+      if (choice.source === "operator") {
+        const charge = await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
+        if (!charge.allowed) {
+          throw new Error(
+            "The daily shared-model import limit was reached. Add your own API key in Settings and try again.",
+          );
+        }
+      }
+      return imported;
+    } finally {
+      try {
+        await ctx.storage.delete(storageId);
+      } catch (error) {
+        console.warn("temporary resume import cleanup failed", error);
+      }
     }
   },
 });

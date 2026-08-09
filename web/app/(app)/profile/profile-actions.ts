@@ -1,7 +1,14 @@
 "use server";
 
 import { resolveTrackerUser } from "@/lib/user";
-import { getProfile, putProfile } from "@/lib/convex";
+import {
+  discardResumeImportUpload,
+  getResumeImportUploadUrl,
+  getProfile,
+  mapResumeImport,
+  putProfile,
+  type ResumeImportPreview,
+} from "@/lib/convex";
 import { toV2 } from "../../../../convex/profile_schema";
 
 /**
@@ -11,6 +18,20 @@ import { toV2 } from "../../../../convex/profile_schema";
  */
 
 const MAX_PROFILE_BYTES = 256 * 1024; // 256KB
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+
+function importContentType(filename: string): string {
+  const lower = filename.trim().toLowerCase();
+  if (lower.endsWith(".pdf")) {
+    throw new Error("PDF import is not supported yet. Upload a DOCX, TXT, or Markdown file.");
+  }
+  if (lower.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+  throw new Error("Upload a DOCX, TXT, or Markdown file.");
+}
 
 export type FetchProfileResult =
   | { ok: true; data?: string }
@@ -34,6 +55,93 @@ export async function fetchProfile(): Promise<FetchProfileResult> {
 }
 
 export type SaveProfileResult = { ok: true } | { ok: false; error: string };
+
+export type BeginResumeImportResult =
+  | { ok: true; uploadUrl: string; contentType: string }
+  | { ok: false; error: string };
+
+export type FinishResumeImportResult =
+  | { ok: true; preview: ResumeImportPreview; filename: string }
+  | { ok: false; error: string };
+
+export async function beginResumeImport(
+  filename: string,
+  size: number
+): Promise<BeginResumeImportResult> {
+  if (typeof filename !== "string" || !filename.trim()) {
+    return { ok: false, error: "Choose a DOCX, TXT, or Markdown resume." };
+  }
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    return { ok: false, error: "The selected resume is empty." };
+  }
+  if (size > MAX_IMPORT_BYTES) {
+    return { ok: false, error: "Resume files must be 5 MB or smaller." };
+  }
+  let contentType: string;
+  try {
+    contentType = importContentType(filename);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "Not signed in, or this account isn't provisioned.",
+    };
+  }
+
+  try {
+    return {
+      ok: true,
+      uploadUrl: await getResumeImportUploadUrl(user),
+      contentType,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error && error.message
+          ? error.message
+          : "Couldn't prepare this resume import.",
+    };
+  }
+}
+
+export async function finishResumeImport(
+  storageId: string,
+  filename: string,
+  contentType: string
+): Promise<FinishResumeImportResult> {
+  if (!storageId || !filename || !contentType) {
+    return { ok: false, error: "The resume upload was incomplete. Upload it again." };
+  }
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "Not signed in, or this account isn't provisioned.",
+    };
+  }
+  try {
+    const preview = await mapResumeImport(user, {
+      storageId,
+      filename,
+      contentType,
+    });
+    return { ok: true, preview, filename };
+  } catch (error) {
+    await discardResumeImportUpload(user, storageId).catch(() => undefined);
+    return {
+      ok: false,
+      error:
+        error instanceof Error && error.message
+          ? error.message
+          : "Couldn't import this resume.",
+    };
+  }
+}
 
 /** Save the user's resume profile JSON (must parse and stay under 256KB). */
 export async function saveProfile(data: string): Promise<SaveProfileResult> {
