@@ -37,9 +37,17 @@ function convexSiteOrigin(): string | null {
   return null;
 }
 
-export default async function ConnectGooglePage() {
+export default async function ConnectGooglePage({
+  searchParams,
+}: {
+  // Set by the Convex /gmail/callback redirect at the end of the consent flow.
+  // Read here rather than with useSearchParams so the wizard stays a plain
+  // client component with no Suspense boundary to arrange.
+  searchParams: Promise<{ connected?: string; googleError?: string }>;
+}) {
   const user = await resolveTrackerUser();
   if (!user) return null; // layout already rendered NotProvisioned
+  const { connected, googleError } = await searchParams;
 
   // listCredentials can fail transiently; a failure must not crash the page,
   // so treat it as "not connected yet" and let the user retry by re-opening.
@@ -47,8 +55,14 @@ export default async function ConnectGooglePage() {
   const googleConnected = rows.some((r) => r.provider === "google");
 
   const presence = await getEnvPresence();
-  // Clamp the presence projection so client state starts from server truth.
-  const routeWired = false; // the /api/google/start route is not implemented in this build
+  // The consent flow is available when the route's own preconditions hold:
+  // /api/google/start needs a client id to build the URL, TRACKER_SECRET to
+  // sign the state, and a site origin for the redirect URI. Checking them here
+  // means the button is disabled with a reason instead of bouncing the user
+  // through a redirect that fails at the far end.
+  const routeWired = Boolean(
+    process.env.GMAIL_CLIENT_ID && process.env.TRACKER_SECRET && convexSiteOrigin(),
+  );
 
   // The wizard's write steps change deployment-wide vars, so they are gated on
   // admin membership for the display AND re-checked inside each server action.
@@ -61,6 +75,8 @@ export default async function ConnectGooglePage() {
       googleConnected={googleConnected}
       adminAvailable={Boolean(process.env.CONVEX_ADMIN_KEY)}
       routeWired={routeWired}
+      connectedEmail={connected}
+      oauthError={googleError}
       admin={admin}
     />
   );

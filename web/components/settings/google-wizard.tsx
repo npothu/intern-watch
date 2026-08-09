@@ -112,6 +112,82 @@ function AdminOnlyNote() {
   );
 }
 
+/**
+ * Shown when the client id and secret are already on the deployment. The step
+ * is finished regardless of how they got there, so the only useful thing this
+ * pane can do is say so and move on.
+ */
+function AlreadySetNote({
+  onNext,
+  canReplace,
+  onReplace,
+}: {
+  onNext: () => void;
+  canReplace: boolean;
+  onReplace: () => void;
+}) {
+  return (
+    <div className="mt-3">
+      <div className="rounded-md border border-line bg-surface px-3 py-2.5">
+        <p className="text-[12.5px] text-ink">
+          Client ID and secret are already set on this deployment.
+        </p>
+        <p className="mt-1 text-[11.5px] text-ink-2">
+          Nothing to do here. Values are never read back for display - only
+          their presence is checked.
+        </p>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={BTN_PRIMARY} onClick={onNext}>
+          Continue
+        </button>
+        {canReplace && (
+          <button type="button" className={BTN_GHOST} onClick={onReplace}>
+            Replace them
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Shown when this step genuinely cannot proceed: nothing is set AND there is no
+ * admin key to write with.
+ *
+ * It names the way out rather than only the blocker. The previous version said
+ * "CONVEX_ADMIN_KEY is not set - set it on the server", which dead-ends exactly
+ * the non-technical user this wizard exists for: it does not say where the key
+ * comes from, that it belongs on the WEB server rather than on Convex, or that
+ * the whole step can be skipped with two CLI commands.
+ */
+function NoAdminKeyNote({ siteUrl }: { siteUrl: string }) {
+  const prod = siteUrl.includes(".convex.site") ? " --prod" : "";
+  return (
+    <div className="mt-3 rounded-md border border-amber/45 bg-amber/10 px-3 py-2.5">
+      <p className="text-[12.5px] text-amber">
+        This step needs <code className="font-mono">CONVEX_ADMIN_KEY</code>, which is not set.
+      </p>
+      <p className="mt-2 text-[11.5px] text-ink-2">
+        <strong className="text-ink">Skip it instead (no key needed).</strong> Set the
+        two values yourself and press Continue:
+      </p>
+      <pre className="mt-1.5 overflow-x-auto rounded bg-chip px-2.5 py-2 font-mono text-[11px] text-ink-2">
+{`npx convex env set${prod} GMAIL_CLIENT_ID <client-id>
+npx convex env set${prod} GMAIL_CLIENT_SECRET <secret>`}
+      </pre>
+      <p className="mt-2 text-[11.5px] text-ink-2">
+        <strong className="text-ink">Or enable this step:</strong> generate a deploy key in
+        the Convex dashboard under Settings, then set it as{" "}
+        <code className="font-mono">CONVEX_ADMIN_KEY</code> on the <em>web</em> server
+        (Vercel env or <code className="font-mono">web/.env.local</code>) and redeploy. Note
+        that key can write any deployment variable, so the CLI route above leaves
+        less lying around.
+      </p>
+    </div>
+  );
+}
+
 const INP =
   "w-full min-w-0 rounded-md border border-line-2 bg-bg px-2.5 py-1.5 text-[12.5px] text-ink outline-none transition-colors focus:border-accent placeholder:text-ink-2";
 const BTN_PRIMARY =
@@ -128,6 +204,8 @@ export function GoogleWizard({
   adminAvailable,
   routeWired,
   admin,
+  connectedEmail,
+  oauthError,
 }: {
   convexSiteUrl: string;
   presence: EnvPresence;
@@ -135,13 +213,20 @@ export function GoogleWizard({
   googleConnected: boolean;
   /** Whether CONVEX_ADMIN_KEY is set so steps 4 and 6 can write. */
   adminAvailable: boolean;
-  /** Whether the /api/google/start OAuth route exists (false in this build). */
+  /** Whether /api/google/start can run: client id, signing secret, site origin. */
   routeWired: boolean;
   /** Whether the signed-in user may write deployment-wide env vars. */
   admin: boolean;
+  /** Set by the callback redirect on success - the mailbox that got linked. */
+  connectedEmail?: string;
+  /** Set by the callback redirect on failure - Google's reason, verbatim. */
+  oauthError?: string;
 }) {
   const [manual, setManual] = useState<Record<string, boolean>>(readManual);
-  const [pane, setPane] = useState<StepIndex>(1);
+  // Land on the step the user just came back to, not on step 1 - being bounced
+  // to the start of a six-step wizard after finishing the hard part reads as
+  // "it did not work" even when it did.
+  const [pane, setPane] = useState<StepIndex>(connectedEmail || oauthError ? 5 : 1);
   const [presenceState, setPresenceState] = useState<EnvPresence>(presence);
   const [pushToken, setPushToken] = useState("");
   const [pushVerified, setPushVerified] = useState(false);
@@ -472,13 +557,23 @@ export function GoogleWizard({
           {pane === 4 && (
             <div className="min-w-0">
               <h2 className="text-[13.5px] font-semibold text-ink">Paste client ID and secret</h2>
-              {!admin ? (
+              {/* Presence is checked BEFORE the admin key on purpose. This step
+                  exists to get two values onto the deployment; if they are
+                  already there - set by the CLI, or by someone else - the step
+                  is done, and the admin key is irrelevant to saying so. Keying
+                  the whole pane on the admin key made it show a red "cannot
+                  write" error while the sidebar showed the same step with a
+                  green checkmark, on the same screen. */}
+              {step4Done ? (
+                <AlreadySetNote
+                  onNext={() => show(5)}
+                  canReplace={admin && !adminUnavailable}
+                  onReplace={() => setPresenceState((p) => ({ ...p, clientId: false, clientSecret: false }))}
+                />
+              ) : !admin ? (
                 <AdminOnlyNote />
               ) : adminUnavailable ? (
-                <p className="mt-3 text-[12px] text-red">
-                  CONVEX_ADMIN_KEY is not set - the Google wizard cannot write deployment settings.
-                  Set it on the server to use this step.
-                </p>
+                <NoAdminKeyNote siteUrl={convexSiteUrl} />
               ) : (
                 <>
                   <div className="mt-3 grid items-start gap-2.5 sm:grid-cols-2">
@@ -528,20 +623,52 @@ export function GoogleWizard({
             <div className="min-w-0">
               <h2 className="text-[13.5px] font-semibold text-ink">Sign in with Google</h2>
               <p className="mt-2 text-[12px] text-ink-2">
-                Authorize the app with the Gmail account you apply from. This is the one step
-                that has to run on your machine: the consent flow needs a browser it can hand a
-                loopback redirect to, so it goes through the CLI rather than this page.
+                Authorize the app with the Gmail account you apply from. Google returns you
+                here when it is done. Read-only access to Gmail, nothing else, and you can
+                revoke it at any time from your Google account.
               </p>
+              {connectedEmail && (
+                <div className="mt-3 rounded-md border border-accent/45 bg-accent/10 px-3 py-2.5">
+                  <p className="text-[12.5px] text-accent">
+                    Connected <span className="font-mono">{connectedEmail}</span>.
+                  </p>
+                  <p className="mt-1 text-[11.5px] text-ink-2">
+                    Naming the mailbox matters: signing in with the wrong Google
+                    account is easy to do and otherwise invisible.
+                  </p>
+                </div>
+              )}
+              {oauthError && (
+                <div className="mt-3 rounded-md border border-red/45 bg-red/10 px-3 py-2.5">
+                  <p className="text-[12.5px] text-red">
+                    Google sign-in did not finish: {oauthError}
+                  </p>
+                  <p className="mt-1 text-[11.5px] text-ink-2">
+                    If it mentions the redirect URI, it must match the one in step 3
+                    exactly, including https and with no trailing slash.
+                  </p>
+                </div>
+              )}
               {routeWired ? (
                 <div className="mt-3 min-w-0">
-                  <button
-                    type="button"
-                    className={cn(BTN_PRIMARY, "w-full sm:w-auto")}
-                    disabled={oauthDisabled}
+                  {/* A plain link, not a fetch: this has to be a top-level
+                      navigation so Google's consent screen owns the tab. */}
+                  <a
+                    href={oauthDisabled ? undefined : "/api/google/start"}
+                    aria-disabled={oauthDisabled}
+                    className={cn(
+                      BTN_PRIMARY,
+                      "inline-flex w-full justify-center sm:w-auto",
+                      oauthDisabled && "pointer-events-none opacity-50",
+                    )}
                     title={oauthTitle}
                   >
                     Sign in with Google
-                  </button>
+                  </a>
+                  <p className="mt-2 text-[11px] text-ink-2">
+                    Prefer the terminal? <code className="font-mono">python -m src.mail_auth</code>{" "}
+                    does the same thing.
+                  </p>
                 </div>
               ) : (
                 <div className="mt-3 min-w-0">

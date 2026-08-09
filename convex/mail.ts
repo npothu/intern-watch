@@ -127,6 +127,86 @@ export const setMailAccount = action({
   },
 });
 
+/**
+ * Finish the Google OAuth dance: authorization code in, connected mailbox out.
+ *
+ * Called only by the /gmail/callback httpAction, which has already verified the
+ * signed state - so `user` here is trusted, and this action never parses
+ * anything the browser sent.
+ *
+ * The refresh token exists only inside this function: it is exchanged, used
+ * once to read the address, and handed straight to the encrypting storage path.
+ * It is never returned, never logged, and never reaches the web app. That is
+ * the reason the callback lives on Convex rather than in Next.
+ *
+ * Returns the connected email address, which is safe to show and is what the
+ * wizard needs to confirm the right mailbox was linked.
+ */
+export const completeOAuth = internalAction({
+  args: { user: v.string(), code: v.string(), redirectUri: v.string() },
+  handler: async (ctx, { user, code, redirectUri }): Promise<string> => {
+    if (!mailSyncEnabled()) {
+      throw new Error(
+        "mail-sync is not enabled on this deployment - set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and CREDENTIALS_KEY first",
+      );
+    }
+
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        // Google requires this to match the value used to start the flow
+        // character for character, and a mismatch is the single most common
+        // setup failure - so the error below names it.
+        redirect_uri: redirectUri,
+        client_id: process.env.GMAIL_CLIENT_ID ?? "",
+        client_secret: process.env.GMAIL_CLIENT_SECRET ?? "",
+      }).toString(),
+    });
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(
+        `Google rejected the token exchange (HTTP ${res.status}). Check the client secret and that the redirect URI registered in Google Cloud is exactly ${redirectUri}. ${body}`,
+      );
+    }
+    const data = (await res.json()) as { refresh_token?: string; access_token?: string };
+    if (!data.refresh_token) {
+      // Google only issues a refresh token on the FIRST consent unless
+      // prompt=consent is sent. The start route always sends it, so this means
+      // something upstream dropped it - say so rather than storing a token that
+      // cannot be renewed.
+      throw new Error(
+        "Google returned no refresh token. Remove this app at myaccount.google.com/permissions and connect again.",
+      );
+    }
+    if (!data.access_token) throw new Error("Google returned no access token");
+
+    // Read the address from Gmail itself rather than trusting anything the
+    // browser supplied - it becomes the row's identity and the Pub/Sub match key.
+    const profileRes = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      { headers: { Authorization: `Bearer ${data.access_token}` } },
+    );
+    if (!profileRes.ok) {
+      throw new Error(`Could not read the Gmail profile (HTTP ${profileRes.status})`);
+    }
+    const profile = (await profileRes.json()) as { emailAddress?: string };
+    const email = profile.emailAddress;
+    if (!email) throw new Error("Gmail returned no address for this account");
+
+    const { ciphertext, iv } = await encryptJson(credentialsKey(), data.refresh_token);
+    await ctx.runMutation(internal.mail.storeMailAccount, {
+      user,
+      email,
+      refreshToken: ciphertext,
+      refreshTokenIv: iv,
+    });
+    return email;
+  },
+});
+
 // The storage half of setMailAccount. Internal: the plaintext token must have
 // exactly one way in, and it is the action above.
 export const storeMailAccount = internalMutation({
