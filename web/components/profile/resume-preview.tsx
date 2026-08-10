@@ -94,7 +94,7 @@ function Sheet({
         {entries
           .filter((e) => e.section !== "header")
           .map((entry) => (
-            <div key={entry.section} className="min-w-0">
+            <div key={entry.id} className="min-w-0">
               <div className="border-b border-line-2 pb-0.5 text-[8px] font-bold uppercase tracking-wide text-ink">
                 {entry.section}
               </div>

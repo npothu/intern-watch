@@ -132,6 +132,12 @@ describe("outlineLines", () => {
       "experience",
       "skills",
     ]);
+    expect(result.map((s) => s.id)).toEqual([
+      "header",
+      "sec-education",
+      "sec-experience",
+      "sec-skills",
+    ]);
   });
 });
 

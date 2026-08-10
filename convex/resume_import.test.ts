@@ -465,12 +465,238 @@ describe("resume import validation and mappings", () => {
       expect(result.errors.join("\n")).toMatch(/lineId does not exist/);
       expect(result.errors.join("\n")).toMatch(/must not contain duplicates/);
       expect(result.errors.join("\n")).toMatch(/RFC 6901/);
-      expect(result.errors.join("\n")).toMatch(/does not resolve/);
     }
   });
 });
 
 describe("resume import prompt and repair", () => {
+  test("community sections import with the community kind without a repair call", async () => {
+    const communityProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        ...profile.sections,
+        {
+          id: "sec-community",
+          title: "Community",
+          kind: "experience",
+          entries: [
+            {
+              id: "peer-mentor",
+              heading: "Peer Mentor",
+              date: "2026",
+              bullets: { base: ["Mentored local students"] },
+            },
+          ],
+        },
+      ],
+    };
+    const extraction = extracted("Community", "Peer Mentor", "Mentored local students");
+    const invoke = vi.fn().mockResolvedValue(modelResponse([], communityProfile));
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.profile.sections.at(-1)?.kind).toBe("community");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("singular project section kinds import as ProfileV2 projects", async () => {
+    const projectProfile = {
+      ...profile,
+      sections: [
+        {
+          id: "sec-projects",
+          title: "Programming Projects",
+          kind: "project",
+          entries: [
+            {
+              id: "importer",
+              heading: "Resume Importer",
+              date: "2026",
+              bullets: { base: ["Imported DOCX resumes"] },
+            },
+          ],
+        },
+      ],
+    };
+    const invoke = vi.fn().mockResolvedValue(
+      JSON.stringify({ profile: projectProfile, mappings: [] }),
+    );
+
+    const result = await mapExtractionWithModel(extracted("Programming Projects"), invoke);
+
+    expect(result.profile.sections[0].kind).toBe("projects");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("unknown section kinds remain invalid instead of becoming custom sections", () => {
+    const result = validateModelOutput(
+      JSON.stringify({
+        profile: {
+          ...profile,
+          sections: [
+            {
+              ...profile.sections[0],
+              id: "research",
+              title: "Research",
+              kind: "experiance",
+            },
+          ],
+        },
+        mappings: [],
+      }),
+      extracted("Research"),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain(
+        "profile.sections[0].kind must be a ProfileV2 section kind",
+      );
+    }
+  });
+
+  test("stale mapping targets do not reject an otherwise valid profile", async () => {
+    const extraction = extracted("Alex Example");
+    const invoke = vi.fn().mockResolvedValue(
+      modelResponse([{ lineId: "line-0001", targetPaths: ["/sections/99/title"] }]),
+    );
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.mappings).toEqual([]);
+    expect(result.unmappedLines).toEqual([{ id: "line-0001", text: "Alex Example" }]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("response-rooted profile pointers import as profile-relative mappings", async () => {
+    const extraction = extracted("Alex Example");
+    const invoke = vi.fn().mockResolvedValue(
+      modelResponse([{ lineId: "line-0001", targetPaths: ["/profile/header/name"] }]),
+    );
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.mappings[0].targetPaths).toEqual(["/header/name"]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("display skill categories import as canonical ProfileV2 keys", async () => {
+    const extraction = extracted("Languages: C#", "Systems & Tools: Git");
+    const invoke = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        profile: {
+          ...profile,
+          skills: {
+            Languages: ["C#"],
+            "Systems & Tools": ["Git"],
+          },
+        },
+        mappings: [
+          { lineId: "line-0001", targetPaths: ["/skills/Languages"] },
+          { lineId: "line-0002", targetPaths: ["/skills/Systems & Tools/0"] },
+        ],
+      }),
+    );
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.profile.skills).toEqual({ languages: ["C#"], tools: ["Git"] });
+    expect(result.mappings.map((mapping) => mapping.targetPaths)).toEqual([
+      ["/skills/languages"],
+      ["/skills/tools/0"],
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  test("conflicting link labels remain invalid model output", () => {
+    const result = validateModelOutput(
+      JSON.stringify({
+        profile: {
+          ...profile,
+          header: {
+            ...profile.header,
+            links: [
+              {
+                text: "LinkedIn",
+                label: "Professional profile",
+                url: "https://linkedin.com/in/alex",
+              },
+            ],
+          },
+        },
+        mappings: [],
+      }),
+      extracted("LinkedIn https://linkedin.com/in/alex"),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("profile.header.links[0].label is not part of ProfileV2");
+    }
+  });
+
+  test("prompt names the exact ProfileV2 header link fields", () => {
+    const prompt = buildImportPrompt(extracted("LinkedIn https://linkedin.com/in/alex"));
+
+    expect(prompt.system).toContain("header.links items use exactly {text,url}");
+    expect(prompt.system).toContain(
+      "skills uses only coursework, languages, tools, and certifications",
+    );
+    expect(prompt.system).toContain("targetPaths must not start with /profile/");
+    expect(prompt.system).toContain(
+      "Map work authorization or citizenship text to header.citizen_prefix",
+    );
+    expect(prompt.system).toContain(
+      "Use kind community for Community sections",
+    );
+    expect(prompt.system).toContain(
+      "kind must be one of education, experience, projects, community, skills, or custom",
+    );
+  });
+
+  test("common link labels import as ProfileV2 link text without a repair call", async () => {
+    const extraction = extracted(
+      "LinkedIn https://linkedin.com/in/alex",
+      "GitHub https://github.com/alex",
+    );
+    const invoke = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        profile: {
+          ...profile,
+          header: {
+            ...profile.header,
+            links: [
+              { label: "LinkedIn", url: "https://linkedin.com/in/alex" },
+              { text: "GitHub", url: "https://github.com/alex" },
+            ],
+          },
+        },
+        mappings: [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/header/links/0/label", "/header/links/0/url"],
+          },
+          {
+            lineId: "line-0002",
+            targetPaths: ["/header/links/1/text", "/header/links/1/url"],
+          },
+        ],
+      }),
+    );
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.profile.header.links).toEqual([
+      { text: "LinkedIn", url: "https://linkedin.com/in/alex" },
+      { text: "GitHub", url: "https://github.com/alex" },
+    ]);
+    expect(result.mappings.map((mapping) => mapping.targetPaths)).toEqual([
+      ["/header/links/0/text", "/header/links/0/url"],
+      ["/header/links/1/text", "/header/links/1/url"],
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   test("repair prompt includes validation errors and prior response within the cap", () => {
     const extraction = extracted("Alex Example");
     const previousResponse = "bad response ".repeat(5_000);

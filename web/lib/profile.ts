@@ -183,7 +183,7 @@ export function blankProfile(): ProfileV2 {
 /** Rendered-line budget for the live preview meter (one page of a resume). */
 export const PAGE_LINE_BUDGET = 59;
 
-export type OutlineEntry = { section: string; lines: string[] };
+export type OutlineEntry = { id: string; section: string; lines: string[] };
 
 /**
  * Rendered-line estimate for the live preview meter.
@@ -198,7 +198,11 @@ export function outlineLines(p: ProfileV2, variant: Variant): OutlineEntry[] {
   const sections: OutlineEntry[] = [];
 
   // Always three header lines first: name, contact line, links line.
-  sections.push({ section: "header", lines: [p.header.name, p.header.contact_line, "links"] });
+  sections.push({
+    id: "header",
+    section: "header",
+    lines: [p.header.name, p.header.contact_line, "links"],
+  });
 
   for (const section of p.sections) {
     const visible = visibleEntries(section, variant);
@@ -244,7 +248,7 @@ export function outlineLines(p: ProfileV2, variant: Variant): OutlineEntry[] {
       }
     }
 
-    sections.push({ section: section.kind, lines });
+    sections.push({ id: section.id, section: section.kind, lines });
   }
 
   return sections;
