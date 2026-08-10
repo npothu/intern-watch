@@ -423,12 +423,16 @@ export const runBuild = internalAction({
 // import never crash-loops the scheduler.
 // ---------------------------------------------------------------------------
 export const runProfileImport = internalAction({
-  args: { user: v.string() },
-  handler: async (ctx, { user }) => {
+  args: { user: v.string(), storageId: v.id("_storage") },
+  handler: async (ctx, { user, storageId: scheduledFor }) => {
     const record = await ctx.runQuery(internal.resume.getPendingProfileImport, { user });
     // Discarded, or superseded by a newer claim, before this ran. Nothing to
     // clean either: whoever removed or replaced the record removed its blob.
     if (!record || record.status !== "mapping" || !record.storageId) return;
+    // Only map the upload this run was scheduled for. Without this check a
+    // superseded run would map whatever record is current - the newer upload,
+    // a second time - and bill the shared allowance twice for one import.
+    if (record.storageId !== scheduledFor) return;
     const storageId = record.storageId;
     try {
       const blob = await ctx.storage.get(storageId);

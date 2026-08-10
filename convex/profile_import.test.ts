@@ -217,7 +217,7 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
 
     // There is no argument through which mallory can name alice's storage id:
     // the action's only input is the user, and mallory's record is empty.
-    await t.action(runProfileImport, { user: "mallory" });
+    await t.action(runProfileImport, { user: "mallory", storageId: blob });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(await blobExists(t, blob)).toBe(true);
@@ -232,7 +232,7 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
     vi.stubEnv("GEMINI_API_KEY", "operator-key");
     vi.stubGlobal("fetch", vi.fn(async () => geminiResponse(VALID_MODEL_TEXT)));
 
-    await t.action(runProfileImport, { user: "alice" });
+    await t.action(runProfileImport, { user: "alice", storageId: blob });
 
     const status = await t.query(resume.getProfileImportStatus, {
       user: "alice",
@@ -255,7 +255,7 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
       .mockResolvedValueOnce(geminiResponse(VALID_MODEL_TEXT));
     vi.stubGlobal("fetch", fetchMock);
 
-    await t.action(runProfileImport, { user: "alice" });
+    await t.action(runProfileImport, { user: "alice", storageId: blob });
 
     const status = await t.query(resume.getProfileImportStatus, {
       user: "alice",
@@ -272,7 +272,7 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
     vi.stubEnv("GEMINI_API_KEY", "operator-key");
     vi.stubGlobal("fetch", vi.fn(async () => geminiResponse("still not json")));
 
-    await t.action(runProfileImport, { user: "alice" });
+    await t.action(runProfileImport, { user: "alice", storageId: blob });
 
     const status = await t.query(resume.getProfileImportStatus, {
       user: "alice",
@@ -292,7 +292,7 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
     await claim(t, "alice", blob);
     // No GEMINI_API_KEY, no user key.
 
-    await t.action(runProfileImport, { user: "alice" });
+    await t.action(runProfileImport, { user: "alice", storageId: blob });
 
     const status = await t.query(resume.getProfileImportStatus, {
       user: "alice",

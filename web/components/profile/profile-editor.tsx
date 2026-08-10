@@ -426,9 +426,19 @@ export function ProfileEditor(props: {
           throw new Error("This import was cancelled. Upload the resume again.");
         }
       }
-      throw new Error(
-        "Timed out waiting for the resume mapping after 3 minutes. The upload was discarded - try again, or add your own API key in Settings if the shared model is slow today."
-      );
+      // Stop WATCHING, but leave the record and its result alone. The mapping
+      // may still be running, and the operator has already been billed for the
+      // model calls - discarding it here meant paying twice for the same
+      // import. The sweep collects it if it really is dead; reopening the page
+      // picks up a result that landed after we stopped looking.
+      setImportState({
+        status: "error",
+        message:
+          "Still mapping after 3 minutes, so this stopped waiting - the import may still finish. Reopen this page shortly to check before uploading again. Adding your own API key in Settings avoids the shared model's queue.",
+      });
+      // Returning here deliberately skips the catch below, which discards the
+      // upload. That is the point: the record must survive.
+      return;
     } catch (error) {
       // A claimed upload must not outlive a failed import: the server sweeps
       // abandoned claims eventually, but the common failures (transport error,
@@ -463,10 +473,23 @@ export function ProfileEditor(props: {
     // profile; bumping the generation mutes that save's state callbacks.
     saveGeneration.current++;
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    // Flush whatever was still pending BEFORE the server snapshots. Clearing
+    // the timer without saving meant an edit made in the last ~1.2s never
+    // reached Convex, so the backup taken moments later captured the version
+    // WITHOUT it - the edit then existed nowhere, live or backed up, which is
+    // the exact loss profileBackups was added to prevent.
+    const pending = pendingRetry.current ?? previous;
     pendingRetry.current = null;
     const request = saveQueue.current
       .catch(() => undefined)
-      .then(() => confirmResumeImport(JSON.stringify(imported, null, 2)));
+      .then(async () => {
+        if (pending) {
+          // Best effort: a failure here still leaves the pre-import profile in
+          // the backup, so the import is not blocked by an unsaved keystroke.
+          await saveProfile(JSON.stringify(pending, null, 2)).catch(() => undefined);
+        }
+        return confirmResumeImport(JSON.stringify(imported, null, 2));
+      });
     saveQueue.current = request.then(
       () => undefined,
       () => undefined
@@ -503,16 +526,28 @@ export function ProfileEditor(props: {
     setImportState({ status: "idle" });
     setLastSavedAt(Date.now());
     setSaveState("idle");
-    // No Undo when the import merely filled an empty profile - matching the
-    // review card, which only warned about replacement when there was content
-    // to lose. (The server-side backup exists either way.)
-    if (previous && !isProfileEmpty(previous)) {
+    // Offered whenever there WAS a previous profile, not only when it looked
+    // non-empty: isProfileEmpty is a heuristic, and being wrong about it must
+    // not cost someone their undo on a destructive action.
+    if (previous) {
       toast("Profile replaced", {
         action: {
           label: "Undo",
           onClick: () => {
-            // Restoring via setProfile lets the normal debounced autosave
-            // persist it, exactly like the delete-variant Undo.
+            // Write it back directly rather than leaning on the debounced
+            // autosave. The toast is mounted at the root layout so it outlives
+            // this component: after navigating away, a setProfile-only undo
+            // updated state on an unmounted editor and never reached Convex,
+            // leaving the user certain they had undone something they had not.
+            // Closing the tab inside the debounce window lost it the same way.
+            const json = JSON.stringify(previous, null, 2);
+            void saveProfile(json).then(
+              (res) =>
+                res.ok
+                  ? toast.success("Profile restored")
+                  : toast.error(`Could not restore: ${res.error}`),
+              () => toast.error("Could not restore the previous profile.")
+            );
             setProfile(previous);
             setActiveId(
               previous.sections.find((s) => s.kind !== "skills")?.id ??

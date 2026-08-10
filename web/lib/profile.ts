@@ -311,6 +311,16 @@ export function isProfileEmpty(p: ProfileV2): boolean {
     counts.bullets === 0 &&
     skillItems === 0 &&
     !p.header.name.trim() &&
-    !p.header.contact_line.trim()
+    !p.header.contact_line.trim() &&
+    // Anything the user has personalised counts as content, even with no
+    // entries yet: work authorisation, links, a renamed or added section, or a
+    // variant they created. Calling such a profile "empty" softened the
+    // replace warning on exactly the imports where replacement destroys real
+    // work. When in doubt this must answer false - the cost of a needless
+    // warning is nothing next to a silent overwrite.
+    !p.header.citizen_prefix?.trim() &&
+    (p.header.links?.length ?? 0) === 0 &&
+    (p.variants?.length ?? 0) === 0 &&
+    !p.sections.some((s) => s.entries.length > 0)
   );
 }

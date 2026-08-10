@@ -261,7 +261,14 @@ export const claimProfileImportUpload = mutation({
         await ctx.db.delete(row._id);
       }
     }
-    await ctx.scheduler.runAfter(0, internal.resume_node.runProfileImport, { user });
+    // Pin the scheduled run to THIS upload. Keyed on the user alone, a run
+    // scheduled for an upload that was superseded would wake up, read whatever
+    // record is current, and map the NEWER upload a second time - charging the
+    // shared model allowance twice for one import.
+    await ctx.scheduler.runAfter(0, internal.resume_node.runProfileImport, {
+      user,
+      storageId,
+    });
     return { ok: true as const };
   },
 });
