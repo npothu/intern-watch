@@ -513,6 +513,56 @@ export async function deleteCredential(
   );
 }
 
+/** What the consent flow needs, read from the deployment that holds it rather
+ *  than from this server's env - the wizard writes these to Convex. */
+export type OAuthConfig = {
+  clientId: string | null;
+  missing: string[];
+  /** Presence of every var the wizard writes, read from the deployment that
+   *  stores them rather than from this server's env. */
+  present: {
+    clientId: boolean;
+    clientSecret: boolean;
+    pushToken: boolean;
+    pubsubTopic: boolean;
+  };
+};
+
+export async function getOAuthConfig(): Promise<OAuthConfig> {
+  const value = await post("query", "getOAuthConfig", {}, "mail");
+  return value as OAuthConfig;
+}
+
+/** Arm the Gmail watch now - used once the Pub/Sub topic finally exists, since
+ *  a mailbox connected before it had its watch deferred. */
+export async function armMailWatch(
+  user: string
+): Promise<{ ok: boolean; reason?: string }> {
+  const value = await post("mutation", "armWatchNow", { user }, "mail");
+  return value as { ok: boolean; reason?: string };
+}
+
+/** Record a started OAuth flow so the callback can spend it exactly once. */
+export async function registerOAuthNonce(
+  nonce: string,
+  user: string,
+  expiresAt: number
+): Promise<void> {
+  await post("mutation", "registerOAuthNonce", { nonce, user, expiresAt }, "mail");
+}
+
+/** The user's connected mailbox, from the table the OAuth flow actually writes. */
+export async function getMailAccount(
+  user: string
+): Promise<{ email: string; lastError: string | null; lastSyncAt: number | null } | null> {
+  const value = await post("query", "getMailAccount", { user }, "mail");
+  return value as {
+    email: string;
+    lastError: string | null;
+    lastSyncAt: number | null;
+  } | null;
+}
+
 /** Whether mail-sync is configured on this deployment. It is opt-in: a
  *  deployment that never sets it up should say so, not show a dead feature. */
 export type MailSyncStatus = { enabled: boolean; missing: string[] };

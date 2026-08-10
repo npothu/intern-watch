@@ -94,6 +94,138 @@ export const getMailSyncStatus = query({
   },
 });
 
+/**
+ * What the web app needs to start a consent flow, read from the deployment
+ * that actually holds it.
+ *
+ * The client id lives on the CONVEX deployment - the wizard's own step 4 writes
+ * it there. The web server reading `process.env.GMAIL_CLIENT_ID` was the bug
+ * that made the wizard unable to satisfy its own precondition: the value it had
+ * just saved was in a different process. The id is not a secret (it is public
+ * in the consent URL), so returning it is safe; the client SECRET never leaves
+ * the deployment.
+ */
+export const getOAuthConfig = query({
+  args: { secret: v.string() },
+  handler: async (_ctx, { secret }) => {
+    checkSecret(secret);
+    return {
+      clientId: process.env.GMAIL_CLIENT_ID ?? null,
+      // Named individually so the wizard can say WHICH one is missing rather
+      // than collapsing three causes into "this feature was never built".
+      missing: [
+        !process.env.GMAIL_CLIENT_ID && "GMAIL_CLIENT_ID",
+        !process.env.GMAIL_CLIENT_SECRET && "GMAIL_CLIENT_SECRET",
+        !process.env.CREDENTIALS_KEY && "CREDENTIALS_KEY",
+      ].filter((x): x is string => typeof x === "string"),
+      // Presence of EVERY var the wizard writes, reported from the deployment
+      // that actually stores them.
+      //
+      // This exists because the web server's own process.env is the wrong
+      // place to ask. The wizard writes all four of these to Convex, so
+      // reading them back from Next always returned false - which made step 6
+      // render "Not set yet" after a successful save and invited the admin to
+      // regenerate MAIL_PUSH_TOKEN. That silently invalidates the token
+      // already embedded in the registered Pub/Sub push URL, so every push
+      // then 403s and mail-sync dies with nothing in the UI saying so.
+      present: {
+        clientId: Boolean(process.env.GMAIL_CLIENT_ID),
+        clientSecret: Boolean(process.env.GMAIL_CLIENT_SECRET),
+        pushToken: Boolean(process.env.MAIL_PUSH_TOKEN),
+        pubsubTopic: Boolean(process.env.MAIL_PUBSUB_TOPIC),
+      },
+    };
+  },
+});
+
+/** The user's connected mailbox, or null. This is the table completeOAuth
+ *  actually writes - the wizard used to ask the `credentials` table, which
+ *  nothing in the OAuth path touches, so a successful connect never showed. */
+export const getMailAccount = query({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    return row
+      ? {
+          email: row.email,
+          lastError: row.lastError ?? null,
+          // Feeds the Connections card's "Last sync" line.
+          lastSyncAt: row.lastSyncAt ?? null,
+        }
+      : null;
+  },
+});
+
+/**
+ * Arm the Gmail watch for a user now.
+ *
+ * The wizard collects the Pub/Sub topic one step AFTER the mailbox is
+ * connected, so at connect time there is nothing to point a watch at. Without
+ * this the watch waited for the 06:00 UTC cron: step 6's "Verify push" checks
+ * for a recent push, Gmail never sends one without a watch, and the final step
+ * could not be completed in the same session - mail-sync sat silently dead for
+ * up to a day while the UI said Connected.
+ *
+ * Idempotent, like startWatch itself, so pressing the step again is harmless.
+ */
+export const armWatchNow = mutation({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    if (!process.env.MAIL_PUBSUB_TOPIC) {
+      return { ok: false as const, reason: "MAIL_PUBSUB_TOPIC is not set yet" };
+    }
+    const account = await ctx.db
+      .query("mailAccounts")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (!account) return { ok: false as const, reason: "no mailbox is connected yet" };
+    await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
+    return { ok: true as const };
+  },
+});
+
+/** Record a started flow so the callback can spend it exactly once. */
+export const registerOAuthNonce = mutation({
+  args: { nonce: v.string(), user: v.string(), expiresAt: v.number(), secret: v.string() },
+  handler: async (ctx, { nonce, user, expiresAt, secret }) => {
+    checkSecret(secret);
+    await ctx.db.insert("oauthNonces", { nonce, user, expiresAt });
+    // Opportunistic sweep: these are short-lived and low-volume, so cleaning up
+    // on write avoids needing a cron just for them.
+    const stale = await ctx.db.query("oauthNonces").take(50);
+    const now = Date.now();
+    for (const row of stale) {
+      if (row.expiresAt <= now) await ctx.db.delete(row._id);
+    }
+  },
+});
+
+/**
+ * Spend a nonce. Returns false if it is unknown, expired, or belongs to a
+ * different user - all of which mean "do not proceed".
+ *
+ * Deleting before the token exchange rather than after is deliberate: a
+ * failed exchange should not leave a replayable state behind, and the user can
+ * simply start the flow again.
+ */
+export const consumeOAuthNonce = internalMutation({
+  args: { nonce: v.string(), user: v.string() },
+  handler: async (ctx, { nonce, user }) => {
+    const row = await ctx.db
+      .query("oauthNonces")
+      .withIndex("by_nonce", (q) => q.eq("nonce", nonce))
+      .first();
+    if (!row) return false;
+    await ctx.db.delete(row._id);
+    return row.user === user && row.expiresAt > Date.now();
+  },
+});
+
 // Register (or refresh) a user's Gmail account. Upserts by user so re-running
 // idempotently; a refresh keeps the OAuth refresh token in sync and clears any
 // prior error so a healthy config isn't masked by a stale one.
@@ -127,6 +259,86 @@ export const setMailAccount = action({
   },
 });
 
+/**
+ * Finish the Google OAuth dance: authorization code in, connected mailbox out.
+ *
+ * Called only by the /gmail/callback httpAction, which has already verified the
+ * signed state - so `user` here is trusted, and this action never parses
+ * anything the browser sent.
+ *
+ * The refresh token exists only inside this function: it is exchanged, used
+ * once to read the address, and handed straight to the encrypting storage path.
+ * It is never returned, never logged, and never reaches the web app. That is
+ * the reason the callback lives on Convex rather than in Next.
+ *
+ * Returns the connected email address, which is safe to show and is what the
+ * wizard needs to confirm the right mailbox was linked.
+ */
+export const completeOAuth = internalAction({
+  args: { user: v.string(), code: v.string(), redirectUri: v.string() },
+  handler: async (ctx, { user, code, redirectUri }): Promise<string> => {
+    if (!mailSyncEnabled()) {
+      throw new Error(
+        "mail-sync is not enabled on this deployment - set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and CREDENTIALS_KEY first",
+      );
+    }
+
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        // Google requires this to match the value used to start the flow
+        // character for character, and a mismatch is the single most common
+        // setup failure - so the error below names it.
+        redirect_uri: redirectUri,
+        client_id: process.env.GMAIL_CLIENT_ID ?? "",
+        client_secret: process.env.GMAIL_CLIENT_SECRET ?? "",
+      }).toString(),
+    });
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(
+        `Google rejected the token exchange (HTTP ${res.status}). Check the client secret and that the redirect URI registered in Google Cloud is exactly ${redirectUri}. ${body}`,
+      );
+    }
+    const data = (await res.json()) as { refresh_token?: string; access_token?: string };
+    if (!data.refresh_token) {
+      // Google only issues a refresh token on the FIRST consent unless
+      // prompt=consent is sent. The start route always sends it, so this means
+      // something upstream dropped it - say so rather than storing a token that
+      // cannot be renewed.
+      throw new Error(
+        "Google returned no refresh token. Remove this app at myaccount.google.com/permissions and connect again.",
+      );
+    }
+    if (!data.access_token) throw new Error("Google returned no access token");
+
+    // Read the address from Gmail itself rather than trusting anything the
+    // browser supplied - it becomes the row's identity and the Pub/Sub match key.
+    const profileRes = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      { headers: { Authorization: `Bearer ${data.access_token}` } },
+    );
+    if (!profileRes.ok) {
+      throw new Error(`Could not read the Gmail profile (HTTP ${profileRes.status})`);
+    }
+    const profile = (await profileRes.json()) as { emailAddress?: string };
+    const email = profile.emailAddress;
+    if (!email) throw new Error("Gmail returned no address for this account");
+
+    const { ciphertext, iv } = await encryptJson(credentialsKey(), data.refresh_token);
+    await ctx.runMutation(internal.mail.storeMailAccount, {
+      user,
+      email,
+      refreshToken: ciphertext,
+      refreshTokenIv: iv,
+    });
+    return email;
+  },
+});
+
 // The storage half of setMailAccount. Internal: the plaintext token must have
 // exactly one way in, and it is the action above.
 export const storeMailAccount = internalMutation({
@@ -142,19 +354,49 @@ export const storeMailAccount = internalMutation({
       .withIndex("by_user", (q) => q.eq("user", user))
       .first();
     if (existing) {
+      // Switching to a DIFFERENT mailbox must not inherit the previous one's
+      // sync cursor. historyId is meaningless across accounts, and a stale
+      // watchExpiration would make the renewal sweep skip the new mailbox as
+      // already-armed. The wizard actively invites this switch ("Signing in
+      // again replaces it with whichever account you choose"), so it is a
+      // normal path, not an edge case.
+      const switched = existing.email !== email;
       await ctx.db.patch(existing._id, {
         email,
         refreshToken,
         refreshTokenIv,
         lastError: undefined,
         lastErrorAt: undefined,
+        ...(switched
+          ? {
+              historyId: undefined,
+              watchExpiration: undefined,
+              lastSyncAt: undefined,
+              lastPushAt: undefined,
+            }
+          : {}),
       });
     } else {
       await ctx.db.insert("mailAccounts", { user, email, refreshToken, refreshTokenIv });
     }
     // Kick the (idempotent) watch setup right away so a freshly configured
-    // account starts receiving pushes without waiting for the daily cron.
-    await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
+    // account starts receiving pushes without waiting for the daily cron -
+    // but only once there is a topic to point it at. In the wizard the mailbox
+    // is connected at step 5 and the Pub/Sub topic is not collected until step
+    // 6, so arming unconditionally stamped "gmail watch failed: 400" onto the
+    // row seconds after telling the user they were connected. Step 6 arms it.
+    if (process.env.MAIL_PUBSUB_TOPIC) {
+      await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
+    } else {
+      // Deferred, not dropped: armWatchNow below is what picks it up once the
+      // topic exists. An earlier version of this comment claimed step 6 armed
+      // it, which was simply untrue - savePubSubTopic only wrote the env var,
+      // so the watch waited for the daily cron and step 6's push check could
+      // never pass in the same session.
+      console.log(
+        "mailbox connected but MAIL_PUBSUB_TOPIC is not set - watch deferred until push is configured",
+      );
+    }
   },
 });
 
