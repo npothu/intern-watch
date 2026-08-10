@@ -33,17 +33,25 @@ import type { Variant } from "@/lib/profile";
 import {
   blankEntry,
   blankProfile,
+  isProfileEmpty,
   newId,
+  profileCounts,
   SECTION_KINDS,
   variantsOf,
   type Entry,
+  type ProfileCounts,
   type ProfileV2,
   type Section,
   type SectionKind,
 } from "@/lib/profile";
 import {
+  beginResumeImport,
+  confirmResumeImport,
+  discardResumeImport,
   fetchProfile,
+  pollResumeImport,
   saveProfile,
+  startResumeImport,
   upgradeProfile,
 } from "@/app/(app)/profile/profile-actions";
 import { SectionRail, PERSONAL_INFO_ID } from "@/components/profile/section-rail";
@@ -57,6 +65,11 @@ import { cn } from "@/lib/utils";
 const DEBOUNCE_MS = 1200;
 const RETRY_MS = 3000;
 const SAVE_TICK_MS = 10000;
+// Import mapping polling: the server maps with up to two model calls over an
+// 80k-char payload (schedule-then-poll, the resume build's contract), so the
+// budget is minutes, not seconds.
+const IMPORT_POLL_MS = 2000;
+const IMPORT_POLL_TIMEOUT_MS = 180_000;
 const PREVIEW_KEY = "iw:resume:preview";
 const PREVIEW_EVENT = "iw:resume:preview-toggle";
 
@@ -86,6 +99,26 @@ type ParseOutcome =
   | { status: "ok"; profile: ProfileV2 }
   | { status: "invalid" } // JSON parse failed - treat like no profile.
   | { status: "upgrade" }; // Parsed but not version 2 - migrate upstream.
+
+type ImportPreview = {
+  profile: ProfileV2;
+  unmappedLines: { id: string; text: string }[];
+  sections: {
+    id: string;
+    title: string;
+    kind: SectionKind;
+    count: number;
+  }[];
+};
+
+type ResumeImportState =
+  | { status: "idle" }
+  | { status: "parsing"; filename: string }
+  | { status: "review"; filename: string; preview: ImportPreview }
+  | { status: "applying"; filename: string }
+  | { status: "error"; message: string };
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parse stored JSON defensively. saveProfile already validates JSON
@@ -171,6 +204,9 @@ export function ProfileEditor(props: {
   >("idle");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [importState, setImportState] = useState<ResumeImportState>({
+    status: "idle",
+  });
 
   const previewOn = useSyncExternalStore(
     subscribePreview,
@@ -179,6 +215,10 @@ export function ProfileEditor(props: {
   );
 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const saveGeneration = useRef(0);
+  const hasObservedProfile = useRef(false);
+  const skipNextDebouncedSave = useRef(false);
   // One-shot guard for the migration gate - not render state, just "did we
   // already ask the server to upgrade?" (mirrors a state flag without the
   // synchronous setState-in-effect the lint would flag).
@@ -204,9 +244,18 @@ export function ProfileEditor(props: {
   // calling itself.
   const pendingRetry = useRef<ProfileV2 | null>(null);
   const attemptSave = useCallback((snapshot: ProfileV2, isRetry: boolean) => {
+    const generation = ++saveGeneration.current;
     setSaveState("saving");
-    saveProfile(JSON.stringify(snapshot, null, 2))
+    const request = saveQueue.current
+      .catch(() => undefined)
+      .then(() => saveProfile(JSON.stringify(snapshot, null, 2)));
+    saveQueue.current = request.then(
+      () => undefined,
+      () => undefined
+    );
+    request
       .then((res) => {
+        if (generation !== saveGeneration.current) return;
         if (res.ok) {
           pendingRetry.current = null;
           setLastSavedAt(Date.now());
@@ -223,6 +272,7 @@ export function ProfileEditor(props: {
         }
       })
       .catch((err: unknown) => {
+        if (generation !== saveGeneration.current) return;
         if (!isRetry) {
           pendingRetry.current = snapshot;
           setSaveState("retrying");
@@ -252,6 +302,14 @@ export function ProfileEditor(props: {
   // the LATEST profile - no ref-with-latest needed.
   useEffect(() => {
     if (!profile) return;
+    if (!hasObservedProfile.current) {
+      hasObservedProfile.current = true;
+      return;
+    }
+    if (skipNextDebouncedSave.current) {
+      skipNextDebouncedSave.current = false;
+      return;
+    }
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       attemptSave(profile, false);
@@ -312,6 +370,195 @@ export function ProfileEditor(props: {
       }
     });
   }, [outcome]);
+
+  const handleImportFile = async (file: File) => {
+    setImportState({ status: "parsing", filename: file.name });
+    try {
+      const begin = await beginResumeImport(file.name, file.size);
+      if (!begin.ok) {
+        setImportState({ status: "error", message: begin.error });
+        return;
+      }
+      const upload = await fetch(begin.uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": begin.contentType },
+        body: file,
+      });
+      if (!upload.ok) {
+        const detail = (await upload.text().catch(() => "")).slice(0, 300);
+        throw new Error(
+          `Resume upload failed (HTTP ${upload.status})${detail ? `: ${detail}` : ""}`
+        );
+      }
+      const uploaded = (await upload.json().catch(() => null)) as {
+        storageId?: unknown;
+      } | null;
+      if (typeof uploaded?.storageId !== "string" || !uploaded.storageId) {
+        throw new Error("Convex accepted the resume upload but returned no storage ID.");
+      }
+      const started = await startResumeImport(uploaded.storageId, file.name);
+      if (!started.ok) throw new Error(started.error);
+      // The claim scheduled the mapping server-side; poll for its outcome
+      // (the add-URL dialog's schedule-then-poll shape). A rejected poll is
+      // treated as transient - the timeout is the arbiter.
+      const deadline = Date.now() + IMPORT_POLL_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await sleep(IMPORT_POLL_MS);
+        let status: Awaited<ReturnType<typeof pollResumeImport>>;
+        try {
+          status = await pollResumeImport();
+        } catch {
+          continue;
+        }
+        if (status.status === "ready") {
+          setImportState({
+            status: "review",
+            filename: status.filename,
+            preview: status.preview,
+          });
+          return;
+        }
+        if (status.status === "failed") {
+          setImportState({ status: "error", message: status.error });
+          return;
+        }
+        if (status.status === "none") {
+          throw new Error("This import was cancelled. Upload the resume again.");
+        }
+      }
+      // Stop WATCHING, but leave the record and its result alone. The mapping
+      // may still be running, and the operator has already been billed for the
+      // model calls - discarding it here meant paying twice for the same
+      // import. The sweep collects it if it really is dead; reopening the page
+      // picks up a result that landed after we stopped looking.
+      setImportState({
+        status: "error",
+        message:
+          "Still mapping after 3 minutes, so this stopped waiting - the import may still finish. Reopen this page shortly to check before uploading again. Adding your own API key in Settings avoids the shared model's queue.",
+      });
+      // Returning here deliberately skips the catch below, which discards the
+      // upload. That is the point: the record must survive.
+      return;
+    } catch (error) {
+      // A claimed upload must not outlive a failed import: the server sweeps
+      // abandoned claims eventually, but the common failures (transport error,
+      // the timeout above) are cleaned up right here.
+      void discardResumeImport();
+      setImportState({
+        status: "error",
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "Couldn't import this resume.",
+      });
+    }
+  };
+
+  const handleCancelImport = () => {
+    // Cancel and dismiss also drop the server-side pending record (its blob is
+    // already gone once mapping settled, but the record should not linger).
+    void discardResumeImport();
+    setImportState({ status: "idle" });
+  };
+
+  const handleConfirmImport = async () => {
+    if (importState.status !== "review") return;
+    const imported = importState.preview.profile;
+    // The pre-import profile, held for the Undo toast (the delete-variant
+    // pattern) while the server parks its own copy in profileBackups.
+    const previous = profile;
+    setImportState({ status: "applying", filename: importState.filename });
+    // Ride the same save queue attemptSave uses so an autosave already in
+    // flight cannot land AFTER the import and quietly resurrect the old
+    // profile; bumping the generation mutes that save's state callbacks.
+    saveGeneration.current++;
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    // Flush whatever was still pending BEFORE the server snapshots. Clearing
+    // the timer without saving meant an edit made in the last ~1.2s never
+    // reached Convex, so the backup taken moments later captured the version
+    // WITHOUT it - the edit then existed nowhere, live or backed up, which is
+    // the exact loss profileBackups was added to prevent.
+    const pending = pendingRetry.current ?? previous;
+    pendingRetry.current = null;
+    const request = saveQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (pending) {
+          // Best effort: a failure here still leaves the pre-import profile in
+          // the backup, so the import is not blocked by an unsaved keystroke.
+          await saveProfile(JSON.stringify(pending, null, 2)).catch(() => undefined);
+        }
+        return confirmResumeImport(JSON.stringify(imported, null, 2));
+      });
+    saveQueue.current = request.then(
+      () => undefined,
+      () => undefined
+    );
+    let res: Awaited<typeof request>;
+    try {
+      res = await request;
+    } catch (error) {
+      res = {
+        ok: false,
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : "Couldn't apply the import.",
+      };
+    }
+    if (!res.ok) {
+      toast.error(res.error);
+      // Back to the review card - the preview is still valid, nothing was
+      // overwritten, and the user can retry or cancel.
+      setImportState(importState);
+      return;
+    }
+    hasObservedProfile.current = true;
+    skipNextDebouncedSave.current = true;
+    setProfile(imported);
+    setActiveId(
+      imported.sections.find((section) => section.kind !== "skills")?.id ??
+        imported.sections[0]?.id ??
+        null
+    );
+    setOpenEntries({});
+    setVariant("base");
+    setImportState({ status: "idle" });
+    setLastSavedAt(Date.now());
+    setSaveState("idle");
+    // Offered whenever there WAS a previous profile, not only when it looked
+    // non-empty: isProfileEmpty is a heuristic, and being wrong about it must
+    // not cost someone their undo on a destructive action.
+    if (previous) {
+      toast("Profile replaced", {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            // Write it back directly rather than leaning on the debounced
+            // autosave. The toast is mounted at the root layout so it outlives
+            // this component: after navigating away, a setProfile-only undo
+            // updated state on an unmounted editor and never reached Convex,
+            // leaving the user certain they had undone something they had not.
+            // Closing the tab inside the debounce window lost it the same way.
+            const json = JSON.stringify(previous, null, 2);
+            void saveProfile(json).then(
+              (res) =>
+                res.ok
+                  ? toast.success("Profile restored")
+                  : toast.error(`Could not restore: ${res.error}`),
+              () => toast.error("Could not restore the previous profile.")
+            );
+            setProfile(previous);
+            setActiveId(
+              previous.sections.find((s) => s.kind !== "skills")?.id ??
+                previous.sections[0]?.id ??
+                null
+            );
+          },
+        },
+      });
+    }
+  };
 
   const variants = profile ? variantsOf(profile) : ["base"];
   const activeIndex = profile
@@ -528,20 +775,30 @@ export function ProfileEditor(props: {
 
   // ---- rendering ---------------------------------------------------------
 
-  if (outcome.status === "invalid") {
+  if (outcome.status === "invalid" && profile === null) {
     return (
-      <EmptyState
-        onStart={() => {
-          const blank = blankProfile();
-          setProfile(blank);
-          // Kick off an immediate save so there is something in Convex right
-          // away (not just in memory).
-          attemptSave(blank, false);
-          setActiveId(
-            blank.sections.find((s) => s.kind !== "skills")?.id ?? null
-          );
-        }}
-      />
+      <div className="space-y-3">
+        <EmptyState
+          importing={importState.status === "parsing"}
+          onImport={handleImportFile}
+          onStart={() => {
+            const blank = blankProfile();
+            hasObservedProfile.current = true;
+            skipNextDebouncedSave.current = true;
+            setProfile(blank);
+            attemptSave(blank, false);
+            setActiveId(
+              blank.sections.find((s) => s.kind !== "skills")?.id ?? null
+            );
+          }}
+        />
+        <ResumeImportStatus
+          state={importState}
+          current={null}
+          onConfirm={() => void handleConfirmImport()}
+          onCancel={handleCancelImport}
+        />
+      </div>
     );
   }
 
@@ -672,10 +929,23 @@ export function ProfileEditor(props: {
           Preview
         </button>
 
+        <ResumeImportButton
+          disabled={importState.status === "parsing"}
+          label={importState.status === "parsing" ? "Parsing..." : "Import resume"}
+          onSelect={handleImportFile}
+        />
+
         <Button disabled title={BUILD_BUTTON_TITLE}>
           Build resume
         </Button>
       </div>
+
+      <ResumeImportStatus
+        state={importState}
+        current={profile && !isProfileEmpty(profile) ? profileCounts(profile) : null}
+        onConfirm={() => void handleConfirmImport()}
+        onCancel={handleCancelImport}
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
         <div className="min-w-0">
@@ -743,23 +1013,209 @@ export function ProfileEditor(props: {
   );
 }
 
-function EmptyState({ onStart }: { onStart: () => void }) {
+function EmptyState({
+  importing,
+  onImport,
+  onStart,
+}: {
+  importing: boolean;
+  onImport: (file: File) => void;
+  onStart: () => void;
+}) {
   return (
     <div className={cn(CARD, "max-w-md")}>
       <h2 className="mb-1 text-[13.5px] font-semibold text-ink">
         No profile on file
       </h2>
       <p className="text-[12px] text-ink-2">
-        Start from a blank resume and fill it in here, or import one later.
+        Import an existing resume to review it before saving, or start from scratch.
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" onClick={onStart}>
           <Plus className="size-3.5" />
           Start from scratch
         </Button>
-        <Button size="sm" variant="outline" disabled title="Coming soon">
-          Import from a resume
-        </Button>
+        <ResumeImportButton
+          disabled={importing}
+          label={importing ? "Parsing..." : "Import from a resume"}
+          onSelect={onImport}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ResumeImportButton({
+  disabled,
+  label,
+  onSelect,
+}: {
+  disabled: boolean;
+  label: string;
+  onSelect: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+        className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-accent disabled:text-ink-2"
+      >
+        {label}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".docx,.txt,.md,.markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) onSelect(file);
+        }}
+      />
+    </>
+  );
+}
+
+// Pluralize a count for the replace warning ("1 entry", "12 entries").
+function countNoun(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function ResumeImportStatus({
+  state,
+  current,
+  onConfirm,
+  onCancel,
+}: {
+  state: ResumeImportState;
+  /** Counts for the profile being replaced; null when there is nothing worth
+   *  warning about (no profile, or an empty scaffold). */
+  current: ProfileCounts | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (state.status === "idle") return null;
+  if (state.status === "parsing" || state.status === "applying") {
+    return (
+      <div className={cn(CARD, "mb-3 flex items-center gap-3")}>
+        <Spinner />
+        <div>
+          <p className="text-[13px] font-semibold text-ink">
+            {state.status === "parsing" ? "Parsing resume" : "Applying import"}
+          </p>
+          <p className="text-[12px] text-ink-2">
+            {state.status === "parsing"
+              ? `Extracting and mapping ${state.filename}`
+              : `Backing up your current profile and saving ${state.filename}`}
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <div className={cn(CARD, "mb-3")}>
+        <p className="text-[13px] font-semibold text-red">Import failed</p>
+        <p className="mt-1 break-words text-[12px] text-ink-2">{state.message}</p>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-3 rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-2"
+        >
+          Dismiss
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className={cn(CARD, "mb-3")}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-[13px] font-semibold text-ink">Review import</p>
+          <p className="text-[12px] text-ink-2">{state.filename}</p>
+          <p className="mt-1 text-[12px] font-medium text-ink">
+            {state.preview.profile.header.name || "Unnamed profile"}
+          </p>
+          {state.preview.profile.header.contact_line && (
+            <p className="text-[11.5px] text-ink-2">
+              {state.preview.profile.header.contact_line}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {state.preview.sections.map((section) => (
+            <span
+              key={section.id}
+              className="rounded-full bg-chip px-2 py-0.5 text-[11px] text-ink-2"
+            >
+              {section.title}: {section.count}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-line pt-3">
+        {state.preview.unmappedLines.length === 0 ? (
+          <p className="text-[12px] text-accent">
+            Every nonblank source line was credibly mapped.
+          </p>
+        ) : (
+          <>
+            <p className="text-[12px] font-semibold text-amber">
+              {state.preview.unmappedLines.length} source{" "}
+              {state.preview.unmappedLines.length === 1 ? "line was" : "lines were"} not mapped
+            </p>
+            <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
+              {state.preview.unmappedLines.map((line) => (
+                <li key={line.id} className="text-[11.5px] text-ink-2">
+                  {line.text}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {current ? (
+        (() => {
+          const imported = profileCounts(state.preview.profile);
+          return (
+            <p className="mt-3 text-[11.5px] font-semibold text-amber">
+              Importing REPLACES your current profile ({countNoun(current.sections, "section")},{" "}
+              {countNoun(current.entries, "entry", "entries")},{" "}
+              {countNoun(current.bullets, "bullet")}) with the imported content (
+              {countNoun(imported.sections, "section")},{" "}
+              {countNoun(imported.entries, "entry", "entries")},{" "}
+              {countNoun(imported.bullets, "bullet")}). A backup of the current profile is
+              saved first, and you can undo right after.
+            </p>
+          );
+        })()
+      ) : (
+        <p className="mt-3 text-[11.5px] text-ink-2">
+          This will fill in your empty profile. Nothing changes until you confirm this
+          import.
+        </p>
+      )}
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-semibold text-accent"
+        >
+          {current ? "Replace profile" : "Import"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-2"
+        >
+          Cancel
+        </button>
       </div>
     </div>
   );
