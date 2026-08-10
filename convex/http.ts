@@ -127,15 +127,17 @@ http.route({
       return new Response(null, { status: 302, headers: { Location: target.toString() } });
     };
 
-    // The user pressed Cancel on Google's consent screen, or Google refused.
-    if (googleError) return back({ googleError });
-    if (!code) return back({ googleError: "no_code" });
-
-    // Spend the nonce BEFORE the exchange. A signature only proves this state
-    // was issued by us, never that it has not already been used, and the value
-    // is visible in browser history and proxy logs - so without this a captured
-    // state could be replayed with a code from the attacker's own consent to
-    // repoint the victim's mailbox.
+    // Spend the nonce the moment the state verifies - BEFORE inspecting the
+    // outcome, and before the exchange.
+    //
+    // A signature proves this state was issued by us; it never proves the state
+    // has not already been used, and the value is visible in browser history,
+    // in the 302 Location header, and in any TLS-inspecting proxy. Consuming it
+    // only on the success path left the most common non-success outcome -
+    // pressing Cancel on Google's consent screen - with a live, unspent state
+    // for the rest of its TTL. Anyone who captured it could replay it with a
+    // code from their OWN consent, and completeOAuth would repoint the victim's
+    // mailbox at the attacker's inbox. One callback per state, whatever it says.
     const fresh = await ctx.runMutation(internal.mail.consumeOAuthNonce, {
       nonce: state.nonce,
       user: state.user,
@@ -146,6 +148,10 @@ http.route({
           "This sign-in link was already used or has expired. Start the connection again.",
       });
     }
+
+    // The user pressed Cancel on Google's consent screen, or Google refused.
+    if (googleError) return back({ googleError });
+    if (!code) return back({ googleError: "no_code" });
 
     try {
       const email = await ctx.runAction(internal.mail.completeOAuth, {

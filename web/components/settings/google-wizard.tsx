@@ -349,7 +349,11 @@ export function GoogleWizard({
         return;
       }
       setPresenceState(res.presence ?? presenceState);
-      setSavedMsg("Saved to the deployment");
+      // Render the action's own detail, not a hardcoded string. savePubSubTopic
+      // appends WHY the Gmail watch could not be armed when that happens, and
+      // discarding it left the next step ("Verify push") unpassable with the
+      // screen still saying the save was clean.
+      setSavedMsg(res.detail ?? "Saved to the deployment");
     } finally {
       setBusy(false);
     }

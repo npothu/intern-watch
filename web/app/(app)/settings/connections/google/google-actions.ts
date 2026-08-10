@@ -52,19 +52,33 @@ export type EnvPresence = {
  * and kills mail-sync with a 403 on every push. Patching the callers one at a
  * time kept missing one; asking the right process fixes the class.
  *
- * Degrades to all-false if the deployment is unreachable: showing "not set"
- * makes the user retry a save, whereas showing "set" would hide a real gap.
+ * On failure it reports UNKNOWN, not false.
+ *
+ * An earlier version degraded to all-false, reasoning that "not set" merely
+ * prompts a retry. That is exactly wrong for MAIL_PUSH_TOKEN, where the retry
+ * IS the destructive act: regenerating it overwrites the value already baked
+ * into the registered Pub/Sub push URL, so every Gmail push starts returning
+ * 403 and mail-sync dies silently. A permanent cause is easy to hit too - a
+ * CONVEX_SECRET that no longer matches the deployment makes every call here
+ * throw while the admin-key write path still works. So an unreachable
+ * deployment must say "could not check", never "not set".
  */
-export async function getEnvPresence(): Promise<EnvPresence> {
+export type EnvPresenceResult =
+  | { known: true; present: EnvPresence }
+  | { known: false };
+
+export async function getEnvPresenceResult(): Promise<EnvPresenceResult> {
   const config = await getOAuthConfig().catch(() => null);
-  return (
-    config?.present ?? {
-      clientId: false,
-      clientSecret: false,
-      pushToken: false,
-      pubsubTopic: false,
-    }
-  );
+  return config ? { known: true, present: config.present } : { known: false };
+}
+
+/** Booleans only, for callers that cannot express "unknown". Treats unknown as
+ *  SET, so a failed check never invites a destructive re-save. */
+export async function getEnvPresence(): Promise<EnvPresence> {
+  const res = await getEnvPresenceResult();
+  return res.known
+    ? res.present
+    : { clientId: true, clientSecret: true, pushToken: true, pubsubTopic: true };
 }
 
 /** Resolve the signed-in user, or null when not provisioned. */

@@ -354,12 +354,27 @@ export const storeMailAccount = internalMutation({
       .withIndex("by_user", (q) => q.eq("user", user))
       .first();
     if (existing) {
+      // Switching to a DIFFERENT mailbox must not inherit the previous one's
+      // sync cursor. historyId is meaningless across accounts, and a stale
+      // watchExpiration would make the renewal sweep skip the new mailbox as
+      // already-armed. The wizard actively invites this switch ("Signing in
+      // again replaces it with whichever account you choose"), so it is a
+      // normal path, not an edge case.
+      const switched = existing.email !== email;
       await ctx.db.patch(existing._id, {
         email,
         refreshToken,
         refreshTokenIv,
         lastError: undefined,
         lastErrorAt: undefined,
+        ...(switched
+          ? {
+              historyId: undefined,
+              watchExpiration: undefined,
+              lastSyncAt: undefined,
+              lastPushAt: undefined,
+            }
+          : {}),
       });
     } else {
       await ctx.db.insert("mailAccounts", { user, email, refreshToken, refreshTokenIv });
