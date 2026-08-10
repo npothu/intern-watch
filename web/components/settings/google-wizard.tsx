@@ -673,14 +673,21 @@ export function GoogleWizard({
                   the stored address as a success banner made a FAILED return
                   render green and red at once, with a stale mailbox presented
                   as the one just linked. */}
-              {!connectedEmail && !oauthError && alreadyConnectedEmail && (
+              {/* Shown alongside a failure too, not just on a clean visit. A
+                  failed re-authorisation leaves the PREVIOUS mailbox linked
+                  and the rail still green, so hiding it here left the user
+                  unable to tell what state they were actually in. Neutral
+                  styling keeps it from reading as success. */}
+              {!connectedEmail && alreadyConnectedEmail && (
                 <div className="mt-3 rounded-md border border-line bg-surface px-3 py-2.5">
                   <p className="text-[12.5px] text-ink">
                     Currently linked:{" "}
                     <span className="font-mono">{alreadyConnectedEmail}</span>
                   </p>
                   <p className="mt-1 text-[11.5px] text-ink-2">
-                    Signing in again replaces it with whichever account you choose.
+                    {oauthError
+                      ? "That sign-in did not go through, so this mailbox is still the one being watched."
+                      : "Signing in again replaces it with whichever account you choose."}
                   </p>
                 </div>
               )}
