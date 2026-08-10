@@ -955,6 +955,16 @@ export function Triage({
         e.preventDefault();
         flashDock("up");
         navigate(-1);
+      } else if (k === "ArrowLeft" || k === "ArrowRight") {
+        e.preventDefault();
+        if (termPills.length) {
+          const idx = termPills.findIndex((p) => p.key === activeTerm);
+          const cur = idx >= 0 ? idx : 0;
+          const delta = k === "ArrowRight" ? 1 : -1;
+          const next =
+            (cur + delta + termPills.length) % termPills.length;
+          setTermFilter(termPills[next].key);
+        }
       } else if (k === "/") {
         e.preventDefault();
         searchRef.current?.focus();
