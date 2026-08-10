@@ -1,5 +1,5 @@
 import { isAdminUser, resolveTrackerUser } from "@/lib/user";
-import { listCredentials } from "@/lib/convex";
+import { getMailAccount, getOAuthConfig } from "@/lib/convex";
 import { GoogleWizard } from "@/components/settings/google-wizard";
 import { getEnvPresence } from "./google-actions";
 
@@ -37,18 +37,45 @@ function convexSiteOrigin(): string | null {
   return null;
 }
 
-export default async function ConnectGooglePage() {
+export default async function ConnectGooglePage({
+  searchParams,
+}: {
+  // Set by the Convex /gmail/callback redirect at the end of the consent flow.
+  // Read here rather than with useSearchParams so the wizard stays a plain
+  // client component with no Suspense boundary to arrange.
+  searchParams: Promise<{ connected?: string; googleError?: string }>;
+}) {
   const user = await resolveTrackerUser();
   if (!user) return null; // layout already rendered NotProvisioned
+  const { connected, googleError } = await searchParams;
 
-  // listCredentials can fail transiently; a failure must not crash the page,
-  // so treat it as "not connected yet" and let the user retry by re-opening.
-  const rows = await listCredentials(user).catch(() => []);
-  const googleConnected = rows.some((r) => r.provider === "google");
+  // Ask the table the OAuth flow actually writes. This used to check the
+  // `credentials` table, which nothing in the flow touches, so a successful
+  // connect left the step permanently unchecked while the banner said it had
+  // worked. A transient failure must not crash the page, so it degrades to
+  // "not connected" and the user can retry by re-opening.
+  const account = await getMailAccount(user).catch(() => null);
+  const googleConnected = account !== null;
 
   const presence = await getEnvPresence();
-  // Clamp the presence projection so client state starts from server truth.
-  const routeWired = false; // the /api/google/start route is not implemented in this build
+
+  // Whether the consent flow can run, and if not, exactly what is missing.
+  //
+  // Every input is read from where it actually lives: the client id from the
+  // Convex deployment (the wizard's step 4 writes it there), the shared secret
+  // under its WEB name CONVEX_SECRET, and the site origin from config. The
+  // previous version read GMAIL_CLIENT_ID and TRACKER_SECRET from this server's
+  // env - neither of which is set here - so it was false on every deployment
+  // and the feature was unreachable with no explanation.
+  const oauth = await getOAuthConfig().catch(() => null);
+  const site = convexSiteOrigin();
+  const routeBlockers = [
+    !oauth && "the Convex deployment is unreachable",
+    ...(oauth?.missing ?? []).map((m) => `${m} on the deployment`),
+    !process.env.CONVEX_SECRET && "CONVEX_SECRET on the web server",
+    !site && "CONVEX_SITE_URL on the web server",
+  ].filter((x): x is string => typeof x === "string");
+  const routeWired = routeBlockers.length === 0;
 
   // The wizard's write steps change deployment-wide vars, so they are gated on
   // admin membership for the display AND re-checked inside each server action.
@@ -61,6 +88,20 @@ export default async function ConnectGooglePage() {
       googleConnected={googleConnected}
       adminAvailable={Boolean(process.env.CONVEX_ADMIN_KEY)}
       routeWired={routeWired}
+      routeBlockers={routeBlockers}
+      // Truth about step 4 comes from the CONVEX deployment, which is where
+      // those values live. getEnvPresence reads this server's env and reports
+      // false there, which kept step 5 disabled even after step 4 succeeded.
+      clientConfigured={Boolean(
+        oauth && !oauth.missing.includes("GMAIL_CLIENT_ID") &&
+          !oauth.missing.includes("GMAIL_CLIENT_SECRET"),
+      )}
+      // ONLY the query param. Falling back to the stored address made a failed
+      // return render the green "Connected" banner above the red failure one,
+      // and made every ordinary visit open on step 5 claiming success.
+      connectedEmail={connected}
+      alreadyConnectedEmail={account?.email}
+      oauthError={googleError}
       admin={admin}
     />
   );

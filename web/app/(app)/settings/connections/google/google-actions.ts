@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { isAdminUser, resolveTrackerUser } from "@/lib/user";
-import { getInboxActions } from "@/lib/convex";
+import { armMailWatch, getInboxActions, getOAuthConfig } from "@/lib/convex";
 import { setDeploymentEnv } from "@/lib/convex-admin";
 
 /**
@@ -39,19 +39,46 @@ export type EnvPresence = {
 };
 
 /**
- * Read deployment-var presence as booleans only, straight from this server's
- * process.env exactly like the deploy checklist. No admin key, no values.
+ * Read deployment-var presence as booleans only. No admin key, no values.
+ *
+ * Asked of the CONVEX DEPLOYMENT, not of this server's process.env.
+ *
+ * That distinction is the single root cause behind three separate defects
+ * found in review: the wizard WRITES all four of these variables to Convex, so
+ * reading them back from Next always answered false. Step 4 stayed grey after
+ * a successful save, step 5's sign-in stayed disabled, and step 6 reported
+ * "Not set yet" - inviting the admin to regenerate MAIL_PUSH_TOKEN, which
+ * silently invalidates the token in the already-registered Pub/Sub push URL
+ * and kills mail-sync with a 403 on every push. Patching the callers one at a
+ * time kept missing one; asking the right process fixes the class.
+ *
+ * On failure it reports UNKNOWN, not false.
+ *
+ * An earlier version degraded to all-false, reasoning that "not set" merely
+ * prompts a retry. That is exactly wrong for MAIL_PUSH_TOKEN, where the retry
+ * IS the destructive act: regenerating it overwrites the value already baked
+ * into the registered Pub/Sub push URL, so every Gmail push starts returning
+ * 403 and mail-sync dies silently. A permanent cause is easy to hit too - a
+ * CONVEX_SECRET that no longer matches the deployment makes every call here
+ * throw while the admin-key write path still works. So an unreachable
+ * deployment must say "could not check", never "not set".
  */
-// Async because every export of a "use server" module must be an async
-// function - Next rejects a synchronous export at build time even though this
-// one only reads booleans and never crosses the network.
+export type EnvPresenceResult =
+  | { known: true; present: EnvPresence }
+  | { known: false };
+
+export async function getEnvPresenceResult(): Promise<EnvPresenceResult> {
+  const config = await getOAuthConfig().catch(() => null);
+  return config ? { known: true, present: config.present } : { known: false };
+}
+
+/** Booleans only, for callers that cannot express "unknown". Treats unknown as
+ *  SET, so a failed check never invites a destructive re-save. */
 export async function getEnvPresence(): Promise<EnvPresence> {
-  return {
-    clientId: Boolean(process.env.GMAIL_CLIENT_ID),
-    clientSecret: Boolean(process.env.GMAIL_CLIENT_SECRET),
-    pushToken: Boolean(process.env.MAIL_PUSH_TOKEN),
-    pubsubTopic: Boolean(process.env.MAIL_PUBSUB_TOPIC),
-  };
+  const res = await getEnvPresenceResult();
+  return res.known
+    ? res.present
+    : { clientId: true, clientSecret: true, pushToken: true, pubsubTopic: true };
 }
 
 /** Resolve the signed-in user, or null when not provisioned. */
@@ -103,8 +130,30 @@ export async function savePubSubTopic(topic: string): Promise<ActionResult> {
   if (denied) return { ok: false, error: denied };
   try {
     await setDeploymentEnv({ MAIL_PUBSUB_TOPIC: topic.trim() });
+    // A mailbox connected BEFORE the topic existed had its watch deferred, and
+    // nothing else would arm it until the next daily cron - so the very next
+    // step, "Verify push", could not pass in the same session. Arm it here.
+    //
+    // armWatchNow reports its failure modes by RETURNING {ok:false, reason},
+    // not by throwing, so a try/catch alone silently dropped them and printed
+    // a clean "Saved to the deployment" over a watch that was never armed.
+    // The topic really is saved either way, so this reports rather than fails -
+    // but it must report, or the next step is unpassable with no reason given.
+    let watchNote = "";
+    try {
+      const armed = user ? await armMailWatch(user) : { ok: false, reason: "not signed in" };
+      if (!armed.ok) {
+        watchNote = ` Topic saved, but the Gmail watch is not armed yet (${armed.reason ?? "unknown"}) - connect a mailbox in step 5, then re-save this topic.`;
+      }
+    } catch (err) {
+      watchNote = ` Topic saved, but arming the Gmail watch failed (${(err as Error).message}). Re-save this topic to retry.`;
+    }
     revalidatePath("/settings/connections");
-    return { ok: true, detail: "Saved to the deployment", presence: await getEnvPresence() };
+    return {
+      ok: true,
+      detail: `Saved to the deployment.${watchNote}`,
+      presence: await getEnvPresence(),
+    };
   } catch (err) {
     return { ok: false, error: (err as Error).message || "Couldn't save the topic." };
   }
