@@ -57,17 +57,32 @@ function extracted(...texts: string[]): ExtractedResume {
   return {
     format: "txt",
     filename: "resume.txt",
-    lines: texts.map((text, index) => ({
-      id: `line-${String(index + 1).padStart(4, "0")}`,
-      text,
-      runs: text ? [{ text, bold: false, italics: false }] : [],
-      bold: false,
-      italics: false,
-      hasTab: text.includes("\t"),
-      rightTab: false,
-      borderBottom: false,
-      bullet: false,
-    })),
+    lines: texts.map((text, index) => {
+      const id = `line-${String(index + 1).padStart(4, "0")}`;
+      const runs = text ? [{ text, bold: false, italics: false }] : [];
+      return {
+        id,
+        text,
+        runs,
+        segments: text
+          ? [
+              {
+                id: `${id}-segment-0001`,
+                text,
+                boundaryBefore: "start",
+                rightAligned: false,
+                runs,
+              },
+            ]
+          : [],
+        bold: false,
+        italics: false,
+        hasTab: text.includes("\t"),
+        rightTab: false,
+        borderBottom: false,
+        bullet: false,
+      };
+    }),
   };
 }
 
@@ -107,6 +122,19 @@ describe("resume import extraction", () => {
       "",
     ]);
     expect(mdResult.lines[2].bullet).toBe(true);
+    expect(txtResult.lines[0].segments).toEqual([
+      {
+        id: "line-0001-segment-0001",
+        text: "Alex Example",
+        boundaryBefore: "start",
+        rightAligned: false,
+        runs: [{ text: "Alex Example", bold: false, italics: false }],
+      },
+    ]);
+    expect(mdResult.lines[2].segments[0]).toMatchObject({
+      id: "line-0003-segment-0001",
+      text: "- Built a tool",
+    });
   });
 
   test("file size and type checks reject mismatches, PDFs, and binary text", async () => {
@@ -184,6 +212,97 @@ describe("resume import extraction", () => {
       indentLeft: 720,
       hanging: 360,
     });
+  });
+
+  test("DOCX XML exposes stable formatted segments for tabs and explicit pipes", () => {
+    const xml = `<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:rPr><w:b/></w:rPr><w:t>Example Co</w:t><w:tab/></w:r>
+        <w:r><w:t>Atlanta, GA</w:t></w:r>
+      </w:p>
+      <w:p>
+        <w:r><w:rPr><w:b/></w:rPr><w:t>Resume Importer</w:t></w:r>
+        <w:r><w:t xml:space="preserve"> | </w:t></w:r>
+        <w:r><w:rPr><w:i/></w:rPr><w:t>React, TypeScript</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`;
+
+    const lines = extractDocxXml(xml);
+
+    expect(lines[0].segments).toEqual([
+      {
+        id: "line-0001-segment-0001",
+        text: "Example Co",
+        boundaryBefore: "start",
+        rightAligned: false,
+        runs: [{ text: "Example Co", bold: true, italics: false }],
+      },
+      {
+        id: "line-0001-segment-0002",
+        text: "Atlanta, GA",
+        boundaryBefore: "tab",
+        rightAligned: true,
+        runs: [{ text: "Atlanta, GA", bold: false, italics: false }],
+      },
+    ]);
+    expect(lines[1].segments).toEqual([
+      expect.objectContaining({
+        id: "line-0002-segment-0001",
+        text: "Resume Importer",
+        boundaryBefore: "start",
+      }),
+      expect.objectContaining({
+        id: "line-0002-segment-0002",
+        text: "React, TypeScript",
+        boundaryBefore: "pipe",
+      }),
+    ]);
+    expect(lines[1].segments[1].runs).toEqual([
+      { text: "React, TypeScript", bold: false, italics: true },
+    ]);
+  });
+
+  test.each([
+    ["Project|React, TypeScript", ["Project", "React, TypeScript"]],
+    ["Project |React, TypeScript", ["Project", "React, TypeScript"]],
+    ["Project| React, TypeScript", ["Project", "React, TypeScript"]],
+  ])("DOCX XML segments unspaced pipe layout in %s", (text, expected) => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:r><w:t>${text}</w:t></w:r></w:p>
+    </w:body></w:document>`);
+
+    expect(line.segments.map((segment) => segment.text)).toEqual(expected);
+    expect(line.segments[1].boundaryBefore).toBe("pipe");
+  });
+
+  test("right-tab paragraphs preserve space-aligned trailing columns", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t xml:space="preserve">Flight Computer | C++, Linux, Docker                      Aug - December 2025</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+
+    expect(line.segments.map((segment) => ({
+      text: segment.text,
+      boundaryBefore: segment.boundaryBefore,
+      rightAligned: segment.rightAligned,
+    }))).toEqual([
+      {
+        text: "Flight Computer",
+        boundaryBefore: "start",
+        rightAligned: false,
+      },
+      {
+        text: "C++, Linux, Docker",
+        boundaryBefore: "pipe",
+        rightAligned: false,
+      },
+      {
+        text: "Aug - December 2025",
+        boundaryBefore: "tab",
+        rightAligned: true,
+      },
+    ]);
   });
 
   test("malformed numeric entities produce the friendly damaged-DOCX error", async () => {
@@ -308,6 +427,563 @@ describe("resume import extraction", () => {
 });
 
 describe("resume import validation and mappings", () => {
+  test("a null contact line is normalized to the contract's empty string", () => {
+    const response = JSON.parse(modelResponse()) as {
+      profile: { header: { contact_line: unknown } };
+    };
+    response.profile.header.contact_line = null;
+
+    const result = validateModelOutput(JSON.stringify(response), extracted("Alex Example"));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.profile.header.contact_line).toBe("");
+  });
+
+  test("experience columns cannot be accepted in the wrong semantic fields", () => {
+    const extraction = extracted(
+      "Example Co\tAtlanta, GA",
+      "Engineering Intern\tSummer 2026",
+    );
+    const misplacedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co | Atlanta, GA",
+              subheading: "",
+              location: "",
+              date: "Engineering Intern | Summer 2026",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+          {
+            lineId: "line-0002",
+            targetPaths: ["/sections/0/entries/0/date"],
+          },
+        ],
+        misplacedProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join("\n")).toMatch(/experience.*heading.*location/i);
+      expect(result.errors.join("\n")).toMatch(/experience.*date.*role/i);
+    }
+  });
+
+  test("project technology columns cannot remain in the project heading", () => {
+    const extraction = extracted(
+      "Resume Importer | React, TypeScript, PostgreSQL, Docker",
+    );
+    const misplacedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          id: "projects",
+          title: "Projects",
+          kind: "projects",
+          entries: [
+            {
+              id: "resume-importer",
+              heading: "Resume Importer | React, TypeScript, PostgreSQL, Docker",
+              tech: [],
+              date: "",
+              bullets: { base: [] },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+        ],
+        misplacedProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join("\n")).toMatch(/project.*heading.*tech/i);
+    }
+  });
+
+  test("experience fields are inferred only from credibly mapped source lines", () => {
+    const lines = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Example Co</w:t><w:tab/><w:t>Atlanta, GA</w:t></w:r>
+      </w:p>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Engineering Intern</w:t><w:tab/><w:t>Summer 2026</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const extraction: ExtractedResume = {
+      format: "docx",
+      filename: "resume.docx",
+      lines,
+    };
+    const incompleteProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co",
+              subheading: "",
+              location: "",
+              date: "",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+          {
+            lineId: "line-0002",
+            targetPaths: ["/sections/0/entries/0/date"],
+          },
+        ],
+        incompleteProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const errors = result.errors.join("\n");
+      expect(errors).toMatch(/experience.*location.*source segment/i);
+      expect(errors).not.toMatch(/experience.*role.*source segment/i);
+      expect(errors).not.toMatch(/experience.*date.*source segment/i);
+    }
+  });
+
+  test.each([
+    ["role", "", "Summer 2026", "/sections/0/entries/0/date"],
+    ["date", "Engineering Intern", "", "/sections/0/entries/0/subheading"],
+  ])(
+    "experience %s cannot be omitted from a credibly mapped role and date line",
+    (missingField, subheading, date, targetPath) => {
+      const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+        <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+          <w:r><w:t>Engineering Intern</w:t><w:tab/><w:t>Summer 2026</w:t></w:r>
+        </w:p>
+      </w:body></w:document>`);
+      const incompleteProfile: ProfileV2 = {
+        ...profile,
+        sections: [
+          {
+            ...profile.sections[0],
+            entries: [
+              {
+                ...profile.sections[0].entries[0],
+                subheading,
+                date,
+              },
+            ],
+          },
+          profile.sections[1],
+        ],
+      };
+      const result = validateModelOutput(
+        modelResponse(
+          [{ lineId: "line-0001", targetPaths: [targetPath] }],
+          incompleteProfile,
+        ),
+        { format: "docx", filename: "resume.docx", lines: [line] },
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.join("\n")).toMatch(
+          new RegExp(`experience.*${missingField}.*source segment`, "i"),
+        );
+      }
+    },
+  );
+
+  test("project tech and date required by clear source segments cannot be omitted", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Resume Importer</w:t></w:r>
+        <w:r><w:t xml:space="preserve"> | </w:t></w:r>
+        <w:r><w:t>React, TypeScript</w:t><w:tab/><w:t>Summer 2026</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const extraction: ExtractedResume = {
+      format: "docx",
+      filename: "resume.docx",
+      lines: [line],
+    };
+    const incompleteProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          id: "projects",
+          title: "Projects",
+          kind: "projects",
+          entries: [
+            {
+              id: "resume-importer",
+              heading: "Resume Importer",
+              tech: [],
+              date: "",
+              bullets: { base: [] },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+        ],
+        incompleteProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const errors = result.errors.join("\n");
+      expect(errors).toMatch(/project.*tech.*source segment/i);
+      expect(errors).toMatch(/project.*date.*source segment/i);
+    }
+  });
+
+  test("tab-separated project technology cannot be omitted", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Resume Importer</w:t><w:tab/><w:t>React, TypeScript</w:t><w:tab/><w:t>Summer 2026</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const incompleteProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          id: "projects",
+          title: "Projects",
+          kind: "projects",
+          entries: [
+            {
+              id: "resume-importer",
+              heading: "Resume Importer",
+              tech: [],
+              date: "Summer 2026",
+              bullets: { base: [] },
+            },
+          ],
+        },
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: [
+              "/sections/0/entries/0/heading",
+              "/sections/0/entries/0/date",
+            ],
+          },
+        ],
+        incompleteProfile,
+      ),
+      { format: "docx", filename: "resume.docx", lines: [line] },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join("\n")).toMatch(/project.*tech.*source segment/i);
+    }
+  });
+
+  test.each([
+    ["May Mobility", "Ann Arbor, MI"],
+    ["March of Dimes", "Arlington, VA"],
+  ])("company name %s is not mistaken for a date", (organization, location) => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>${organization}</w:t><w:tab/><w:t>${location}</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const importedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: organization,
+              location,
+              date: "",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+        ],
+        importedProfile,
+      ),
+      { format: "docx", filename: "resume.docx", lines: [line] },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test.each(["Hybrid Cloud Engineer", "Summer Associate"])(
+    "job title %s is not mistaken for a location or date",
+    (role) => {
+      const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+        <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+          <w:r><w:t>${role}</w:t><w:tab/><w:t>June 2026</w:t></w:r>
+        </w:p>
+      </w:body></w:document>`);
+      const importedProfile: ProfileV2 = {
+        ...profile,
+        sections: [
+          {
+            ...profile.sections[0],
+            entries: [
+              {
+                ...profile.sections[0].entries[0],
+                subheading: role,
+                location: "",
+                date: "June 2026",
+              },
+            ],
+          },
+          profile.sections[1],
+        ],
+      };
+      const result = validateModelOutput(
+        modelResponse(
+          [
+            {
+              lineId: "line-0001",
+              targetPaths: [
+                "/sections/0/entries/0/subheading",
+                "/sections/0/entries/0/date",
+              ],
+            },
+          ],
+          importedProfile,
+        ),
+        { format: "docx", filename: "resume.docx", lines: [line] },
+      );
+
+      expect(result.ok).toBe(true);
+    },
+  );
+
+  test("a technology containing a year is not mistaken for a project date", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:r><w:t>Migration Tool | Visual Studio 2022, .NET</w:t></w:r></w:p>
+    </w:body></w:document>`);
+    const importedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          id: "projects",
+          title: "Projects",
+          kind: "projects",
+          entries: [
+            {
+              id: "migration-tool",
+              heading: "Migration Tool",
+              tech: ["Visual Studio 2022", ".NET"],
+              date: "",
+              bullets: { base: [] },
+            },
+          ],
+        },
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: [
+              "/sections/0/entries/0/heading",
+              "/sections/0/entries/0/tech",
+            ],
+          },
+        ],
+        importedProfile,
+      ),
+      { format: "docx", filename: "resume.docx", lines: [line] },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("dates cannot remain embedded in semantic experience name fields", () => {
+    const misplacedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co | Summer 2026",
+              date: "",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+        ],
+        misplacedProfile,
+      ),
+      extracted("Example Co | Summer 2026"),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join("\n")).toMatch(/experience.*date.*heading/i);
+    }
+  });
+
+  test("ambiguous experience field placement is returned as a semantic warning", () => {
+    const suspiciousProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co, Atlanta, GA",
+              location: "",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+          },
+        ],
+        suspiciousProfile,
+      ),
+      extracted("Example Co, Atlanta, GA"),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.semanticWarnings.join("\n")).toMatch(
+        /experience.*heading.*location/i,
+      );
+    }
+  });
+
+  test("date and location words in bullet prose do not force header fields", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:numPr/></w:pPr>
+        <w:r><w:t>Collaborated remotely during Summer 2026</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const extraction: ExtractedResume = {
+      format: "docx",
+      filename: "resume.docx",
+      lines: [line],
+    };
+    const undatedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              location: "",
+              date: "",
+              bullets: { base: ["Collaborated remotely during Summer 2026"] },
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/bullets/base/0"],
+          },
+        ],
+        undatedProfile,
+      ),
+      extraction,
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   test("ProfileV2 validation rejects unknown fields and duplicate IDs", () => {
     expect(validateProfileV2(profile)).toEqual({ ok: true, profile });
     const malformed = {
@@ -446,6 +1122,173 @@ describe("resume import validation and mappings", () => {
       expect(result.value.partialMappedLines).toEqual([]);
       expect(result.value.unmappedLines).toEqual([]);
     }
+  });
+
+  test("field-level mappings preserve valid source segment provenance", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Example Co</w:t><w:tab/><w:t>Atlanta, GA</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const extraction: ExtractedResume = {
+      format: "docx",
+      filename: "resume.docx",
+      lines: [line],
+    };
+    const locatedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co",
+              location: "Atlanta, GA",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+
+    const result = validateModelOutput(
+      JSON.stringify({
+        profile: locatedProfile,
+        mappings: [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/sections/0/entries/0/heading"],
+            segmentMappings: [
+              {
+                segmentId: "line-0001-segment-0001",
+                targetPaths: ["/sections/0/entries/0/heading"],
+              },
+              {
+                segmentId: "line-0001-segment-0002",
+                targetPaths: ["/sections/0/entries/0/location"],
+              },
+            ],
+          },
+        ],
+      }),
+      extraction,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.mappings[0].segmentMappings).toEqual([
+        {
+          segmentId: "line-0001-segment-0001",
+          targetPaths: ["/sections/0/entries/0/heading"],
+        },
+        {
+          segmentId: "line-0001-segment-0002",
+          targetPaths: ["/sections/0/entries/0/location"],
+        },
+      ]);
+      expect(result.value.fullyMappedLines).toEqual([
+        { id: "line-0001", text: "Example Co\tAtlanta, GA" },
+      ]);
+      expect(result.value.partialMappedLines).toEqual([]);
+    }
+  });
+
+  test("valid segment targets retain a mapping when its aggregate target is stale", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:r><w:t>Example Co</w:t></w:r></w:p>
+    </w:body></w:document>`);
+    const result = validateModelOutput(
+      JSON.stringify({
+        profile,
+        mappings: [
+          {
+            lineId: "line-0001",
+            targetPaths: ["/missing"],
+            segmentMappings: [
+              {
+                segmentId: "line-0001-segment-0001",
+                targetPaths: ["/sections/0/entries/0/heading"],
+              },
+            ],
+          },
+        ],
+      }),
+      { format: "docx", filename: "resume.docx", lines: [line] },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.mappings).toHaveLength(1);
+      expect(result.value.mappings[0].targetPaths).toEqual([]);
+      expect(result.value.fullyMappedLines).toEqual([
+        { id: "line-0001", text: "Example Co" },
+      ]);
+    }
+  });
+
+  test("stale entry mappings cannot trigger source-backed semantic errors", () => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Unrelated Co</w:t><w:tab/><w:t>Atlanta, GA</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const extraction: ExtractedResume = {
+      format: "docx",
+      filename: "resume.docx",
+      lines: [line],
+    };
+
+    const result = validateModelOutput(
+      modelResponse([
+        {
+          lineId: "line-0001",
+          targetPaths: ["/sections/0/entries/0/heading/missing"],
+        },
+      ]),
+      extraction,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.mappings).toEqual([]);
+      expect(result.value.unmappedLines).toEqual([
+        { id: "line-0001", text: "Unrelated Co\tAtlanta, GA" },
+      ]);
+    }
+  });
+
+  test.each([
+    "/sections/0/entries/0/heading",
+    "/sections/0/entries/0/bullets/base/0",
+  ])("unrelated content mapped to %s cannot trigger semantic errors", (targetPath) => {
+    const [line] = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:t>Other Co</w:t><w:tab/><w:t>Atlanta, GA</w:t></w:r>
+      </w:p>
+    </w:body></w:document>`);
+    const mappedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              location: "",
+              bullets: { base: ["Other Co Atlanta, GA"] },
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse([{ lineId: "line-0001", targetPaths: [targetPath] }], mappedProfile),
+      { format: "docx", filename: "resume.docx", lines: [line] },
+    );
+
+    expect(result.ok).toBe(true);
   });
 
   test("mapping metadata must use unique extraction IDs and real JSON pointers", () => {
@@ -654,6 +1497,29 @@ describe("resume import prompt and repair", () => {
     );
   });
 
+  test("prompt defines section semantics and field-level source provenance", () => {
+    const prompt = buildImportPrompt(extracted("Example Co | Atlanta, GA"));
+
+    expect(prompt.system).toContain(
+      "Experience: heading is the organization, subheading is the role, location is the place, and date is the employment period",
+    );
+    expect(prompt.system).toContain(
+      "Projects: heading is only the project name, tech is the explicit technology list, and date is only the project period",
+    );
+    expect(prompt.system).toContain("Education:");
+    expect(prompt.system).toContain("Community:");
+    expect(prompt.system).toContain("Skills:");
+    expect(prompt.system).toContain(
+      "Tabs and pipe separators are layout evidence, not literal heading content",
+    );
+    expect(prompt.system).toContain("Incorrect:");
+    expect(prompt.system).toContain("Correct:");
+    expect(prompt.system).toContain("segmentMappings");
+    expect(prompt.system).toContain("segmentId");
+    expect(prompt.system).toContain("contact_line");
+    expect(prompt.system).toContain("empty string");
+  });
+
   test("common link labels import as ProfileV2 link text without a repair call", async () => {
     const extraction = extracted(
       "LinkedIn https://linkedin.com/in/alex",
@@ -717,6 +1583,15 @@ describe("resume import prompt and repair", () => {
     expect(() => buildImportPrompt(extraction)).toThrow("too much text");
   });
 
+  test("prompt serialization does not duplicate line and segment text", () => {
+    const extraction = extracted("x".repeat(30_000));
+    expect(JSON.stringify(extraction).length).toBeGreaterThan(
+      MAX_EXTRACTION_PAYLOAD_CHARS,
+    );
+
+    expect(() => buildImportPrompt(extraction)).not.toThrow();
+  });
+
   test("invalid model shape receives exactly one repair with the prior response", async () => {
     const extraction = extracted("Alex Example");
     const invoke = vi
@@ -732,6 +1607,82 @@ describe("resume import prompt and repair", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls[1][0].user).toContain("not json");
     expect(invoke.mock.calls[1][0].user).toContain("not valid JSON");
+  });
+
+  test("semantic placement failures receive one actionable repair call", async () => {
+    const extraction = extracted(
+      "Example Co | Atlanta, GA",
+      "Engineering Intern | Summer 2026",
+    );
+    const misplacedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co | Atlanta, GA",
+              subheading: "",
+              location: "",
+              date: "Engineering Intern | Summer 2026",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+    const repairedProfile: ProfileV2 = {
+      ...profile,
+      sections: [
+        {
+          ...profile.sections[0],
+          entries: [
+            {
+              ...profile.sections[0].entries[0],
+              heading: "Example Co",
+              subheading: "Engineering Intern",
+              location: "Atlanta, GA",
+              date: "Summer 2026",
+            },
+          ],
+        },
+        profile.sections[1],
+      ],
+    };
+    const invoke = vi
+      .fn<(prompt: { system: string; user: string }) => Promise<string>>()
+      .mockResolvedValueOnce(
+        modelResponse(
+          [
+            {
+              lineId: "line-0001",
+              targetPaths: ["/sections/0/entries/0/heading"],
+            },
+            {
+              lineId: "line-0002",
+              targetPaths: ["/sections/0/entries/0/date"],
+            },
+          ],
+          misplacedProfile,
+        ),
+      )
+      .mockResolvedValueOnce(modelResponse([], repairedProfile));
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.profile.sections[0].entries[0]).toMatchObject({
+      heading: "Example Co",
+      subheading: "Engineering Intern",
+      location: "Atlanta, GA",
+      date: "Summer 2026",
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    const repairPrompt = invoke.mock.calls[1][0].user;
+    expect(repairPrompt).toContain("experience heading contains a location column");
+    expect(repairPrompt).toContain("Preserve valid entries and content");
+    expect(repairPrompt).toContain("semantic fields");
+    expect(repairPrompt).toContain("segment mappings");
   });
 
   test("provider failures are not retried", async () => {

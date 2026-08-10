@@ -70,11 +70,21 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
 const MAX_OUTPUT_TOKENS = 8192;
 const TIMEOUT_MS = 120_000;
 
+export function resumeImportOutputTokens(
+  provider: Provider,
+  model: string,
+): number | undefined {
+  return provider === "gemini" && SUGGESTED_MODELS.gemini.includes(model)
+    ? 32_768
+    : undefined;
+}
+
 type CallArgs = {
   model: string;
   system: string;
   user: string;
   apiKey: string;
+  maxOutputTokens?: number;
 };
 
 /** Every provider raises on a non-2xx so the caller's single catch can fall
@@ -89,7 +99,13 @@ async function post(url: string, init: RequestInit): Promise<Response> {
   return resp;
 }
 
-async function callGemini({ model, system, user, apiKey }: CallArgs): Promise<string> {
+async function callGemini({
+  model,
+  system,
+  user,
+  apiKey,
+  maxOutputTokens = MAX_OUTPUT_TOKENS,
+}: CallArgs): Promise<string> {
   const resp = await post(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
@@ -100,19 +116,31 @@ async function callGemini({ model, system, user, apiKey }: CallArgs): Promise<st
         contents: [{ role: "user", parts: [{ text: user }] }],
         generationConfig: {
           responseMimeType: "application/json",
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          maxOutputTokens,
           temperature: 0,
         },
       }),
     },
   );
   const data = (await resp.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    candidates?: Array<{
+      finishReason?: string;
+      content?: { parts?: Array<{ text?: string }> };
+    }>;
   };
+  if (data.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+    throw new Error("Gemini stopped because the output token limit was reached");
+  }
   return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("");
 }
 
-async function callAnthropic({ model, system, user, apiKey }: CallArgs): Promise<string> {
+async function callAnthropic({
+  model,
+  system,
+  user,
+  apiKey,
+  maxOutputTokens = MAX_OUTPUT_TOKENS,
+}: CallArgs): Promise<string> {
   const resp = await post("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -122,14 +150,18 @@ async function callAnthropic({ model, system, user, apiKey }: CallArgs): Promise
     },
     body: JSON.stringify({
       model,
-      max_tokens: MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens,
       system,
       messages: [{ role: "user", content: user }],
     }),
   });
   const data = (await resp.json()) as {
+    stop_reason?: string;
     content?: Array<{ type?: string; text?: string }>;
   };
+  if (data.stop_reason === "max_tokens") {
+    throw new Error("Anthropic stopped because the output token limit was reached");
+  }
   return (data.content ?? [])
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
@@ -142,7 +174,13 @@ async function callAnthropic({ model, system, user, apiKey }: CallArgs): Promise
  * function rather than two.
  */
 function openAiCompatible(baseUrl: string) {
-  return async ({ model, system, user, apiKey }: CallArgs): Promise<string> => {
+  return async ({
+    model,
+    system,
+    user,
+    apiKey,
+    maxOutputTokens = MAX_OUTPUT_TOKENS,
+  }: CallArgs): Promise<string> => {
     const resp = await post(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -151,7 +189,7 @@ function openAiCompatible(baseUrl: string) {
       },
       body: JSON.stringify({
         model,
-        max_completion_tokens: MAX_OUTPUT_TOKENS,
+        max_completion_tokens: maxOutputTokens,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: system },
@@ -160,8 +198,14 @@ function openAiCompatible(baseUrl: string) {
       }),
     });
     const data = (await resp.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{
+        finish_reason?: string;
+        message?: { content?: string };
+      }>;
     };
+    if (data.choices?.[0]?.finish_reason === "length") {
+      throw new Error("The model stopped because the output token limit was reached");
+    }
     return data.choices?.[0]?.message?.content ?? "";
   };
 }
