@@ -1,4 +1,4 @@
-import { FORCE_MOTION_ATTR, REDUCE_MOTION_ATTR } from "@/lib/motion";
+import { FORCE_MOTION_ATTR, REDUCE_MOTION_ATTR } from "./motion-constants";
 
 /**
  * The persistent, three-way animation preference behind Settings >

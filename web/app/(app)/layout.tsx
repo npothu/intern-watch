@@ -2,7 +2,6 @@ import { resolveTrackerUser } from "@/lib/user";
 import { getHealth } from "@/lib/convex";
 import { SiteHeader } from "@/components/site-header";
 import { NotProvisioned } from "@/components/not-provisioned";
-import { MotionPreviewInit } from "@/components/motion-preview";
 import { InboxPendingProvider } from "@/components/nav/view-counts";
 import { ViewCycle } from "@/components/nav/view-cycle";
 
@@ -29,9 +28,6 @@ export default async function AppLayout({
   const health = await getHealth(trackerUser).catch(() => null);
   return (
     <InboxPendingProvider value={health?.pendingInbox ?? 0}>
-      {/* Dev-only: carries the "force motion" preview override across pages so
-          the motion can be reviewed on a reduced-motion machine. */}
-      {process.env.NODE_ENV !== "production" && <MotionPreviewInit />}
       {/* Global `t` view-cycle - see components/nav/view-cycle.tsx for why
           this can't live inside any one surface. */}
       <ViewCycle />

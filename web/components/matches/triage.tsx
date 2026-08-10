@@ -98,6 +98,7 @@ const SWIPE_THRESHOLD = 70;
 const COLLAPSE_MS = 300; // row collapse
 const HIDE_MS = COLLAPSE_MS + 20; // ...then the dismiss commits
 const CASCADE_STEP = 55; // per-row stagger
+const SCROLL_MS = 180;
 const CASCADE_CAP = 10; // rows past this share the final delay
 const BUILD_POLL_MS = 15000;
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -390,6 +391,52 @@ export function Triage({
 
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollFrame = useRef<number | null>(null);
+  const scrollTarget = useRef<number | null>(null);
+
+  const animateWindowScroll = useCallback((rawTarget: number) => {
+    if (scrollFrame.current !== null) {
+      window.cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    }
+
+    const maxScroll = Math.max(
+      0,
+      document.documentElement.scrollHeight - window.innerHeight
+    );
+    const target = Math.max(0, Math.min(maxScroll, rawTarget));
+    const start = window.scrollY;
+    scrollTarget.current = target;
+
+    if (prefersReducedMotion() || Math.abs(target - start) < 1) {
+      window.scrollTo({ top: target, behavior: "auto" });
+      scrollTarget.current = null;
+      return;
+    }
+
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / SCROLL_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      window.scrollTo({ top: start + (target - start) * eased });
+      if (progress < 1) {
+        scrollFrame.current = window.requestAnimationFrame(tick);
+      } else {
+        scrollFrame.current = null;
+        scrollTarget.current = null;
+      }
+    };
+    scrollFrame.current = window.requestAnimationFrame(tick);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (scrollFrame.current !== null) {
+        window.cancelAnimationFrame(scrollFrame.current);
+      }
+    },
+    []
+  );
 
   const pendingDismiss = useRef<Map<string, boolean>>(new Map());
   const flushTimer = useRef<number | null>(null);
@@ -562,9 +609,28 @@ export function Triage({
   useEffect(() => {
     if (!cursor) return;
     const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
-    el?.scrollIntoView?.({ block: scrollBlock.current });
+    if (!el) {
+      scrollBlock.current = "nearest";
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    let target: number | null = null;
+    if (scrollBlock.current === "center") {
+      target = window.scrollY + rect.top - (window.innerHeight - rect.height) / 2;
+    } else if (rect.top < 0) {
+      target = window.scrollY + rect.top;
+    } else if (rect.bottom > window.innerHeight) {
+      target = window.scrollY + rect.bottom - window.innerHeight;
+    }
+    if (target !== null) {
+      animateWindowScroll(target);
+    } else if (scrollFrame.current !== null) {
+      window.cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+      scrollTarget.current = null;
+    }
     scrollBlock.current = "nearest";
-  }, [cursor]);
+  }, [cursor, animateWindowScroll]);
 
   // 1b: replay the cascade when the filter changes or the search settles
   // (150ms after the last keystroke). Never on tick/hide mutations.
@@ -840,10 +906,8 @@ export function Triage({
      scrolling is not lost, it is taken over, so `j` and ArrowDown behave
      identically and a held key never fights a native scroll mid-list. */
   function edgeScroll(delta: number) {
-    window.scrollBy({
-      top: delta * EDGE_SCROLL_PX,
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-    });
+    const start = scrollTarget.current ?? window.scrollY;
+    animateWindowScroll(start + delta * EDGE_SCROLL_PX);
   }
 
   function navigate(delta: number) {

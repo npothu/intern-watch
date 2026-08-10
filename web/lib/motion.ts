@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { FORCE_MOTION_ATTR, REDUCE_MOTION_ATTR } from "./motion-constants";
+
+export { FORCE_MOTION_ATTR, REDUCE_MOTION_ATTR } from "./motion-constants";
 
 /**
  * Motion primitives shared by the triage surface.
@@ -14,12 +17,6 @@ import { useEffect, useRef } from "react";
  * The global `prefers-reduced-motion` override in globals.css only reaches CSS
  * animations, so every helper here checks the media query itself.
  */
-
-/** Attribute on <html> that overrides the OS reduced-motion preference on. */
-export const FORCE_MOTION_ATTR = "data-force-motion";
-/** Attribute on <html> that forces reduced motion regardless of the OS query.
- *  Set by the "Reduced" choice in Settings > Appearance (lib/motion-preference.ts). */
-export const REDUCE_MOTION_ATTR = "data-reduce-motion";
 
 export function prefersReducedMotion(): boolean {
   if (typeof window === "undefined") return false;
