@@ -15,7 +15,7 @@
 // JD fetch -> Gemini call -> docx generation -> storage - runs here under
 // the Node runtime instead of risking a runtime-only failure in the isolate.
 
-import { action, internalAction } from "./_generated/server";
+import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -40,6 +40,7 @@ import {
   extractResume,
   mapExtractionWithModel,
   MAX_IMPORT_BYTES,
+  meteredInvoke,
 } from "./resume_import";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
 
@@ -408,16 +409,27 @@ export const runBuild = internalAction({
   },
 });
 
-export const importProfileFromUpload = action({
-  args: {
-    user: v.string(),
-    storageId: v.id("_storage"),
-    filename: v.string(),
-    contentType: v.string(),
-    secret: v.string(),
-  },
-  handler: async (ctx, { user, storageId, filename, contentType, secret }) => {
-    if (secret !== process.env.TRACKER_SECRET) throw new Error("bad secret");
+// ---------------------------------------------------------------------------
+// Internal action ("use node"): map a claimed resume upload into a ProfileV2
+// preview. Scheduled by resume.claimProfileImportUpload - the same
+// schedule-then-poll contract as requestBuild/runBuild (see convex/resume.ts),
+// because the mapping makes up to two model calls over an 80k-char payload and
+// must never hold a Vercel server action open for that long.
+//
+// The storage id comes ONLY from the user's own claim record - never from a
+// client argument - so this action cannot be pointed at another user's stored
+// file (see the claim mutation for the opaque-id threat model). Failures are
+// recorded on the profileImports row and swallowed, like runBuild, so a broken
+// import never crash-loops the scheduler.
+// ---------------------------------------------------------------------------
+export const runProfileImport = internalAction({
+  args: { user: v.string() },
+  handler: async (ctx, { user }) => {
+    const record = await ctx.runQuery(internal.resume.getPendingProfileImport, { user });
+    // Discarded, or superseded by a newer claim, before this ran. Nothing to
+    // clean either: whoever removed or replaced the record removed its blob.
+    if (!record || record.status !== "mapping" || !record.storageId) return;
+    const storageId = record.storageId;
     try {
       const blob = await ctx.storage.get(storageId);
       if (!blob) throw new Error("The temporary resume upload could not be found. Upload it again.");
@@ -425,13 +437,13 @@ export const importProfileFromUpload = action({
         throw new Error("Resume files must be 5 MB or smaller.");
       }
       const storedType = blob.type.trim().toLowerCase();
-      const declaredType = contentType.trim().toLowerCase();
+      const declaredType = record.contentType.trim().toLowerCase();
       if (storedType && declaredType && storedType !== declaredType) {
         throw new Error("The uploaded resume content type changed during upload.");
       }
       const extraction = await extractResume(
         new Uint8Array(await blob.arrayBuffer()),
-        { filename, contentType: storedType || declaredType },
+        { filename: record.filename, contentType: storedType || declaredType },
       );
 
       const settingsRow = await ctx.runQuery(internal.settings.getSettingsInternal, { user });
@@ -444,6 +456,8 @@ export const importProfileFromUpload = action({
         provider: effectiveProvider(preference),
       });
       const operatorKey = process.env.GEMINI_API_KEY ?? null;
+      // Read the allowance before spending anything, so a capped user is told
+      // to bring a key instead of burning shared calls that cannot succeed.
       const operatorCapReached =
         !userKey && operatorKey
           ? await ctx.runQuery(internal.settings.operatorCapReached, { user })
@@ -460,7 +474,7 @@ export const importProfileFromUpload = action({
         );
       }
 
-      const imported = await mapExtractionWithModel(extraction, async ({ system, user: userMsg }) => {
+      const invokeModel = async ({ system, user: userMsg }: { system: string; user: string }) => {
         try {
           return await callModel(choice.provider, {
             model: choice.model,
@@ -473,23 +487,34 @@ export const importProfileFromUpload = action({
             `${PROVIDER_LABEL[choice.provider]} ${choice.model} could not map this resume: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-      });
+      };
+      // Operator-key runs are metered per productive call (see meteredInvoke
+      // for the whole policy). consumeOperatorLlm can answer {allowed: false}
+      // when a concurrent build took the last slot between the cap read above
+      // and this charge; the result is deliberately ignored - the call already
+      // happened, and failing now would discard work the operator was billed
+      // for. The cap read is what gates the NEXT run.
+      const invoke =
+        choice.source === "operator"
+          ? meteredInvoke(invokeModel, () =>
+              ctx.runMutation(internal.settings.consumeOperatorLlm, { user }),
+            )
+          : invokeModel;
 
-      if (choice.source === "operator") {
-        const charge = await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
-        if (!charge.allowed) {
-          throw new Error(
-            "The daily shared-model import limit was reached. Add your own API key in Settings and try again.",
-          );
-        }
-      }
-      return imported;
-    } finally {
-      try {
-        await ctx.storage.delete(storageId);
-      } catch (error) {
-        console.warn("temporary resume import cleanup failed", error);
-      }
+      const imported = await mapExtractionWithModel(extraction, invoke);
+      await ctx.runMutation(internal.resume.finishProfileImport, {
+        user,
+        storageId,
+        preview: JSON.stringify(imported),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("resume import failed", err);
+      await ctx.runMutation(internal.resume.finishProfileImport, {
+        user,
+        storageId,
+        error: message,
+      });
     }
   },
 });

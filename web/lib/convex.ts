@@ -433,29 +433,65 @@ export async function getResumeImportUploadUrl(user: string): Promise<string> {
   return value;
 }
 
-export async function mapResumeImport(
+/** Claim an uploaded resume for import. The claim records the storage id
+ * server-side under this user and schedules the mapping action; from here on
+ * the pipeline never accepts a storage id from a client again. */
+export async function claimResumeImportUpload(
   user: string,
   upload: { storageId: string; filename: string; contentType: string }
-): Promise<ResumeImportPreview> {
-  const value = await post(
-    "action",
-    "importProfileFromUpload",
-    { user, ...upload },
-    "resume_node"
-  );
-  return value as ResumeImportPreview;
+): Promise<void> {
+  await post("mutation", "claimProfileImportUpload", { user, ...upload }, "resume");
 }
 
-export async function discardResumeImportUpload(
-  user: string,
-  storageId: string
-): Promise<void> {
-  await post(
-    "mutation",
-    "discardProfileImportUpload",
-    { user, storageId },
-    "resume"
-  );
+export type ResumeImportStatus =
+  | { status: "mapping"; filename: string }
+  | { status: "ready"; filename: string; preview: ResumeImportPreview }
+  | { status: "failed"; filename: string; error: string }
+  | null;
+
+/** Poll the scheduled import's status. `preview` travels as a JSON string
+ * (profile JSON can carry user-authored keys) and is parsed here, server-side,
+ * before it reaches the browser. */
+export async function getResumeImportStatus(
+  user: string
+): Promise<ResumeImportStatus> {
+  const value = await post("query", "getProfileImportStatus", { user }, "resume");
+  if (!value || typeof value !== "object") return null;
+  const row = value as {
+    status: string;
+    filename: string;
+    preview: string | null;
+    error: string | null;
+  };
+  if (row.status === "ready" && row.preview) {
+    return {
+      status: "ready",
+      filename: row.filename,
+      preview: JSON.parse(row.preview) as ResumeImportPreview,
+    };
+  }
+  if (row.status === "failed" || row.status === "ready") {
+    // A "ready" row with no preview is a server bug; surface it as a failure
+    // rather than polling forever.
+    return {
+      status: "failed",
+      filename: row.filename,
+      error: row.error ?? "Couldn't import this resume.",
+    };
+  }
+  return { status: "mapping", filename: row.filename };
+}
+
+/** Discard the user's pending import (blob and record). Takes no storage id -
+ * the server only ever deletes the blob recorded on this user's claim. */
+export async function discardResumeImportUpload(user: string): Promise<void> {
+  await post("mutation", "discardProfileImportUpload", { user }, "resume");
+}
+
+/** Replace the stored profile with a confirmed import. The mutation snapshots
+ * the current profile into profileBackups before overwriting it. */
+export async function importProfile(user: string, data: string): Promise<void> {
+  await post("mutation", "applyProfileImport", { user, data }, "resume");
 }
 
 // -- tracker deadlines -------------------------------------------------------

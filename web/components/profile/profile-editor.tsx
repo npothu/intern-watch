@@ -33,19 +33,25 @@ import type { Variant } from "@/lib/profile";
 import {
   blankEntry,
   blankProfile,
+  isProfileEmpty,
   newId,
+  profileCounts,
   SECTION_KINDS,
   variantsOf,
   type Entry,
+  type ProfileCounts,
   type ProfileV2,
   type Section,
   type SectionKind,
 } from "@/lib/profile";
 import {
   beginResumeImport,
-  finishResumeImport,
+  confirmResumeImport,
+  discardResumeImport,
   fetchProfile,
+  pollResumeImport,
   saveProfile,
+  startResumeImport,
   upgradeProfile,
 } from "@/app/(app)/profile/profile-actions";
 import { SectionRail, PERSONAL_INFO_ID } from "@/components/profile/section-rail";
@@ -59,6 +65,11 @@ import { cn } from "@/lib/utils";
 const DEBOUNCE_MS = 1200;
 const RETRY_MS = 3000;
 const SAVE_TICK_MS = 10000;
+// Import mapping polling: the server maps with up to two model calls over an
+// 80k-char payload (schedule-then-poll, the resume build's contract), so the
+// budget is minutes, not seconds.
+const IMPORT_POLL_MS = 2000;
+const IMPORT_POLL_TIMEOUT_MS = 180_000;
 const PREVIEW_KEY = "iw:resume:preview";
 const PREVIEW_EVENT = "iw:resume:preview-toggle";
 
@@ -104,7 +115,10 @@ type ResumeImportState =
   | { status: "idle" }
   | { status: "parsing"; filename: string }
   | { status: "review"; filename: string; preview: ImportPreview }
+  | { status: "applying"; filename: string }
   | { status: "error"; message: string };
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parse stored JSON defensively. saveProfile already validates JSON
@@ -382,21 +396,44 @@ export function ProfileEditor(props: {
       if (typeof uploaded?.storageId !== "string" || !uploaded.storageId) {
         throw new Error("Convex accepted the resume upload but returned no storage ID.");
       }
-      const result = await finishResumeImport(
-        uploaded.storageId,
-        file.name,
-        begin.contentType
-      );
-      if (result.ok) {
-        setImportState({
-          status: "review",
-          filename: result.filename,
-          preview: result.preview,
-        });
-      } else {
-        setImportState({ status: "error", message: result.error });
+      const started = await startResumeImport(uploaded.storageId, file.name);
+      if (!started.ok) throw new Error(started.error);
+      // The claim scheduled the mapping server-side; poll for its outcome
+      // (the add-URL dialog's schedule-then-poll shape). A rejected poll is
+      // treated as transient - the timeout is the arbiter.
+      const deadline = Date.now() + IMPORT_POLL_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await sleep(IMPORT_POLL_MS);
+        let status: Awaited<ReturnType<typeof pollResumeImport>>;
+        try {
+          status = await pollResumeImport();
+        } catch {
+          continue;
+        }
+        if (status.status === "ready") {
+          setImportState({
+            status: "review",
+            filename: status.filename,
+            preview: status.preview,
+          });
+          return;
+        }
+        if (status.status === "failed") {
+          setImportState({ status: "error", message: status.error });
+          return;
+        }
+        if (status.status === "none") {
+          throw new Error("This import was cancelled. Upload the resume again.");
+        }
       }
+      throw new Error(
+        "Timed out waiting for the resume mapping after 3 minutes. The upload was discarded - try again, or add your own API key in Settings if the shared model is slow today."
+      );
     } catch (error) {
+      // A claimed upload must not outlive a failed import: the server sweeps
+      // abandoned claims eventually, but the common failures (transport error,
+      // the timeout above) are cleaned up right here.
+      void discardResumeImport();
       setImportState({
         status: "error",
         message:
@@ -407,11 +444,52 @@ export function ProfileEditor(props: {
     }
   };
 
-  const handleConfirmImport = () => {
+  const handleCancelImport = () => {
+    // Cancel and dismiss also drop the server-side pending record (its blob is
+    // already gone once mapping settled, but the record should not linger).
+    void discardResumeImport();
+    setImportState({ status: "idle" });
+  };
+
+  const handleConfirmImport = async () => {
     if (importState.status !== "review") return;
     const imported = importState.preview.profile;
+    // The pre-import profile, held for the Undo toast (the delete-variant
+    // pattern) while the server parks its own copy in profileBackups.
+    const previous = profile;
+    setImportState({ status: "applying", filename: importState.filename });
+    // Ride the same save queue attemptSave uses so an autosave already in
+    // flight cannot land AFTER the import and quietly resurrect the old
+    // profile; bumping the generation mutes that save's state callbacks.
+    saveGeneration.current++;
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     pendingRetry.current = null;
+    const request = saveQueue.current
+      .catch(() => undefined)
+      .then(() => confirmResumeImport(JSON.stringify(imported, null, 2)));
+    saveQueue.current = request.then(
+      () => undefined,
+      () => undefined
+    );
+    let res: Awaited<typeof request>;
+    try {
+      res = await request;
+    } catch (error) {
+      res = {
+        ok: false,
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : "Couldn't apply the import.",
+      };
+    }
+    if (!res.ok) {
+      toast.error(res.error);
+      // Back to the review card - the preview is still valid, nothing was
+      // overwritten, and the user can retry or cancel.
+      setImportState(importState);
+      return;
+    }
     hasObservedProfile.current = true;
     skipNextDebouncedSave.current = true;
     setProfile(imported);
@@ -423,7 +501,28 @@ export function ProfileEditor(props: {
     setOpenEntries({});
     setVariant("base");
     setImportState({ status: "idle" });
-    attemptSave(imported, false);
+    setLastSavedAt(Date.now());
+    setSaveState("idle");
+    // No Undo when the import merely filled an empty profile - matching the
+    // review card, which only warned about replacement when there was content
+    // to lose. (The server-side backup exists either way.)
+    if (previous && !isProfileEmpty(previous)) {
+      toast("Profile replaced", {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            // Restoring via setProfile lets the normal debounced autosave
+            // persist it, exactly like the delete-variant Undo.
+            setProfile(previous);
+            setActiveId(
+              previous.sections.find((s) => s.kind !== "skills")?.id ??
+                previous.sections[0]?.id ??
+                null
+            );
+          },
+        },
+      });
+    }
   };
 
   const variants = profile ? variantsOf(profile) : ["base"];
@@ -660,8 +759,9 @@ export function ProfileEditor(props: {
         />
         <ResumeImportStatus
           state={importState}
-          onConfirm={handleConfirmImport}
-          onCancel={() => setImportState({ status: "idle" })}
+          current={null}
+          onConfirm={() => void handleConfirmImport()}
+          onCancel={handleCancelImport}
         />
       </div>
     );
@@ -807,8 +907,9 @@ export function ProfileEditor(props: {
 
       <ResumeImportStatus
         state={importState}
-        onConfirm={handleConfirmImport}
-        onCancel={() => setImportState({ status: "idle" })}
+        current={profile && !isProfileEmpty(profile) ? profileCounts(profile) : null}
+        onConfirm={() => void handleConfirmImport()}
+        onCancel={handleCancelImport}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
@@ -944,24 +1045,37 @@ function ResumeImportButton({
   );
 }
 
+// Pluralize a count for the replace warning ("1 entry", "12 entries").
+function countNoun(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function ResumeImportStatus({
   state,
+  current,
   onConfirm,
   onCancel,
 }: {
   state: ResumeImportState;
+  /** Counts for the profile being replaced; null when there is nothing worth
+   *  warning about (no profile, or an empty scaffold). */
+  current: ProfileCounts | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   if (state.status === "idle") return null;
-  if (state.status === "parsing") {
+  if (state.status === "parsing" || state.status === "applying") {
     return (
       <div className={cn(CARD, "mb-3 flex items-center gap-3")}>
         <Spinner />
         <div>
-          <p className="text-[13px] font-semibold text-ink">Parsing resume</p>
+          <p className="text-[13px] font-semibold text-ink">
+            {state.status === "parsing" ? "Parsing resume" : "Applying import"}
+          </p>
           <p className="text-[12px] text-ink-2">
-            Extracting and mapping {state.filename}
+            {state.status === "parsing"
+              ? `Extracting and mapping ${state.filename}`
+              : `Backing up your current profile and saving ${state.filename}`}
           </p>
         </div>
       </div>
@@ -1031,16 +1145,34 @@ function ResumeImportStatus({
         )}
       </div>
 
-      <p className="mt-3 text-[11.5px] text-ink-2">
-        Nothing changes until you confirm this import.
-      </p>
+      {current ? (
+        (() => {
+          const imported = profileCounts(state.preview.profile);
+          return (
+            <p className="mt-3 text-[11.5px] font-semibold text-amber">
+              Importing REPLACES your current profile ({countNoun(current.sections, "section")},{" "}
+              {countNoun(current.entries, "entry", "entries")},{" "}
+              {countNoun(current.bullets, "bullet")}) with the imported content (
+              {countNoun(imported.sections, "section")},{" "}
+              {countNoun(imported.entries, "entry", "entries")},{" "}
+              {countNoun(imported.bullets, "bullet")}). A backup of the current profile is
+              saved first, and you can undo right after.
+            </p>
+          );
+        })()
+      ) : (
+        <p className="mt-3 text-[11.5px] text-ink-2">
+          This will fill in your empty profile. Nothing changes until you confirm this
+          import.
+        </p>
+      )}
       <div className="mt-3 flex gap-2">
         <button
           type="button"
           onClick={onConfirm}
           className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-semibold text-accent"
         >
-          Import
+          {current ? "Replace profile" : "Import"}
         </button>
         <button
           type="button"

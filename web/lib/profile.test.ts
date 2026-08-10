@@ -3,7 +3,9 @@ import {
   blankEntry,
   blankProfile,
   bulletsFor,
+  isProfileEmpty,
   outlineLines,
+  profileCounts,
   variantsOf,
   visibleEntries,
   type Entry,
@@ -157,5 +159,47 @@ describe("blankEntry and blankProfile", () => {
       "sec-skills",
     ]);
     expect(p.sections.map((s) => s.entries.length)).toEqual([0, 0, 0, 0, 0]);
+  });
+});
+
+describe("profileCounts and isProfileEmpty (import review scale)", () => {
+  const filled: ProfileV2 = {
+    version: 2,
+    header: { name: "Alex Example", contact_line: "alex@example.com" },
+    skills: { languages: ["C"] },
+    sections: [
+      {
+        id: "s-work",
+        title: "Work Experience",
+        kind: "experience",
+        entries: [
+          entry({
+            id: "e-a",
+            heading: "Acme",
+            // Variant bullets count too: they are exactly the hand-written
+            // work an import would destroy.
+            bullets: { base: ["a", "b"], swe: ["c"] },
+          }),
+          entry({ id: "e-b", heading: "Beta", bullets: { base: ["d"] } }),
+        ],
+      },
+      { id: "s-skills", title: "Skills", kind: "skills", entries: [] },
+    ],
+  };
+
+  it("counts sections, entries, and bullets across every variant", () => {
+    expect(profileCounts(filled)).toEqual({ sections: 2, entries: 2, bullets: 4 });
+  });
+
+  it("treats the blank scaffold as empty despite its five sections", () => {
+    expect(isProfileEmpty(blankProfile())).toBe(true);
+  });
+
+  it("a profile with any entry, skill, or header text is not empty", () => {
+    expect(isProfileEmpty(filled)).toBe(false);
+    const headerOnly = { ...blankProfile(), header: { name: "Alex", contact_line: "" } };
+    expect(isProfileEmpty(headerOnly)).toBe(false);
+    const skillsOnly = { ...blankProfile(), skills: { tools: ["Docker"] } };
+    expect(isProfileEmpty(skillsOnly)).toBe(false);
   });
 });

@@ -263,7 +263,6 @@ export function visibleEntries(section: Section, variant: Variant): Entry[] {
 }
 
 /** Every variant key that appears anywhere, "base" first. */
-/** Every variant key that appears anywhere, "base" first. */
 export function variantsOf(profile: ProfileV2): Variant[] {
   const out: Variant[] = ["base"];
   for (const v of profile.variants ?? []) if (v !== "base" && !out.includes(v)) out.push(v);
@@ -271,4 +270,47 @@ export function variantsOf(profile: ProfileV2): Variant[] {
     for (const e of s.entries)
       for (const k of Object.keys(e.bullets)) if (!out.includes(k)) out.push(k);
   return out;
+}
+
+// --- import review helpers ---------------------------------------------------
+
+export type ProfileCounts = { sections: number; entries: number; bullets: number };
+
+/**
+ * How much content a profile carries - the scale the review card shows before
+ * an import replaces it, so "replace" is a number, not a vibe. Bullets are
+ * counted across EVERY variant, not just base: a variant-only bullet is
+ * exactly the kind of hand-written work an import would silently destroy.
+ */
+export function profileCounts(p: ProfileV2): ProfileCounts {
+  let entries = 0;
+  let bullets = 0;
+  for (const s of p.sections) {
+    entries += s.entries.length;
+    for (const e of s.entries) {
+      for (const arr of Object.values(e.bullets)) bullets += arr.length;
+    }
+  }
+  return { sections: p.sections.length, entries, bullets };
+}
+
+/**
+ * True when replacing this profile loses nothing worth a warning: no entries,
+ * no bullets, no skills, and an untouched header. The blank scaffold from
+ * blankProfile counts as empty even though it carries five sections.
+ */
+export function isProfileEmpty(p: ProfileV2): boolean {
+  const counts = profileCounts(p);
+  const skillItems =
+    (p.skills.coursework?.length ?? 0) +
+    (p.skills.languages?.length ?? 0) +
+    (p.skills.tools?.length ?? 0) +
+    (p.skills.certifications?.length ?? 0);
+  return (
+    counts.entries === 0 &&
+    counts.bullets === 0 &&
+    skillItems === 0 &&
+    !p.header.name.trim() &&
+    !p.header.contact_line.trim()
+  );
 }

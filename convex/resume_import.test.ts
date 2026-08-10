@@ -13,6 +13,7 @@ import {
   extractDocxXml,
   extractResume,
   mapExtractionWithModel,
+  meteredInvoke,
   resumeImportFormat,
   validateModelOutput,
   validateProfileV2,
@@ -532,5 +533,69 @@ describe("resume import prompt and repair", () => {
       "after one repair attempt",
     );
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("resume import operator metering (meteredInvoke)", () => {
+  test("each call that returned text is charged, including the repair", async () => {
+    const charge = vi.fn().mockResolvedValue({ allowed: true, used: 1 });
+    const invoke = vi
+      .fn<(prompt: { system: string; user: string }) => Promise<string>>()
+      .mockResolvedValueOnce("not json")
+      .mockResolvedValueOnce(
+        modelResponse([{ lineId: "line-0001", targetPaths: ["/header/name"] }]),
+      );
+
+    const result = await mapExtractionWithModel(
+      extracted("Alex Example"),
+      meteredInvoke(invoke, charge),
+    );
+
+    expect(result.profile.header.name).toBe("Alex Example");
+    expect(charge).toHaveBeenCalledTimes(2);
+  });
+
+  test("an import that ultimately fails still charges every productive call", async () => {
+    const charge = vi.fn().mockResolvedValue({ allowed: true, used: 2 });
+    const invoke = vi.fn().mockResolvedValue("still not json");
+
+    await expect(
+      mapExtractionWithModel(extracted("Alex Example"), meteredInvoke(invoke, charge)),
+    ).rejects.toThrow("after one repair attempt");
+
+    // Two calls burned real tokens, so both count against the allowance even
+    // though the user never got an import out of them.
+    expect(charge).toHaveBeenCalledTimes(2);
+  });
+
+  test("a model transport failure is never charged", async () => {
+    const charge = vi.fn();
+    const invoke = vi.fn().mockRejectedValue(new Error("network unavailable"));
+
+    await expect(
+      mapExtractionWithModel(extracted("Alex Example"), meteredInvoke(invoke, charge)),
+    ).rejects.toThrow("network unavailable");
+
+    expect(charge).not.toHaveBeenCalled();
+  });
+
+  test("a charge failure never fails the import (cap-race safety)", async () => {
+    // The charge blowing up stands in for both a real mutation failure and the
+    // cap racing shut between the pre-read and the charge: in either case the
+    // model call already happened, so the finished work must be returned.
+    const charge = vi.fn().mockRejectedValue(new Error("charge unavailable"));
+    const invoke = vi
+      .fn<(prompt: { system: string; user: string }) => Promise<string>>()
+      .mockResolvedValue(
+        modelResponse([{ lineId: "line-0001", targetPaths: ["/header/name"] }]),
+      );
+
+    const result = await mapExtractionWithModel(
+      extracted("Alex Example"),
+      meteredInvoke(invoke, charge),
+    );
+
+    expect(result.profile.header.name).toBe("Alex Example");
+    expect(charge).toHaveBeenCalledTimes(1);
   });
 });

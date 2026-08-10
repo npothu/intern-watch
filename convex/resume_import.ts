@@ -837,6 +837,28 @@ export function buildImportPrompt(
 
 export type ImportModelPrompt = { system: string; user: string };
 
+// Meter model calls without ever letting the meter decide the outcome. Each
+// call that actually returned text is charged - the repair call too, and calls
+// whose output later fails validation - because the tokens are spent either
+// way; charging anything less lets a resume the model cannot map burn calls
+// forever while the cap counter never moves. A charge failure is logged and
+// swallowed (the runBuild precedent): the allowance is bookkeeping, and
+// bookkeeping must never turn already-paid-for work into an error.
+export function meteredInvoke(
+  invoke: (prompt: ImportModelPrompt) => Promise<string>,
+  charge: () => Promise<unknown>,
+): (prompt: ImportModelPrompt) => Promise<string> {
+  return async (prompt) => {
+    const text = await invoke(prompt);
+    try {
+      await charge();
+    } catch (error) {
+      console.warn("resume import allowance charge failed", error);
+    }
+    return text;
+  };
+}
+
 export async function mapExtractionWithModel(
   extraction: ExtractedResume,
   invoke: (prompt: ImportModelPrompt) => Promise<string>,

@@ -213,12 +213,38 @@ export default defineSchema({
   // upgraded to the v2 (versioned, section-list) shape. The v2 migration is
   // deliberately one-shot and lossy-looking - v1's `Record<name, X>` groups
   // become ordered arrays - so the original JSON is parked here rather than
-  // thrown away. Nothing reads this in normal operation; it exists so a bad
-  // migration is recoverable by hand instead of unrecoverable.
+  // thrown away. Also written (fromVersion 2) by applyProfileImport just
+  // before a confirmed resume import replaces the stored profile, so an
+  // import that destroyed hand-written work is recoverable even after the
+  // Undo toast is gone. Nothing reads this in normal operation; it exists so
+  // a bad migration or import is recoverable by hand instead of unrecoverable.
   profileBackups: defineTable({
     user: v.string(),
-    fromVersion: v.number(),           // 1
+    fromVersion: v.number(),           // 1 = v1 migration, 2 = pre-import snapshot
     data: v.string(),                  // the raw JSON string as it was stored
+    createdAt: v.number(),
+  })
+    .index("by_user", ["user"]),
+
+  // One in-flight (or just-finished) resume import per user. A row is created
+  // when the browser's direct-to-storage upload is claimed, and it is the ONLY
+  // place the import pipeline ever reads a storage id from: the id a client
+  // reports at claim time is recorded under the signed-in user, and the
+  // mapping action and every deletion work from this record, never from a
+  // client argument. `status` is "mapping" | "ready" | "failed"; `preview`
+  // holds the validated import serialized as a JSON string (profile JSON can
+  // carry user-authored keys - same non-ASCII field-name constraint as
+  // profiles.data). `storageId` is cleared once the temporary blob is deleted,
+  // so the opportunistic sweep can tell "blob still pending" from "already
+  // cleaned up".
+  profileImports: defineTable({
+    user: v.string(),
+    storageId: v.optional(v.id("_storage")),
+    filename: v.string(),
+    contentType: v.string(),
+    status: v.string(),
+    preview: v.optional(v.string()),
+    error: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_user", ["user"]),
