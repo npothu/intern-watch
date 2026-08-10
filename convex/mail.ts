@@ -118,6 +118,22 @@ export const getOAuthConfig = query({
         !process.env.GMAIL_CLIENT_SECRET && "GMAIL_CLIENT_SECRET",
         !process.env.CREDENTIALS_KEY && "CREDENTIALS_KEY",
       ].filter((x): x is string => typeof x === "string"),
+      // Presence of EVERY var the wizard writes, reported from the deployment
+      // that actually stores them.
+      //
+      // This exists because the web server's own process.env is the wrong
+      // place to ask. The wizard writes all four of these to Convex, so
+      // reading them back from Next always returned false - which made step 6
+      // render "Not set yet" after a successful save and invited the admin to
+      // regenerate MAIL_PUSH_TOKEN. That silently invalidates the token
+      // already embedded in the registered Pub/Sub push URL, so every push
+      // then 403s and mail-sync dies with nothing in the UI saying so.
+      present: {
+        clientId: Boolean(process.env.GMAIL_CLIENT_ID),
+        clientSecret: Boolean(process.env.GMAIL_CLIENT_SECRET),
+        pushToken: Boolean(process.env.MAIL_PUSH_TOKEN),
+        pubsubTopic: Boolean(process.env.MAIL_PUBSUB_TOPIC),
+      },
     };
   },
 });
@@ -133,7 +149,14 @@ export const getMailAccount = query({
       .query("mailAccounts")
       .withIndex("by_user", (q) => q.eq("user", user))
       .first();
-    return row ? { email: row.email, lastError: row.lastError ?? null } : null;
+    return row
+      ? {
+          email: row.email,
+          lastError: row.lastError ?? null,
+          // Feeds the Connections card's "Last sync" line.
+          lastSyncAt: row.lastSyncAt ?? null,
+        }
+      : null;
   },
 });
 

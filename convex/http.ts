@@ -101,14 +101,26 @@ http.route({
     // whose catch called this same helper and threw identically. The user ended
     // a successful consent flow on a bare 500 and retried, burning a nonce and
     // re-storing the token each time.
-    const back = (params: Record<string, string>) => {
+    // Never throws. state.origin comes from APP_ORIGIN, a free-text env var, so
+    // a value like "jobs.example.com" with no scheme makes `new URL` throw -
+    // and it threw AFTER the mailbox was connected, inside the try whose catch
+    // called this same helper and threw identically, ending a successful
+    // consent flow on a bare 500.
+    //
+    // `connected` says whether the mailbox actually got linked before we lost
+    // the ability to redirect. Without it this page told a user who pressed
+    // Cancel that their mailbox "may have been connected", which is both wrong
+    // and alarming.
+    const back = (params: Record<string, string>, connected = false) => {
       let target: URL;
       try {
         target = new URL("/settings/connections/google", state.origin);
       } catch {
         return new Response(
-          "Your mailbox may have been connected, but this deployment's APP_ORIGIN is not a valid URL (it needs the https:// prefix), so you could not be redirected back. Check Settings.",
-          { status: 200, headers: { "Content-Type": "text/plain" } },
+          connected
+            ? "Your mailbox was connected, but this deployment's APP_ORIGIN is not a valid URL (it needs an https:// prefix), so you could not be sent back automatically. Open Settings to confirm."
+            : "Google sign-in did not complete, and this deployment's APP_ORIGIN is not a valid URL (it needs an https:// prefix), so you could not be sent back automatically. Open Settings to try again.",
+          { status: 500, headers: { "Content-Type": "text/plain" } },
         );
       }
       for (const [k, v] of Object.entries(params)) target.searchParams.set(k, v);
@@ -143,7 +155,9 @@ http.route({
         // state rather than rebuilt here - see oauth_state.ts.
         redirectUri: state.redirectUri,
       });
-      return back({ connected: email });
+      // Second argument: the mailbox IS linked at this point, so if the
+      // redirect itself fails the message must say so rather than imply doubt.
+      return back({ connected: email }, true);
     } catch (err) {
       // The real reason (bad client secret, mismatched redirect URI, revoked
       // consent) is the only thing that makes this fixable, so it rides back to

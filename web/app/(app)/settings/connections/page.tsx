@@ -48,6 +48,10 @@ export default async function ConnectionsPage() {
           status: (mailAccount.lastError ? "error" : "ok") as "ok" | "error",
           label: mailAccount.email,
           lastError: mailAccount.lastError ?? undefined,
+          // The card's detail block renders "Last sync" from lastCheckedAt.
+          // Omitting it made a perfectly healthy mailbox read "Last sync:
+          // never" forever, which is worse than showing nothing.
+          lastCheckedAt: mailAccount.lastSyncAt ?? undefined,
         },
       ]
     : rows;
