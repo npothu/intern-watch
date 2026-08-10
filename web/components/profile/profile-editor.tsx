@@ -102,6 +102,10 @@ type ParseOutcome =
 
 type ImportPreview = {
   profile: ProfileV2;
+  /** Missing on previews persisted before semantic validation was introduced. */
+  semanticWarnings?: string[];
+  /** Missing on older persisted previews. */
+  partialMappedLines?: { id: string; text: string; droppedText: string }[];
   unmappedLines: { id: string; text: string }[];
   sections: {
     id: string;
@@ -1131,6 +1135,8 @@ function ResumeImportStatus({
       </div>
     );
   }
+  const semanticWarnings = state.preview.semanticWarnings ?? [];
+  const partialMappedLines = state.preview.partialMappedLines ?? [];
   return (
     <div className={cn(CARD, "mb-3")}>
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1159,24 +1165,63 @@ function ResumeImportStatus({
       </div>
 
       <div className="mt-3 border-t border-line pt-3">
-        {state.preview.unmappedLines.length === 0 ? (
+        {state.preview.unmappedLines.length === 0 &&
+        partialMappedLines.length === 0 &&
+        semanticWarnings.length === 0 ? (
           <p className="text-[12px] text-accent">
             Every nonblank source line was credibly mapped.
           </p>
         ) : (
-          <>
-            <p className="text-[12px] font-semibold text-amber">
-              {state.preview.unmappedLines.length} source{" "}
-              {state.preview.unmappedLines.length === 1 ? "line was" : "lines were"} not mapped
-            </p>
-            <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
-              {state.preview.unmappedLines.map((line) => (
-                <li key={line.id} className="text-[11.5px] text-ink-2">
-                  {line.text}
-                </li>
-              ))}
-            </ul>
-          </>
+          <div className="space-y-3">
+            {semanticWarnings.length > 0 && (
+              <div>
+                <p className="text-[12px] font-semibold text-amber">
+                  Review {semanticWarnings.length} semantic{" "}
+                  {semanticWarnings.length === 1 ? "warning" : "warnings"}
+                </p>
+                <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
+                  {semanticWarnings.map((warning, index) => (
+                    <li key={`${index}-${warning}`} className="text-[11.5px] text-ink-2">
+                      {warning}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {partialMappedLines.length > 0 && (
+              <div>
+                <p className="text-[12px] font-semibold text-amber">
+                  {partialMappedLines.length} source{" "}
+                  {partialMappedLines.length === 1
+                    ? "line was only partially mapped"
+                    : "lines were only partially mapped"}
+                </p>
+                <ul className="mt-2 max-h-36 space-y-2 overflow-y-auto rounded-md bg-chip p-2">
+                  {partialMappedLines.map((line) => (
+                    <li key={line.id} className="text-[11.5px] text-ink-2">
+                      <p>{line.text}</p>
+                      <p className="mt-0.5 text-amber">Not imported: {line.droppedText}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {state.preview.unmappedLines.length > 0 && (
+              <div>
+                <p className="text-[12px] font-semibold text-amber">
+                  {state.preview.unmappedLines.length} source{" "}
+                  {state.preview.unmappedLines.length === 1 ? "line was" : "lines were"} not mapped
+                </p>
+                <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
+                  {state.preview.unmappedLines.map((line) => (
+                    <li key={line.id} className="text-[11.5px] text-ink-2">
+                      {line.text}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

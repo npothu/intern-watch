@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
+  callModel,
   chooseLlm,
   DEFAULT_MODEL,
   effectiveProvider,
@@ -8,6 +9,7 @@ import {
   OPERATOR_MODEL,
   OPERATOR_PROVIDER,
   PROVIDERS,
+  resumeImportOutputTokens,
   SUGGESTED_MODELS,
 } from "./llm_providers";
 
@@ -141,5 +143,93 @@ describe("registry integrity", () => {
     expect(isProvider("gpt")).toBe(false);
     expect(isProvider(undefined)).toBe(false);
     expect(isProvider(null)).toBe(false);
+  });
+});
+
+describe("provider request budgets", () => {
+  test("the larger resume-import budget is scoped to Gemini", () => {
+    expect(resumeImportOutputTokens("gemini", "gemini-flash-lite-latest")).toBe(32_768);
+    expect(resumeImportOutputTokens("gemini", "custom-gemini-model")).toBeUndefined();
+    expect(resumeImportOutputTokens("anthropic", "claude-sonnet-5")).toBeUndefined();
+    expect(resumeImportOutputTokens("openai", "gpt-5.1")).toBeUndefined();
+    expect(
+      resumeImportOutputTokens("openrouter", "google/gemini-2.5-flash-lite"),
+    ).toBeUndefined();
+  });
+
+  test("a caller can raise Gemini's output budget for structured imports", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "{}" }] } }],
+        }),
+        { status: 200 },
+      ),
+    );
+    try {
+      await callModel("gemini", {
+        model: "gemini-flash-lite-latest",
+        system: "system",
+        user: "user",
+        apiKey: "test-key",
+        maxOutputTokens: 32_768,
+      });
+
+      const request = fetchMock.mock.calls[0][1];
+      const body = JSON.parse(String(request?.body)) as {
+        generationConfig: { maxOutputTokens: number };
+      };
+      expect(body.generationConfig.maxOutputTokens).toBe(32_768);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test.each([
+    [
+      "gemini" as const,
+      {
+        candidates: [
+          {
+            finishReason: "MAX_TOKENS",
+            content: { parts: [{ text: "{" }] },
+          },
+        ],
+      },
+    ],
+    [
+      "anthropic" as const,
+      {
+        stop_reason: "max_tokens",
+        content: [{ type: "text", text: "{" }],
+      },
+    ],
+    [
+      "openai" as const,
+      {
+        choices: [
+          {
+            finish_reason: "length",
+            message: { content: "{" },
+          },
+        ],
+      },
+    ],
+  ])("%s reports output truncation before JSON validation", async (provider, response) => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
+    try {
+      await expect(
+        callModel(provider, {
+          model: "test-model",
+          system: "system",
+          user: "user",
+          apiKey: "test-key",
+        }),
+      ).rejects.toThrow(/output|token|length/i);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

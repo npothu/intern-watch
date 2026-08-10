@@ -410,7 +410,15 @@ export async function putProfile(user: string, data: string): Promise<void> {
 
 export type ResumeImportPreview = {
   profile: ProfileV2;
-  mappings: { lineId: string; targetPaths: string[] }[];
+  mappings: {
+    lineId: string;
+    targetPaths: string[];
+    segmentMappings?: { segmentId: string; targetPaths: string[] }[];
+  }[];
+  /** Optional so previews persisted before semantic validation remain reviewable. */
+  semanticWarnings?: string[];
+  /** Optional so older persisted previews remain reviewable. */
+  partialMappedLines?: { id: string; text: string; droppedText: string }[];
   unmappedLines: { id: string; text: string }[];
   sections: {
     id: string;

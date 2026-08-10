@@ -34,6 +34,7 @@ import {
   effectiveProvider,
   llmNote,
   PROVIDER_LABEL,
+  resumeImportOutputTokens,
 } from "./llm_providers";
 import { bulletsFor, type ProfileV2, toV2 } from "./profile_schema";
 import {
@@ -485,6 +486,9 @@ export const runProfileImport = internalAction({
             system,
             user: userMsg,
             apiKey: choice.apiKey!,
+            // Gemini exposes a larger structured-output budget. Free-form
+            // custom models keep their conservative provider default.
+            maxOutputTokens: resumeImportOutputTokens(choice.provider, choice.model),
           });
         } catch (error) {
           throw new Error(

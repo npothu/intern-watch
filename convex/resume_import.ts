@@ -24,10 +24,19 @@ export type ExtractedRun = {
   url?: string;
 };
 
+export type ExtractedSegment = {
+  id: string;
+  text: string;
+  boundaryBefore: "start" | "tab" | "pipe";
+  rightAligned: boolean;
+  runs: ExtractedRun[];
+};
+
 export type ExtractedLine = {
   id: string;
   text: string;
   runs: ExtractedRun[];
+  segments: ExtractedSegment[];
   bold: boolean;
   italics: boolean;
   hasTab: boolean;
@@ -44,9 +53,15 @@ export type ExtractedResume = {
   lines: ExtractedLine[];
 };
 
+export type ImportSegmentMapping = {
+  segmentId: string;
+  targetPaths: string[];
+};
+
 export type ImportLineMapping = {
   lineId: string;
   targetPaths: string[];
+  segmentMappings?: ImportSegmentMapping[];
 };
 
 export type ImportSectionSummary = {
@@ -59,6 +74,7 @@ export type ImportSectionSummary = {
 export type ValidatedImport = {
   profile: ProfileV2;
   mappings: ImportLineMapping[];
+  semanticWarnings: string[];
   fullyMappedLines: { id: string; text: string }[];
   partialMappedLines: { id: string; text: string; droppedText: string }[];
   unmappedLines: { id: string; text: string }[];
@@ -147,6 +163,87 @@ function lineId(index: number): string {
   return `line-${String(index + 1).padStart(4, "0")}`;
 }
 
+function sliceRuns(
+  runs: ExtractedRun[],
+  start: number,
+  end: number,
+): ExtractedRun[] {
+  const sliced: ExtractedRun[] = [];
+  let offset = 0;
+  for (const run of runs) {
+    const runStart = offset;
+    const runEnd = offset + run.text.length;
+    offset = runEnd;
+    const overlapStart = Math.max(start, runStart);
+    const overlapEnd = Math.min(end, runEnd);
+    if (overlapStart >= overlapEnd) continue;
+    sliced.push({
+      ...run,
+      text: run.text.slice(overlapStart - runStart, overlapEnd - runStart),
+    });
+  }
+  return sliced;
+}
+
+function extractedSegments(
+  id: string,
+  runs: ExtractedRun[],
+  rightTab: boolean,
+): ExtractedSegment[] {
+  const text = runs.map((run) => run.text).join("");
+  const boundaries: { start: number; end: number; kind: "tab" | "pipe" }[] = [];
+  for (const match of text.matchAll(/\t+/gu)) {
+    boundaries.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      kind: "tab",
+    });
+  }
+  if (rightTab) {
+    for (const match of text.matchAll(/[ \u00a0]{3,}/gu)) {
+      boundaries.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        kind: "tab",
+      });
+    }
+  }
+  for (let index = 1; index < text.length - 1; index += 1) {
+    if (text[index] === "|") {
+      boundaries.push({ start: index, end: index + 1, kind: "pipe" });
+    }
+  }
+  boundaries.sort((left, right) => left.start - right.start);
+
+  const segments: ExtractedSegment[] = [];
+  let cursor = 0;
+  let boundaryBefore: ExtractedSegment["boundaryBefore"] = "start";
+  let inRightColumn = false;
+  for (const boundary of [
+    ...boundaries,
+    { start: text.length, end: text.length, kind: "pipe" as const },
+  ]) {
+    let start = cursor;
+    let end = boundary.start;
+    while (start < end && /\s/u.test(text[start])) start += 1;
+    while (end > start && /\s/u.test(text[end - 1])) end -= 1;
+    if (start < end) {
+      segments.push({
+        id: `${id}-segment-${String(segments.length + 1).padStart(4, "0")}`,
+        text: text.slice(start, end),
+        boundaryBefore,
+        rightAligned: rightTab && inRightColumn,
+        runs: sliceRuns(runs, start, end),
+      });
+    }
+    if (boundary.start === text.length) break;
+    cursor = boundary.end;
+    boundaryBefore = boundary.kind;
+    if (boundary.kind === "tab") inRightColumn = true;
+  }
+  return segments;
+}
+
 export function resumeImportFormat(
   filename: string,
   contentType: string,
@@ -183,17 +280,22 @@ export function resumeImportFormat(
 }
 
 function plainTextLines(text: string): ExtractedLine[] {
-  return text.split(/\r?\n/).map((value, index) => ({
-    id: lineId(index),
-    text: value,
-    runs: value ? [{ text: value, bold: false, italics: false }] : [],
-    bold: false,
-    italics: false,
-    hasTab: value.includes("\t"),
-    rightTab: false,
-    borderBottom: false,
-    bullet: /^\s*(?:[-*+]\s+|●\s*)/.test(value),
-  }));
+  return text.split(/\r?\n/).map((value, index) => {
+    const id = lineId(index);
+    const runs = value ? [{ text: value, bold: false, italics: false }] : [];
+    return {
+      id,
+      text: value,
+      runs,
+      segments: extractedSegments(id, runs, false),
+      bold: false,
+      italics: false,
+      hasTab: value.includes("\t"),
+      rightTab: false,
+      borderBottom: false,
+      bullet: /^\s*(?:[-*+]\s+|●\s*)/.test(value),
+    };
+  });
 }
 
 function propertyEnabled(xml: string, tag: "b" | "i"): boolean {
@@ -284,14 +386,17 @@ export function extractDocxXml(
     const indent = properties.match(/<w:ind\b[^>]*\/?\s*>/i)?.[0] ?? "";
     const indentLeft = numericAttribute(indent, "left");
     const hanging = numericAttribute(indent, "hanging");
+    const id = lineId(index);
+    const rightTab = /<w:tab\b[^>]*w:val\s*=\s*["']right["']/i.test(properties);
     return {
-      id: lineId(index),
+      id,
       text,
       runs,
+      segments: extractedSegments(id, runs, rightTab),
       bold: visibleRuns.length > 0 && visibleRuns.every((run) => run.bold),
       italics: visibleRuns.length > 0 && visibleRuns.every((run) => run.italics),
       hasTab: text.includes("\t"),
-      rightTab: /<w:tab\b[^>]*w:val\s*=\s*["']right["']/i.test(properties),
+      rightTab,
       borderBottom: /<w:pBdr\b[\s\S]*?<w:bottom\b/i.test(properties),
       bullet:
         /<w:numPr\b/i.test(properties) ||
@@ -662,13 +767,23 @@ function canonicalizeModelOutput(value: unknown): unknown {
   if (!isRecord(value) || !isRecord(value.profile)) return value;
   const pointerAliases = new Map<string, string>();
 
-  if (isRecord(value.profile.header) && Array.isArray(value.profile.header.links)) {
-    value.profile.header.links.forEach((link, index) => {
-      if (!isRecord(link) || link.text !== undefined || typeof link.label !== "string") return;
-      link.text = link.label;
-      delete link.label;
-      pointerAliases.set(`/header/links/${index}/label`, `/header/links/${index}/text`);
-    });
+  if (isRecord(value.profile.header)) {
+    if (value.profile.header.contact_line === null) {
+      value.profile.header.contact_line = "";
+    } else if (
+      Array.isArray(value.profile.header.contact_line) &&
+      value.profile.header.contact_line.every((item) => typeof item === "string")
+    ) {
+      value.profile.header.contact_line = value.profile.header.contact_line.join(" | ");
+    }
+    if (Array.isArray(value.profile.header.links)) {
+      value.profile.header.links.forEach((link, index) => {
+        if (!isRecord(link) || link.text !== undefined || typeof link.label !== "string") return;
+        link.text = link.label;
+        delete link.label;
+        pointerAliases.set(`/header/links/${index}/label`, `/header/links/${index}/text`);
+      });
+    }
   }
 
   if (isRecord(value.profile.skills)) {
@@ -713,7 +828,7 @@ function canonicalizeModelOutput(value: unknown): unknown {
   if (Array.isArray(value.mappings)) {
     value.mappings.forEach((mapping) => {
       if (!isRecord(mapping) || !Array.isArray(mapping.targetPaths)) return;
-      mapping.targetPaths = mapping.targetPaths.map((target) => {
+      const canonicalPointer = (target: unknown) => {
         if (typeof target !== "string") return target;
         const relativeTarget = target.startsWith("/profile/") ? target.slice(8) : target;
         for (const [alias, canonical] of pointerAliases) {
@@ -722,7 +837,16 @@ function canonicalizeModelOutput(value: unknown): unknown {
           }
         }
         return relativeTarget;
-      });
+      };
+      mapping.targetPaths = mapping.targetPaths.map(canonicalPointer);
+      if (Array.isArray(mapping.segmentMappings)) {
+        mapping.segmentMappings.forEach((segmentMapping) => {
+          if (!isRecord(segmentMapping) || !Array.isArray(segmentMapping.targetPaths)) {
+            return;
+          }
+          segmentMapping.targetPaths = segmentMapping.targetPaths.map(canonicalPointer);
+        });
+      }
     });
   }
   return value;
@@ -787,9 +911,297 @@ function validJsonPointer(pointer: string): boolean {
   return pointer.startsWith("/") && !/~(?![01])/u.test(pointer);
 }
 
+function validateMappingTargetPaths(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is string[] {
+  if (!stringArray(value, path, errors)) return false;
+  if (value.length === 0) errors.push(`${path} must not be empty`);
+  if (new Set(value).size !== value.length) {
+    errors.push(`${path} must not contain duplicates`);
+  }
+  value.forEach((pointer, index) => {
+    if (!pointer.trim()) {
+      errors.push(`${path}[${index}] must not be empty`);
+    } else if (!validJsonPointer(pointer)) {
+      errors.push(`${path}[${index}] must be an RFC 6901 JSON pointer`);
+    }
+  });
+  return true;
+}
+
+function filterImportMappings(
+  mappings: ImportLineMapping[],
+  keep: (pointer: string) => boolean,
+): ImportLineMapping[] {
+  return mappings.flatMap((mapping) => {
+    const targetPaths = mapping.targetPaths.filter(keep);
+    const segmentMappings = mapping.segmentMappings?.flatMap((segmentMapping) => {
+      const segmentTargetPaths = segmentMapping.targetPaths.filter(keep);
+      return segmentTargetPaths.length > 0
+        ? [{ ...segmentMapping, targetPaths: segmentTargetPaths }]
+        : [];
+    });
+    return targetPaths.length > 0 || (segmentMappings?.length ?? 0) > 0
+      ? [
+          {
+            ...mapping,
+            targetPaths,
+            ...(mapping.segmentMappings !== undefined ? { segmentMappings } : {}),
+          },
+        ]
+      : [];
+  });
+}
+
 function sectionCount(profile: ProfileV2, section: Section): number {
   if (section.kind !== "skills") return section.entries.length;
   return Object.values(profile.skills).reduce((count, items) => count + (items?.length ?? 0), 0);
+}
+
+function layoutParts(value: string): string[] {
+  return value
+    .split(/[|\t]/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function looksLikeLocation(value: string): boolean {
+  const text = value.trim();
+  return (
+    /^(?:remote|hybrid|on[- ]site)$/iu.test(text) ||
+    /^[^,|\t]{2,},\s*[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?(?:\s*\((?:remote|hybrid|on[- ]site)\))?$/iu.test(
+      text,
+    )
+  );
+}
+
+function looksLikeStandaloneDate(value: string): boolean {
+  const text = value.trim();
+  const hasYear = /\b(?:19|20)\d{2}\b/u.test(text);
+  const hasEndpoint = /\b(?:present|current)\b/iu.test(text);
+  const hasRange = /(?:-|\u2013|\u2014|\bto\b|\bthrough\b|\buntil\b)/iu.test(text);
+  if (!hasYear && !hasEndpoint && !hasRange) return false;
+  const residue = text
+    .replace(
+      /\b(?:spring|summer|fall|autumn|winter|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|present|current|to|through|until)\b/giu,
+      " ",
+    )
+    .replace(/\b(?:19|20)\d{2}\b/gu, " ")
+    .replace(/[\d\s.,/'()\-\u2013\u2014]+/gu, "");
+  return !/\p{L}/u.test(residue);
+}
+
+function looksLikeExplicitList(value: string): boolean {
+  return value.split(",").filter((item) => item.trim()).length >= 2;
+}
+
+function normalizedContent(value: string): string {
+  return contentTokens(value)
+    .map((token) => token.normalized)
+    .join(" ");
+}
+
+function credibleSemanticSourceLine(
+  profile: ProfileV2,
+  line: ExtractedLine,
+  mapping: ImportLineMapping,
+  pointerRoot: string,
+): boolean {
+  const semanticField = new RegExp(
+    `^${pointerRoot}/(?:heading|subheading|location|date|tech)(?:/|$)`,
+    "u",
+  );
+  const paths = [
+    ...mapping.targetPaths,
+    ...(mapping.segmentMappings?.flatMap((item) => item.targetPaths) ?? []),
+  ].filter((pointer) => semanticField.test(pointer));
+  const targets = paths
+    .flatMap((pointer) => stringLeaves(resolvePointer(profile, pointer)))
+    .map(normalizedContent)
+    .filter(Boolean);
+  if (targets.length === 0) return false;
+  return (line.segments ?? []).some((segment) => {
+    const source = normalizedContent(segment.text);
+    return (
+      source.length > 0 &&
+      targets.some((target) => source === target || source.includes(target) || target.includes(source))
+    );
+  });
+}
+
+function semanticErrors(
+  profile: ProfileV2,
+  extraction: ExtractedResume,
+  mappings: ImportLineMapping[],
+): string[] {
+  const errors: string[] = [];
+  profile.sections.forEach((section, sectionIndex) => {
+    section.entries.forEach((entry, entryIndex) => {
+      const path = `profile.sections[${sectionIndex}].entries[${entryIndex}]`;
+      const pointerRoot = `/sections/${sectionIndex}/entries/${entryIndex}`;
+      const sourceLines = mappings.flatMap((mapping) => {
+        const line = extraction.lines.find((item) => item.id === mapping.lineId);
+        return line && credibleSemanticSourceLine(profile, line, mapping, pointerRoot)
+          ? [line]
+          : [];
+      });
+      const structuredSourceLines = sourceLines.filter(
+        (line) => !line.bullet && (line.segments?.length ?? 0) > 1,
+      );
+      const headingParts = layoutParts(entry.heading);
+      const subheadingParts = layoutParts(entry.subheading ?? "");
+      if (
+        headingParts.length > 1 &&
+        headingParts.slice(1).some(looksLikeStandaloneDate)
+      ) {
+        errors.push(
+          `${path} ${section.kind} date is embedded in heading; put dates only in date`,
+        );
+      }
+      if (
+        subheadingParts.length > 1 &&
+        subheadingParts.slice(1).some(looksLikeStandaloneDate)
+      ) {
+        errors.push(
+          `${path} ${section.kind} date is embedded in subheading; put dates only in date`,
+        );
+      }
+      if (section.kind === "projects") {
+        const sourceSegments = structuredSourceLines.flatMap(
+          (line) => line.segments ?? [],
+        );
+        const techSegment = sourceSegments.find(
+          (segment) =>
+            segment.boundaryBefore !== "start" &&
+            looksLikeExplicitList(segment.text) &&
+            !looksLikeStandaloneDate(segment.text) &&
+            !looksLikeLocation(segment.text),
+        );
+        const dateSegment = sourceSegments.find((segment) =>
+          looksLikeStandaloneDate(segment.text),
+        );
+        if (techSegment && (entry.tech?.length ?? 0) === 0) {
+          errors.push(
+            `${path} project tech is missing even though source segment ${techSegment.id} contains an explicit list`,
+          );
+        }
+        if (dateSegment && !entry.date.trim()) {
+          errors.push(
+            `${path} project date is missing even though source segment ${dateSegment.id} contains an explicit date`,
+          );
+        }
+        if (
+          headingParts.length > 1 &&
+          headingParts.slice(1).some(looksLikeExplicitList) &&
+          (entry.tech?.length ?? 0) === 0
+        ) {
+          errors.push(
+            `${path} project heading contains an explicit technology list; put the project name in heading and the list items in tech`,
+          );
+        }
+        return;
+      }
+      if (section.kind !== "experience") return;
+      const sourceSegments = structuredSourceLines.flatMap(
+        (line) => line.segments ?? [],
+      );
+      const locationSegment = sourceSegments.find((segment) =>
+        looksLikeLocation(segment.text),
+      );
+      const dateSegment = sourceSegments.find((segment) =>
+        looksLikeStandaloneDate(segment.text),
+      );
+      const normalizedHeading = normalizedContent(entry.heading);
+      const roleSegment = structuredSourceLines
+        .filter((line) =>
+          (line.segments ?? []).some((segment) => looksLikeStandaloneDate(segment.text)),
+        )
+        .flatMap((line) => line.segments ?? [])
+        .find(
+          (segment) =>
+            !looksLikeStandaloneDate(segment.text) &&
+            !looksLikeLocation(segment.text) &&
+            !normalizedHeading.includes(normalizedContent(segment.text)),
+        );
+      if (locationSegment && !entry.location?.trim()) {
+        errors.push(
+          `${path} experience location is missing even though source segment ${locationSegment.id} contains an explicit location`,
+        );
+      }
+      if (roleSegment && !entry.subheading?.trim()) {
+        errors.push(
+          `${path} experience role is missing even though source segment ${roleSegment.id} contains the role beside a date`,
+        );
+      }
+      if (dateSegment && !entry.date.trim()) {
+        errors.push(
+          `${path} experience date is missing even though source segment ${dateSegment.id} contains an explicit date`,
+        );
+      }
+      if (headingParts.length > 1 && headingParts.slice(1).some(looksLikeLocation)) {
+        errors.push(
+          `${path} experience heading contains a location column; put the organization in heading and the location in location`,
+        );
+      } else if (
+        headingParts.length > 1 &&
+        !headingParts.slice(1).some(looksLikeStandaloneDate)
+      ) {
+        errors.push(
+          `${path} experience heading contains unsplit layout columns; keep only the organization in heading`,
+        );
+      }
+      const dateParts = layoutParts(entry.date);
+      if (
+        dateParts.length > 1 &&
+        dateParts.some(looksLikeStandaloneDate) &&
+        dateParts.some((part) => !looksLikeStandaloneDate(part))
+      ) {
+        errors.push(
+          `${path} experience date contains role text; put the role in subheading and only the date in date`,
+        );
+      }
+    });
+  });
+  return errors;
+}
+
+function semanticWarnings(profile: ProfileV2): string[] {
+  const warnings: string[] = [];
+  profile.sections.forEach((section) => {
+    section.entries.forEach((entry, entryIndex) => {
+      if (section.kind === "experience") {
+        if (
+          !entry.location?.trim() &&
+          /,\s*[^,]+,\s*[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?$/u.test(entry.heading)
+        ) {
+          warnings.push(
+            `Experience entry ${entryIndex + 1} heading may include a location; verify heading and location before confirming`,
+          );
+        }
+      }
+      if (
+        layoutParts(entry.heading).length === 1 &&
+        looksLikeStandaloneDate(entry.heading) &&
+        !entry.date.trim()
+      ) {
+        warnings.push(
+          `${section.title} entry ${entryIndex + 1} heading may include a date; verify heading and date before confirming`,
+        );
+      }
+      if (
+        section.kind === "projects" &&
+        (entry.tech?.length ?? 0) === 0 &&
+        entry.heading.split(",").filter((item) => item.trim()).length >= 3
+      ) {
+        warnings.push(
+          `Project entry ${entryIndex + 1} heading may include a technology list; verify heading and tech before confirming`,
+        );
+      }
+    });
+  });
+  return warnings;
 }
 
 export function validateModelOutput(
@@ -810,6 +1222,11 @@ export function validateModelOutput(
 
   const mappings: ImportLineMapping[] = [];
   const validLineIds = new Set(extraction.lines.map((line) => line.id));
+  const segmentLineIds = new Map(
+    extraction.lines.flatMap((line) =>
+      (line.segments ?? []).map((segment) => [segment.id, line.id] as const),
+    ),
+  );
   if (!Array.isArray(parsed.mappings)) {
     errors.push("response.mappings must be an array");
   } else {
@@ -820,36 +1237,87 @@ export function validateModelOutput(
         errors.push(`${path} must be an object`);
         return;
       }
-      unknownKeys(mapping, ["lineId", "targetPaths"], path, errors);
+      unknownKeys(mapping, ["lineId", "targetPaths", "segmentMappings"], path, errors);
       if (!requireString(mapping.lineId, `${path}.lineId`, errors, true)) return;
       if (!validLineIds.has(mapping.lineId)) errors.push(`${path}.lineId does not exist in the extraction`);
       if (seen.has(mapping.lineId)) errors.push(`${path}.lineId is duplicated`);
       seen.add(mapping.lineId);
-      if (!stringArray(mapping.targetPaths, `${path}.targetPaths`, errors)) return;
-      if (mapping.targetPaths.length === 0) errors.push(`${path}.targetPaths must not be empty`);
-      const uniqueTargets = new Set(mapping.targetPaths);
-      if (uniqueTargets.size !== mapping.targetPaths.length) {
-        errors.push(`${path}.targetPaths must not contain duplicates`);
+      if (!validateMappingTargetPaths(mapping.targetPaths, `${path}.targetPaths`, errors)) {
+        return;
       }
-      mapping.targetPaths.forEach((pointer, pointerIndex) => {
-        if (!pointer.trim()) {
-          errors.push(`${path}.targetPaths[${pointerIndex}] must not be empty`);
-        } else if (!validJsonPointer(pointer)) {
-          errors.push(`${path}.targetPaths[${pointerIndex}] must be an RFC 6901 JSON pointer`);
+      const segmentMappings: ImportSegmentMapping[] = [];
+      if (mapping.segmentMappings !== undefined) {
+        if (!Array.isArray(mapping.segmentMappings)) {
+          errors.push(`${path}.segmentMappings must be an array`);
+        } else {
+          const seenSegments = new Set<string>();
+          mapping.segmentMappings.forEach((segmentMapping, segmentIndex) => {
+            const segmentPath = `${path}.segmentMappings[${segmentIndex}]`;
+            if (!isRecord(segmentMapping)) {
+              errors.push(`${segmentPath} must be an object`);
+              return;
+            }
+            unknownKeys(segmentMapping, ["segmentId", "targetPaths"], segmentPath, errors);
+            if (
+              !requireString(
+                segmentMapping.segmentId,
+                `${segmentPath}.segmentId`,
+                errors,
+                true,
+              )
+            ) {
+              return;
+            }
+            const ownerLineId = segmentLineIds.get(segmentMapping.segmentId);
+            if (!ownerLineId) {
+              errors.push(`${segmentPath}.segmentId does not exist in the extraction`);
+            } else if (ownerLineId !== mapping.lineId) {
+              errors.push(`${segmentPath}.segmentId does not belong to ${mapping.lineId}`);
+            }
+            if (seenSegments.has(segmentMapping.segmentId)) {
+              errors.push(`${segmentPath}.segmentId is duplicated`);
+            }
+            seenSegments.add(segmentMapping.segmentId);
+            if (
+              !validateMappingTargetPaths(
+                segmentMapping.targetPaths,
+                `${segmentPath}.targetPaths`,
+                errors,
+              )
+            ) {
+              return;
+            }
+            segmentMappings.push({
+              segmentId: segmentMapping.segmentId,
+              targetPaths: segmentMapping.targetPaths,
+            });
+          });
         }
+      }
+      mappings.push({
+        lineId: mapping.lineId,
+        targetPaths: mapping.targetPaths,
+        ...(mapping.segmentMappings !== undefined ? { segmentMappings } : {}),
       });
-      mappings.push({ lineId: mapping.lineId, targetPaths: mapping.targetPaths });
     });
   }
 
   const resolvedMappings = profileResult.ok
-    ? mappings.flatMap((mapping) => {
-        const targetPaths = mapping.targetPaths.filter((pointer) =>
-          stringLeaves(resolvePointer(profileResult.profile, pointer)).some((item) => item.trim()),
-        );
-        return targetPaths.length > 0 ? [{ ...mapping, targetPaths }] : [];
-      })
+    ? filterImportMappings(mappings, (pointer) =>
+        stringLeaves(resolvePointer(profileResult.profile, pointer)).some((item) => item.trim()),
+      )
     : mappings;
+  const structurallyResolvedMappings = profileResult.ok
+    ? filterImportMappings(
+        mappings,
+        (pointer) => resolvePointer(profileResult.profile, pointer) !== undefined,
+      )
+    : mappings;
+  if (profileResult.ok) {
+    errors.push(
+      ...semanticErrors(profileResult.profile, extraction, structurallyResolvedMappings),
+    );
+  }
   if (errors.length || !profileResult.ok) return { ok: false, errors };
 
   const mappingsById = new Map(resolvedMappings.map((mapping) => [mapping.lineId, mapping]));
@@ -862,7 +1330,11 @@ export function validateModelOutput(
       unmappedLines.push({ id: line.id, text: line.text });
       continue;
     }
-    const targets = mapping.targetPaths.flatMap((pointer) =>
+    const coveragePaths = new Set([
+      ...mapping.targetPaths,
+      ...(mapping.segmentMappings?.flatMap((item) => item.targetPaths) ?? []),
+    ]);
+    const targets = [...coveragePaths].flatMap((pointer) =>
       stringLeaves(resolvePointer(profileResult.profile, pointer)),
     );
     const coverage = mappingCoverage(line, targets);
@@ -884,6 +1356,7 @@ export function validateModelOutput(
     value: {
       profile: profileResult.profile,
       mappings: resolvedMappings,
+      semanticWarnings: semanticWarnings(profileResult.profile),
       fullyMappedLines,
       partialMappedLines,
       unmappedLines,
@@ -901,7 +1374,20 @@ export function buildImportPrompt(
   extraction: ExtractedResume,
   repair?: { errors: string[]; previousResponse: string },
 ): { system: string; user: string } {
-  const payload = JSON.stringify(extraction);
+  const payload = JSON.stringify({
+    format: extraction.format,
+    filename: extraction.filename,
+    lines: extraction.lines.map((line) => ({
+      id: line.id,
+      segments: line.segments,
+      bold: line.bold,
+      italics: line.italics,
+      hasTab: line.hasTab,
+      rightTab: line.rightTab,
+      borderBottom: line.borderBottom,
+      bullet: line.bullet,
+    })),
+  });
   if (payload.length > MAX_EXTRACTION_PAYLOAD_CHARS) {
     throw new Error("This resume contains too much text to map safely. Shorten it and try again.");
   }
@@ -909,14 +1395,23 @@ export function buildImportPrompt(
     "You map a deterministically extracted resume into the exact ProfileV2 JSON contract.",
     "Return JSON only with exactly two keys: profile and mappings.",
     "profile must have version 2, header, skills, and ordered sections.",
+    "header.name and header.contact_line must be strings. Use an empty string for contact_line when the source has no contact details.",
     "header.links items use exactly {text,url}; never use label, name, or title for link text.",
     "Map work authorization or citizenship text to header.citizen_prefix.",
     "skills uses only coursework, languages, tools, and certifications as category keys.",
     "Every section has id, title, kind, and entries; kind must be one of education, experience, projects, community, skills, or custom. Use kind community for Community sections. Skills sections have no entries.",
     "Every entry has id, heading, date, and bullets. Put imported bullets under bullets.base.",
-    "Education entries use degrees with degree and grad_date plus optional concentration and gpa.",
+    "Experience: heading is the organization, subheading is the role, location is the place, and date is the employment period.",
+    "Projects: heading is only the project name, tech is the explicit technology list, and date is only the project period.",
+    "Education: heading is the institution, location is an explicit campus place, date is the institution period, and degrees contain degree and grad_date plus optional concentration and gpa.",
+    "Community: heading is the organization or activity, subheading is the role when present, location is the place, date is the participation period, and headingRuns preserve explicit rich heading styling.",
+    "Skills: put category values in top-level skills and leave the skills section entries empty.",
+    "Tabs and pipe separators are layout evidence, not literal heading content. Split their columns into the semantic fields above.",
+    "Incorrect: experience heading \"Organization | City, ST\" with empty location. Correct: heading \"Organization\" and location \"City, ST\".",
+    "Incorrect: project heading \"Project | Library, Database\" with empty tech. Correct: heading \"Project\" and tech [\"Library\",\"Database\"].",
     "Use deterministic readable IDs derived from names and order. Do not invent resume content.",
-    "mappings is an array of {lineId,targetPaths}. targetPaths are RFC 6901 JSON pointers into profile and targetPaths must not start with /profile/.",
+    "mappings is an array of {lineId,targetPaths,segmentMappings?}. segmentMappings is an optional array of {segmentId,targetPaths} that associates each stable source segment with its individual target paths.",
+    "All targetPaths are RFC 6901 JSON pointers into profile and targetPaths must not start with /profile/.",
     "Map a source line only to paths that contain its content. Omit genuinely unmapped lines from mappings.",
     "Preserve source order and use bold, italics, tabs, borders, bullets, and indentation as structural evidence.",
   ].join("\n");
@@ -927,7 +1422,7 @@ export function buildImportPrompt(
       .slice(0, 30)
       .map((error) => `- ${error.slice(0, 500)}`)
       .join("\n");
-    const repairPrefix = `${base}\n\nYour previous response failed validation. Correct it once.\nValidation errors:\n${errorText}\nPrevious response:\n`;
+    const repairPrefix = `${base}\n\nYour previous response failed validation. Correct it once. Preserve valid entries and content while correcting only the affected semantic fields and their line and segment mappings.\nValidation errors:\n${errorText}\nPrevious response:\n`;
     const available = Math.max(1, MAX_MODEL_INPUT_CHARS - repairPrefix.length);
     user = `${repairPrefix}${repair.previousResponse.slice(0, Math.min(30_000, available))}`;
   }
