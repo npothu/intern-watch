@@ -82,6 +82,40 @@ const SECTION_KINDS = new Set<SectionKind>([
   "custom",
 ]);
 
+const SECTION_KIND_ALIASES: Record<string, SectionKind> = {
+  academic: "education",
+  academics: "education",
+  education: "education",
+  "educational background": "education",
+  employment: "experience",
+  experience: "experience",
+  "professional experience": "experience",
+  work: "experience",
+  "work experience": "experience",
+  project: "projects",
+  projects: "projects",
+  "programming project": "projects",
+  "programming projects": "projects",
+  "technical projects": "projects",
+  community: "community",
+  "community involvement": "community",
+  leadership: "community",
+  activities: "community",
+  volunteer: "community",
+  volunteering: "community",
+  skill: "skills",
+  skills: "skills",
+  "technical skills": "skills",
+  custom: "custom",
+  other: "custom",
+};
+
+function normalizedSectionLabel(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim().toLocaleLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ")
+    : "";
+}
+
 const XML_ENTITIES: Record<string, string> = {
   amp: "&",
   apos: "'",
@@ -624,6 +658,76 @@ function parseModelJson(text: string): unknown {
   }
 }
 
+function canonicalizeModelOutput(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.profile)) return value;
+  const pointerAliases = new Map<string, string>();
+
+  if (isRecord(value.profile.header) && Array.isArray(value.profile.header.links)) {
+    value.profile.header.links.forEach((link, index) => {
+      if (!isRecord(link) || link.text !== undefined || typeof link.label !== "string") return;
+      link.text = link.label;
+      delete link.label;
+      pointerAliases.set(`/header/links/${index}/label`, `/header/links/${index}/text`);
+    });
+  }
+
+  if (isRecord(value.profile.skills)) {
+    for (const rawKey of Object.keys(value.profile.skills)) {
+      const normalized = rawKey.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+      const canonicalKey =
+        normalized === "coursework"
+          ? "coursework"
+          : normalized === "languages"
+            ? "languages"
+            : normalized === "tools" ||
+                normalized === "systems & tools" ||
+                normalized === "systems and tools"
+              ? "tools"
+              : normalized === "certifications"
+                ? "certifications"
+                : undefined;
+      if (!canonicalKey || rawKey === canonicalKey || canonicalKey in value.profile.skills) {
+        continue;
+      }
+      value.profile.skills[canonicalKey] = value.profile.skills[rawKey];
+      delete value.profile.skills[rawKey];
+      const pointerKey = rawKey.replace(/~/g, "~0").replace(/\//g, "~1");
+      pointerAliases.set(`/skills/${pointerKey}`, `/skills/${canonicalKey}`);
+    }
+  }
+
+  if (Array.isArray(value.profile.sections)) {
+    value.profile.sections.forEach((section) => {
+      if (!isRecord(section) || typeof section.kind !== "string") return;
+      const kind = normalizedSectionLabel(section.kind);
+      const title = normalizedSectionLabel(section.title);
+      const id = normalizedSectionLabel(section.id).replace(/^(?:sec|section)\s+/, "");
+      section.kind =
+        SECTION_KIND_ALIASES[title] ??
+        SECTION_KIND_ALIASES[id] ??
+        SECTION_KIND_ALIASES[kind] ??
+        section.kind;
+    });
+  }
+
+  if (Array.isArray(value.mappings)) {
+    value.mappings.forEach((mapping) => {
+      if (!isRecord(mapping) || !Array.isArray(mapping.targetPaths)) return;
+      mapping.targetPaths = mapping.targetPaths.map((target) => {
+        if (typeof target !== "string") return target;
+        const relativeTarget = target.startsWith("/profile/") ? target.slice(8) : target;
+        for (const [alias, canonical] of pointerAliases) {
+          if (relativeTarget === alias || relativeTarget.startsWith(`${alias}/`)) {
+            return `${canonical}${relativeTarget.slice(alias.length)}`;
+          }
+        }
+        return relativeTarget;
+      });
+    });
+  }
+  return value;
+}
+
 function resolvePointer(root: unknown, pointer: string): unknown {
   if (!pointer.startsWith("/")) return undefined;
   let current = root;
@@ -694,7 +798,7 @@ export function validateModelOutput(
 ): ModelOutputValidationResult {
   let parsed: unknown;
   try {
-    parsed = parseModelJson(text);
+    parsed = canonicalizeModelOutput(parseModelJson(text));
   } catch (error) {
     return { ok: false, errors: [(error as Error).message] };
   }
@@ -738,19 +842,17 @@ export function validateModelOutput(
     });
   }
 
-  if (profileResult.ok) {
-    mappings.forEach((mapping, index) => {
-      for (const pointer of mapping.targetPaths) {
-        const value = resolvePointer(profileResult.profile, pointer);
-        if (stringLeaves(value).every((item) => !item.trim())) {
-          errors.push(`response.mappings[${index}] target ${pointer} does not resolve to profile content`);
-        }
-      }
-    });
-  }
+  const resolvedMappings = profileResult.ok
+    ? mappings.flatMap((mapping) => {
+        const targetPaths = mapping.targetPaths.filter((pointer) =>
+          stringLeaves(resolvePointer(profileResult.profile, pointer)).some((item) => item.trim()),
+        );
+        return targetPaths.length > 0 ? [{ ...mapping, targetPaths }] : [];
+      })
+    : mappings;
   if (errors.length || !profileResult.ok) return { ok: false, errors };
 
-  const mappingsById = new Map(mappings.map((mapping) => [mapping.lineId, mapping]));
+  const mappingsById = new Map(resolvedMappings.map((mapping) => [mapping.lineId, mapping]));
   const fullyMappedLines: ValidatedImport["fullyMappedLines"] = [];
   const partialMappedLines: ValidatedImport["partialMappedLines"] = [];
   const unmappedLines: ValidatedImport["unmappedLines"] = [];
@@ -781,7 +883,7 @@ export function validateModelOutput(
     ok: true,
     value: {
       profile: profileResult.profile,
-      mappings,
+      mappings: resolvedMappings,
       fullyMappedLines,
       partialMappedLines,
       unmappedLines,
@@ -807,11 +909,14 @@ export function buildImportPrompt(
     "You map a deterministically extracted resume into the exact ProfileV2 JSON contract.",
     "Return JSON only with exactly two keys: profile and mappings.",
     "profile must have version 2, header, skills, and ordered sections.",
-    "Every section has id, title, kind, and entries. Skills sections have no entries.",
+    "header.links items use exactly {text,url}; never use label, name, or title for link text.",
+    "Map work authorization or citizenship text to header.citizen_prefix.",
+    "skills uses only coursework, languages, tools, and certifications as category keys.",
+    "Every section has id, title, kind, and entries; kind must be one of education, experience, projects, community, skills, or custom. Use kind community for Community sections. Skills sections have no entries.",
     "Every entry has id, heading, date, and bullets. Put imported bullets under bullets.base.",
     "Education entries use degrees with degree and grad_date plus optional concentration and gpa.",
     "Use deterministic readable IDs derived from names and order. Do not invent resume content.",
-    "mappings is an array of {lineId,targetPaths}. targetPaths are RFC 6901 JSON pointers into profile.",
+    "mappings is an array of {lineId,targetPaths}. targetPaths are RFC 6901 JSON pointers into profile and targetPaths must not start with /profile/.",
     "Map a source line only to paths that contain its content. Omit genuinely unmapped lines from mappings.",
     "Preserve source order and use bold, italics, tabs, borders, bullets, and indentation as structural evidence.",
   ].join("\n");
