@@ -1,5 +1,6 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
+import { httpAction } from "./_generated/server";
 import { verifyState } from "./oauth_state";
 
 const http = httpRouter();
@@ -19,7 +20,7 @@ const http = httpRouter();
 http.route({
   path: "/gmail/push",
   method: "POST",
-  handler: async (ctx, request) => {
+  handler: httpAction(async (ctx, request) => {
     const token = new URL(request.url).searchParams.get("token");
     if (token !== process.env.MAIL_PUSH_TOKEN) {
       return new Response("forbidden", { status: 403 });
@@ -55,7 +56,7 @@ http.route({
     }
     // 204 must not carry a body (Fetch spec) - a body would throw.
     return new Response(null, { status: 204 });
-  },
+  }),
 });
 
 // Google OAuth callback.
@@ -75,7 +76,7 @@ http.route({
 http.route({
   path: "/gmail/callback",
   method: "GET",
-  handler: async (ctx, request) => {
+  handler: httpAction(async (ctx, request) => {
     const url = new URL(request.url);
     const rawState = url.searchParams.get("state") ?? "";
     const code = url.searchParams.get("code");
@@ -172,7 +173,7 @@ http.route({
         googleError: (err instanceof Error ? err.message : String(err)).slice(0, 300),
       });
     }
-  },
+  }),
 });
 
 export default http;
