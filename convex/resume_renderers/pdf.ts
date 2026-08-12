@@ -333,7 +333,9 @@ function renderProjects(
     const dateWidth = Math.min(doc.widthOfString(project.date) + 4, CONTENT_WIDTH * 0.4);
     const leftWidth = CONTENT_WIDTH - dateWidth - 12;
     const heading = `${project.name} | `;
-    const headingWidth = doc.widthOfString(heading);
+    // PDFKit may wrap the final glyph when a width exactly equals its metrics.
+    // Keep a small tolerance so a trailing separator cannot orphan itself.
+    const headingWidth = doc.widthOfString(heading) + 2;
     doc.font(FONT_ITALIC).fontSize(SIZE_BODY);
     const techHeight = textHeight(
       doc,
@@ -443,7 +445,7 @@ function layout(
     { align: "center" },
   );
   const links = [
-    profile.header.citizen_prefix ?? "",
+    (profile.header.citizen_prefix ?? "").replace(/[|\s]+$/, ""),
     ...(profile.header.links ?? []).map((link) => link.text),
   ]
     .filter(Boolean)
