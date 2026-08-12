@@ -1,15 +1,16 @@
 // @vitest-environment node
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { PDFDocument } from "pdf-lib";
+import PDFKitDocument from "pdfkit/js/pdfkit.standalone.js";
 import { migrateProfile, type ProfileV1 } from "./profile_schema";
 import { projectEntries } from "./resume_renderers/docx";
 import { buildResumePdf } from "./resume_renderers/pdf";
 
 const PROJECT_NAMES = [
-  "Atlas",
-  "Beacon",
+  "Finance Autofiller",
+  "Travel Collaboration App",
   "Comet",
   "Delta",
   "Echo",
@@ -73,6 +74,7 @@ const profileV1: ProfileV1 = {
 
 describe("PDF-first resume renderer", () => {
   test("fits an oversized bank to one validated US Letter page", async () => {
+    const textSpy = vi.spyOn(PDFKitDocument.prototype, "text");
     const profile = migrateProfile(profileV1);
     const content = {
       projects: projectEntries(profile).map((entry) => ({
@@ -102,5 +104,12 @@ describe("PDF-first resume renderer", () => {
     expect(result.heightPt).toBeLessThanOrEqual(result.safeHeightPt);
     expect(result.notes.length).toBeGreaterThan(0);
     expect(result.content.projects.length).toBeGreaterThanOrEqual(4);
+
+    const nameCall = textSpy.mock.calls.find(([text]) => text === "Finance Autofiller");
+    const separatorCall = textSpy.mock.calls.find(([text]) => text === " | ");
+    expect(nameCall?.[3]).toMatchObject({ lineBreak: false });
+    expect(separatorCall?.[3]).toMatchObject({ lineBreak: false });
+    expect(separatorCall?.[2]).toBe(nameCall?.[2]);
+    textSpy.mockRestore();
   });
 });

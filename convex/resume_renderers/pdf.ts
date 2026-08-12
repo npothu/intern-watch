@@ -332,32 +332,40 @@ function renderProjects(
     doc.font(FONT_BOLD).fontSize(SIZE_BODY);
     const dateWidth = Math.min(doc.widthOfString(project.date) + 4, CONTENT_WIDTH * 0.4);
     const leftWidth = CONTENT_WIDTH - dateWidth - 12;
-    const heading = `${project.name} | `;
-    // PDFKit may wrap the final glyph when a width exactly equals its metrics.
-    // Keep a small tolerance so a trailing separator cannot orphan itself.
-    const headingWidth = doc.widthOfString(heading) + 2;
+    const nameWidth = doc.widthOfString(project.name);
+    doc.font(FONT_REGULAR).fontSize(SIZE_BODY);
+    const separator = " | ";
+    const separatorWidth = doc.widthOfString(separator);
+    const techX = MARGIN + nameWidth + separatorWidth;
+    const techWidth = Math.max(1, leftWidth - nameWidth - separatorWidth);
     doc.font(FONT_ITALIC).fontSize(SIZE_BODY);
     const techHeight = textHeight(
       doc,
       project.tech,
-      Math.max(1, leftWidth - headingWidth),
+      techWidth,
       SIZE_BODY,
       { italic: true },
     );
-    const headingHeight = textHeight(doc, heading, headingWidth, SIZE_BODY, { bold: true });
+    const headingHeight = lineHeight(SIZE_BODY);
     const dateHeight = textHeight(doc, project.date, dateWidth, SIZE_BODY);
     const rowHeight = Math.max(headingHeight, techHeight, dateHeight);
     if (mode === "draw") {
-      renderText(doc, mode, heading, MARGIN, y, headingWidth, SIZE_BODY, {
-        bold: true,
+      // Draw the name and separator without a width constraint. PDFKit only
+      // line-wraps constrained text, so the separator cannot become its own
+      // line. Only the technology run is allowed to wrap.
+      doc.font(FONT_BOLD).fontSize(SIZE_BODY).fillColor("#111111").text(project.name, MARGIN, y, {
+        lineBreak: false,
+      });
+      doc.font(FONT_REGULAR).fontSize(SIZE_BODY).text(separator, MARGIN + nameWidth, y, {
+        lineBreak: false,
       });
       renderText(
         doc,
         mode,
         project.tech,
-        MARGIN + headingWidth,
+        techX,
         y,
-        Math.max(1, leftWidth - headingWidth),
+        techWidth,
         SIZE_BODY,
         { italic: true },
       );
