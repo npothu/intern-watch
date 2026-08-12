@@ -518,7 +518,7 @@ export const attachResumeInternal = internalMutation({
     storageId: v.id("_storage"),
     docxFilename: v.string(),
     docxStorageId: v.id("_storage"),
-    report: v.optional(v.any()),
+    report: v.optional(v.string()),
   },
   handler: async (
     ctx,

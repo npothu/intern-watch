@@ -506,7 +506,14 @@ describe("resume artifact persistence", () => {
       pdf: await ctx.storage.store(new Blob(["first-pdf"], { type: "application/pdf" })),
       docx: await ctx.storage.store(new Blob(["first-docx"])),
     }));
-    const firstReport = { scores: { IBM: 7 }, projects: [{ name: "IBM" }] };
+    const unicodeProject = "Sys-savesync - Background Save Sync Sysmodule".replace(
+      " - ",
+      " \u2014 ",
+    );
+    const firstReport = {
+      scores: { [unicodeProject]: 7 },
+      projects: [{ name: unicodeProject }],
+    };
     await t.mutation(resume.attachResumeInternal, {
       user: "u1",
       short: "ibm-role",
@@ -514,14 +521,14 @@ describe("resume artifact persistence", () => {
       storageId: first.pdf,
       docxFilename: "first.docx",
       docxStorageId: first.docx,
-      report: firstReport,
+      report: JSON.stringify(firstReport),
     });
 
     const refreshed = await t.query(tracker.getResumeUrls, {
       user: "u1",
       secret: SECRET,
     });
-    expect(refreshed[0].report).toEqual(firstReport);
+    expect(JSON.parse(refreshed[0].report as string)).toEqual(firstReport);
     expect(refreshed[0].format).toBe("pdf");
     expect(refreshed[0].docxUrl).toMatch(/^https?:/);
 
@@ -537,7 +544,7 @@ describe("resume artifact persistence", () => {
       storageId: second.pdf,
       docxFilename: "second.docx",
       docxStorageId: second.docx,
-      report: secondReport,
+      report: JSON.stringify(secondReport),
     });
     await t.mutation(tracker.restoreResume, {
       user: "u1",
@@ -551,6 +558,6 @@ describe("resume artifact persistence", () => {
     });
     expect(restored[0].filename).toBe("first.pdf");
     expect(restored[0].docxFilename).toBe("first.docx");
-    expect(restored[0].report).toEqual(firstReport);
+    expect(JSON.parse(restored[0].report as string)).toEqual(firstReport);
   });
 });

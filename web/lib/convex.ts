@@ -216,6 +216,17 @@ export async function getResumeUrls(user: string): Promise<ResumeUrls> {
       const short = typeof row.short === "string" ? row.short : "";
       const url = typeof row.url === "string" ? row.url : "";
       if (!short || !url) continue;
+      let report: ResumeReport | null = null;
+      if (typeof row.report === "string") {
+        try {
+          report = JSON.parse(row.report) as ResumeReport;
+        } catch {
+          report = null;
+        }
+      } else if (row.report && typeof row.report === "object") {
+        // Compatibility with reports written before opaque JSON storage.
+        report = row.report as ResumeReport;
+      }
       out[short] = {
         url,
         filename: typeof row.filename === "string" ? row.filename : "resume.docx",
@@ -224,7 +235,7 @@ export async function getResumeUrls(user: string): Promise<ResumeUrls> {
         docxFilename:
           typeof row.docxFilename === "string" ? row.docxFilename : null,
         updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : undefined,
-        report: (row.report as ResumeReport | null | undefined) ?? null,
+        report,
         prevUrl: typeof row.prevUrl === "string" ? row.prevUrl : null,
         prevFilename:
           typeof row.prevFilename === "string" ? row.prevFilename : null,

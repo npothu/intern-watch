@@ -411,7 +411,7 @@ async function performBuild(
       storageId: pdfStorageId,
       docxFilename: resumeFilename(pdf.profile, company),
       docxStorageId,
-      report,
+      report: JSON.stringify(report),
     });
   } catch (error) {
     if (pdfStorageId) await ctx.storage.delete(pdfStorageId);
