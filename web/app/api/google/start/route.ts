@@ -15,14 +15,14 @@ import { getOAuthConfig, registerOAuthNonce } from "@/lib/convex";
  * callback is a Convex httpAction so the refresh token can be exchanged and
  * encrypted without crossing another process. The value must match what is
  * registered in Google Cloud character for character, which is why it is
- * derived from the same helper the wizard displays rather than rebuilt here.
+ * derived from the same helper as the connection page rather than rebuilt here.
  */
 
 export const dynamic = "force-dynamic";
 
 const SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 
-/** Mirrors convexSiteOrigin() in the wizard page - see the note there on why
+/** Mirrors convexSiteOrigin() in the connection page - see the note there on why
  *  the site origin differs from the client API origin. */
 function convexSiteOrigin(): string | null {
   const explicit = process.env.CONVEX_SITE_URL;
@@ -34,9 +34,9 @@ function convexSiteOrigin(): string | null {
   return null;
 }
 
-/** Send the user back to the wizard with a message rather than showing raw
+/** Send the user back to the connection page rather than showing raw
  *  JSON: every caller of this route arrived by clicking a button in it. */
-function backToWizard(req: Request, params: Record<string, string>) {
+function backToConnection(req: Request, params: Record<string, string>) {
   const target = new URL("/settings/connections/google", new URL(req.url).origin);
   for (const [k, v] of Object.entries(params)) target.searchParams.set(k, v);
   return NextResponse.redirect(target);
@@ -44,13 +44,13 @@ function backToWizard(req: Request, params: Record<string, string>) {
 
 export async function GET(req: Request) {
   const user = await resolveTrackerUser();
-  if (!user) return backToWizard(req, { googleError: "not_signed_in" });
+  if (!user) return backToConnection(req, { googleError: "not_signed_in" });
 
   const site = convexSiteOrigin();
   if (!site) {
-    return backToWizard(req, {
-      googleError:
-        "CONVEX_SITE_URL is not set, so the redirect URI cannot be built. Set it on the web server.",
+    console.error("Google OAuth is unavailable: CONVEX_SITE_URL could not be resolved");
+    return backToConnection(req, {
+      googleError: "Google sign-in is temporarily unavailable. Try again later.",
     });
   }
 
@@ -59,34 +59,33 @@ export async function GET(req: Request) {
   // name made this route unreachable on every correctly configured deployment.
   const secret = process.env.CONVEX_SECRET;
   if (!secret) {
-    return backToWizard(req, {
-      googleError: "CONVEX_SECRET is not set on the web server.",
+    console.error("Google OAuth is unavailable: CONVEX_SECRET is not set");
+    return backToConnection(req, {
+      googleError: "Google sign-in is temporarily unavailable. Try again later.",
     });
   }
 
-  // The client id comes from the Convex deployment, which is where the wizard's
-  // step 4 writes it. Reading process.env here meant the wizard could never
-  // satisfy its own precondition: the value it had just saved lived in a
-  // different process.
+  // The client id comes from the Convex deployment, where the operator sets it.
+  // Reading process.env here would look in the wrong process.
   const config = await getOAuthConfig().catch(() => null);
   if (!config) {
-    return backToWizard(req, {
-      googleError: "Could not reach the Convex deployment to read the Google client id.",
+    console.error("Google OAuth is unavailable: could not read Convex OAuth configuration");
+    return backToConnection(req, {
+      googleError: "Google sign-in is temporarily unavailable. Try again later.",
     });
   }
-  // Check EVERY precondition before sending anyone to Google, not just the
-  // client id. Gating on the id alone meant a deployment missing the client
-  // secret or CREDENTIALS_KEY still walked the user through a real consent
-  // screen - so they handed over restricted gmail.readonly access, and only
-  // then did the callback fail. Never ask for a grant that cannot be used.
+  // Check every mail-sync precondition before sending anyone to Google, not
+  // just the client id. Never ask for a Gmail grant that the deployment cannot
+  // use, including when its push topic or endpoint token is not ready yet.
   // `missing` is derived from the same env reads as clientId, so an empty list
   // implies a client id - but assert it rather than assume, since these are two
   // separate fields on the wire and only one of them is load-bearing here.
   if (config.missing.length > 0 || !config.clientId) {
-    return backToWizard(req, {
-      googleError: `Not configured on the deployment yet: ${
-        config.missing.join(", ") || "GMAIL_CLIENT_ID"
-      }.`,
+    console.error(
+      `Google OAuth is unavailable: missing ${config.missing.join(", ") || "GMAIL_CLIENT_ID"}`,
+    );
+    return backToConnection(req, {
+      googleError: "Google sign-in is temporarily unavailable. Try again later.",
     });
   }
   const clientId = config.clientId;
@@ -105,7 +104,7 @@ export async function GET(req: Request) {
   try {
     await registerOAuthNonce(state.nonce, user, state.exp);
   } catch {
-    return backToWizard(req, {
+    return backToConnection(req, {
       googleError: "Could not start the sign-in flow. Try again.",
     });
   }

@@ -18,19 +18,15 @@ to the browser.
 
 ## Setup
 
-1. Install dependencies: `npm install`
-2. Copy `web/.env.example` to `web/.env.local` and fill in real values.
-3. Create a Clerk application at https://dashboard.clerk.com and copy its
-   publishable + secret keys into `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` /
-   `CLERK_SECRET_KEY`.
-4. Set `CONVEX_URL` to your Convex deployment origin and `CONVEX_SECRET` to a
-   value matching that deployment's `TRACKER_SECRET` env var (see
-   `src/store.py` `ConvexStore`). This web app makes no Convex schema or
-   function changes - it shares the deployment with the Python pipeline.
-5. Set `TRACKER_USER_MAP` to a JSON object mapping each authorized Clerk email
-   to its tracker user key, e.g. `{"you@example.com":"example"}`. Signed-in
-   emails not in the map see the "not provisioned" screen.
-6. Run `npm run dev` and open the printed URL.
+For the complete local setup, including the Convex development deployment, Clerk development keys, Google OAuth callback, and exact run commands, see [`docs/local-web-development.md`](../docs/local-web-development.md).
+
+The short version is:
+
+1. Run `npm install` and `npm --prefix web install` from the repository root.
+2. Run `npx convex dev --once --typecheck disable` to deploy the development backend.
+3. Copy `web/.env.example` to `web/.env.local` and fill in the development values.
+4. Run `npx convex dev --start "npm --prefix web run dev" --typecheck disable`.
+5. Open `http://localhost:3000`.
 
 ## Env vars
 
@@ -40,9 +36,8 @@ to the browser.
 | `CLERK_SECRET_KEY` | Clerk secret key (server only) |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` / `..._SIGN_UP_URL` | Clerk route paths |
 | `CONVEX_URL` | Convex deployment origin, the client API (server only) |
-| `CONVEX_SITE_URL` | Convex HTTP-actions origin - the `.convex.site` domain, or the sibling port of a local deployment. NOT the same host as `CONVEX_URL`. The Google wizard builds the OAuth redirect URI and the Gmail push endpoint from it, and both must match character for character, so it refuses to guess when this is unset (server only) |
+| `CONVEX_SITE_URL` | Convex HTTP-actions origin - the `.convex.site` domain, or the sibling port of a local deployment. NOT the same host as `CONVEX_URL`. The Google connection flow uses it for the OAuth callback (server only) |
 | `CONVEX_SECRET` | Secret matching the deployment's `TRACKER_SECRET` (server only) |
-| `CONVEX_ADMIN_KEY` | Optional. Lets the Google wizard write `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `MAIL_PUBSUB_TOPIC` / `MAIL_PUSH_TOKEN` to the deployment via the Convex management API. Restricted to exactly those four names by `web/lib/convex-admin.ts`. Unset disables the wizard's write path (server only) |
 | `TRACKER_USER_MAP` | JSON email -> tracker user key mapping (server only) |
 | `GITHUB_TOKEN` | Fine-grained PAT with "Actions: write" on `GITHUB_REPOSITORY` (server only) |
 | `GITHUB_REPOSITORY` | `owner/repo` the web app dispatches builds against (server only) |

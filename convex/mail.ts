@@ -98,12 +98,10 @@ export const getMailSyncStatus = query({
  * What the web app needs to start a consent flow, read from the deployment
  * that actually holds it.
  *
- * The client id lives on the CONVEX deployment - the wizard's own step 4 writes
- * it there. The web server reading `process.env.GMAIL_CLIENT_ID` was the bug
- * that made the wizard unable to satisfy its own precondition: the value it had
- * just saved was in a different process. The id is not a secret (it is public
- * in the consent URL), so returning it is safe; the client SECRET never leaves
- * the deployment.
+ * The client id lives on the CONVEX deployment, where the operator sets it.
+ * The web server must query it here rather than read its own process.env.
+ * The id is not a secret because it appears in the consent URL; the client
+ * secret never leaves the deployment.
  */
 export const getOAuthConfig = query({
   args: { secret: v.string() },
@@ -111,36 +109,23 @@ export const getOAuthConfig = query({
     checkSecret(secret);
     return {
       clientId: process.env.GMAIL_CLIENT_ID ?? null,
-      // Named individually so the wizard can say WHICH one is missing rather
-      // than collapsing three causes into "this feature was never built".
+      // The user page turns this into one availability bit. The names remain
+      // useful in operator logs and diagnostics.
       missing: [
         !process.env.GMAIL_CLIENT_ID && "GMAIL_CLIENT_ID",
         !process.env.GMAIL_CLIENT_SECRET && "GMAIL_CLIENT_SECRET",
         !process.env.CREDENTIALS_KEY && "CREDENTIALS_KEY",
+        !process.env.MAIL_PUBSUB_TOPIC && "MAIL_PUBSUB_TOPIC",
+        !process.env.MAIL_PUSH_TOKEN && "MAIL_PUSH_TOKEN",
       ].filter((x): x is string => typeof x === "string"),
-      // Presence of EVERY var the wizard writes, reported from the deployment
-      // that actually stores them.
-      //
-      // This exists because the web server's own process.env is the wrong
-      // place to ask. The wizard writes all four of these to Convex, so
-      // reading them back from Next always returned false - which made step 6
-      // render "Not set yet" after a successful save and invited the admin to
-      // regenerate MAIL_PUSH_TOKEN. That silently invalidates the token
-      // already embedded in the registered Pub/Sub push URL, so every push
-      // then 403s and mail-sync dies with nothing in the UI saying so.
-      present: {
-        clientId: Boolean(process.env.GMAIL_CLIENT_ID),
-        clientSecret: Boolean(process.env.GMAIL_CLIENT_SECRET),
-        pushToken: Boolean(process.env.MAIL_PUSH_TOKEN),
-        pubsubTopic: Boolean(process.env.MAIL_PUBSUB_TOPIC),
-      },
     };
   },
 });
 
 /** The user's connected mailbox, or null. This is the table completeOAuth
- *  actually writes - the wizard used to ask the `credentials` table, which
- *  nothing in the OAuth path touches, so a successful connect never showed. */
+ *  actually writes. The connection page used to ask the `credentials` table,
+ *  which nothing in the OAuth path touches, so a successful connect never
+ *  showed. */
 export const getMailAccount = query({
   args: { user: v.string(), secret: v.string() },
   handler: async (ctx, { user, secret }) => {
@@ -157,35 +142,6 @@ export const getMailAccount = query({
           lastSyncAt: row.lastSyncAt ?? null,
         }
       : null;
-  },
-});
-
-/**
- * Arm the Gmail watch for a user now.
- *
- * The wizard collects the Pub/Sub topic one step AFTER the mailbox is
- * connected, so at connect time there is nothing to point a watch at. Without
- * this the watch waited for the 06:00 UTC cron: step 6's "Verify push" checks
- * for a recent push, Gmail never sends one without a watch, and the final step
- * could not be completed in the same session - mail-sync sat silently dead for
- * up to a day while the UI said Connected.
- *
- * Idempotent, like startWatch itself, so pressing the step again is harmless.
- */
-export const armWatchNow = mutation({
-  args: { user: v.string(), secret: v.string() },
-  handler: async (ctx, { user, secret }) => {
-    checkSecret(secret);
-    if (!process.env.MAIL_PUBSUB_TOPIC) {
-      return { ok: false as const, reason: "MAIL_PUBSUB_TOPIC is not set yet" };
-    }
-    const account = await ctx.db
-      .query("mailAccounts")
-      .withIndex("by_user", (q) => q.eq("user", user))
-      .first();
-    if (!account) return { ok: false as const, reason: "no mailbox is connected yet" };
-    await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
-    return { ok: true as const };
   },
 });
 
@@ -381,18 +337,15 @@ export const storeMailAccount = internalMutation({
     }
     // Kick the (idempotent) watch setup right away so a freshly configured
     // account starts receiving pushes without waiting for the daily cron -
-    // but only once there is a topic to point it at. In the wizard the mailbox
-    // is connected at step 5 and the Pub/Sub topic is not collected until step
-    // 6, so arming unconditionally stamped "gmail watch failed: 400" onto the
-    // row seconds after telling the user they were connected. Step 6 arms it.
+    // but only once there is a topic to point it at. The deployment operator
+    // normally configures the topic before users can connect. This guard keeps
+    // a partially configured deployment from stamping a misleading Gmail API
+    // failure onto an otherwise valid mailbox connection.
     if (process.env.MAIL_PUBSUB_TOPIC) {
       await ctx.scheduler.runAfter(0, internal.mail.startWatch, { user });
     } else {
-      // Deferred, not dropped: armWatchNow below is what picks it up once the
-      // topic exists. An earlier version of this comment claimed step 6 armed
-      // it, which was simply untrue - savePubSubTopic only wrote the env var,
-      // so the watch waited for the daily cron and step 6's push check could
-      // never pass in the same session.
+      // Deferred, not dropped. The daily renewal cron retries after the
+      // operator finishes configuring the topic.
       console.log(
         "mailbox connected but MAIL_PUBSUB_TOPIC is not set - watch deferred until push is configured",
       );

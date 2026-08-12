@@ -609,32 +609,15 @@ export async function deleteCredential(
 }
 
 /** What the consent flow needs, read from the deployment that holds it rather
- *  than from this server's env - the wizard writes these to Convex. */
+ *  than from this server's env. */
 export type OAuthConfig = {
   clientId: string | null;
   missing: string[];
-  /** Presence of every var the wizard writes, read from the deployment that
-   *  stores them rather than from this server's env. */
-  present: {
-    clientId: boolean;
-    clientSecret: boolean;
-    pushToken: boolean;
-    pubsubTopic: boolean;
-  };
 };
 
 export async function getOAuthConfig(): Promise<OAuthConfig> {
   const value = await post("query", "getOAuthConfig", {}, "mail");
   return value as OAuthConfig;
-}
-
-/** Arm the Gmail watch now - used once the Pub/Sub topic finally exists, since
- *  a mailbox connected before it had its watch deferred. */
-export async function armMailWatch(
-  user: string
-): Promise<{ ok: boolean; reason?: string }> {
-  const value = await post("mutation", "armWatchNow", { user }, "mail");
-  return value as { ok: boolean; reason?: string };
 }
 
 /** Record a started OAuth flow so the callback can spend it exactly once. */

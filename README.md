@@ -95,9 +95,9 @@ Clerk sign-in, Tailwind/shadcn UI, and the same Convex store. It is a separate
 Vercel deployment, never part of the watcher cron, and strictly optional. Its
 secrets (`CLERK_SECRET_KEY`, `CONVEX_URL`, `CONVEX_SECRET`, and a
 `TRACKER_USER_MAP` bridging Clerk emails to tracker users) live on Vercel and
-the Convex deployment, not in this repo's `.env`. It makes no Convex schema
-changes and shares the deployment with the Python pipeline.
-See `web/README.md` for the full setup.
+the Convex deployment, not in this repo's `.env`.
+Its backend functions live under `convex/` and share the deployment with the Python pipeline.
+See `web/README.md` for the web reference and `docs/local-web-development.md` for complete local setup instructions.
 
 ## Setup
 

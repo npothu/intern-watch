@@ -95,31 +95,17 @@ export function ConnectionsList({
         {/* First, because it is the one every user has - it needs no setup and
             it is the card most likely to answer "can I change the model?". */}
         <ResumeModelCard llm={llm} keysByProvider={Object.fromEntries(byProvider)} />
-        {/* Mail-sync is opt-in. When the deployment never set it up, say so
-            plainly and name the missing variables - a card that just sits
-            there unconnected reads as broken rather than as switched off. */}
+        {/* Mail-sync is configured once by the deployment operator. End users
+            should know whether it is available, but environment-variable names
+            and setup instructions do not belong in their settings UI. */}
         {!mailSync.enabled && (
           <div className="rounded-md border border-dashed border-line bg-surface px-4 py-3.5">
             <div className="text-[13px] font-semibold text-ink">
-              Mail-sync is off on this deployment
+              Gmail sync is not available yet
             </div>
             <p className="mt-1 text-[12px] text-ink-2">
-              Everything else works without it. Turn it on by setting{" "}
-              {mailSync.missing.length ? (
-                <>
-                  {mailSync.missing.map((m, i) => (
-                    <span key={m}>
-                      {i > 0 && ", "}
-                      <code className="rounded bg-chip px-1 py-0.5 font-mono text-[11px]">
-                        {m}
-                      </code>
-                    </span>
-                  ))}{" "}
-                </>
-              ) : (
-                "the Gmail variables "
-              )}
-              on the deployment, then connecting Google below.
+              Everything else still works. Ask the deployment administrator to enable Gmail
+              connections.
             </p>
           </div>
         )}
