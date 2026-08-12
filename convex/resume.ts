@@ -145,6 +145,12 @@ export const deleteResume = mutation({
     if (row.prevStorageId) {
       await ctx.storage.delete(row.prevStorageId);
     }
+    if (row.docxStorageId) {
+      await ctx.storage.delete(row.docxStorageId);
+    }
+    if (row.prevDocxStorageId) {
+      await ctx.storage.delete(row.prevDocxStorageId);
+    }
     await ctx.db.delete(row._id);
     // A leftover in-flight/failed build row would keep a stale badge in the
     // UI for an artifact that no longer exists, so clear it too.
@@ -510,9 +516,14 @@ export const attachResumeInternal = internalMutation({
     short: v.string(),
     filename: v.string(),
     storageId: v.id("_storage"),
+    docxFilename: v.string(),
+    docxStorageId: v.id("_storage"),
     report: v.optional(v.any()),
   },
-  handler: async (ctx, { user, short, filename, storageId, report }) => {
+  handler: async (
+    ctx,
+    { user, short, filename, storageId, docxFilename, docxStorageId, report },
+  ) => {
     const existing = await ctx.db
       .query("resumes")
       .withIndex("by_user_short", (q) =>
@@ -523,14 +534,24 @@ export const attachResumeInternal = internalMutation({
       if (existing.prevStorageId) {
         await ctx.storage.delete(existing.prevStorageId);
       }
+      if (existing.prevDocxStorageId) {
+        await ctx.storage.delete(existing.prevDocxStorageId);
+      }
       await ctx.db.patch(existing._id, {
         filename,
         storageId,
+        artifactFormat: "pdf",
+        docxFilename,
+        docxStorageId,
         updatedAt: Date.now(),
         report,
         prevStorageId: existing.storageId,
         prevFilename: existing.filename,
+        prevArtifactFormat: existing.artifactFormat ?? "docx",
+        prevDocxStorageId: existing.docxStorageId,
+        prevDocxFilename: existing.docxFilename,
         prevUpdatedAt: existing.updatedAt,
+        prevReport: existing.report,
       });
     } else {
       await ctx.db.insert("resumes", {
@@ -538,6 +559,9 @@ export const attachResumeInternal = internalMutation({
         short,
         filename,
         storageId,
+        artifactFormat: "pdf",
+        docxFilename,
+        docxStorageId,
         updatedAt: Date.now(),
         report,
       });

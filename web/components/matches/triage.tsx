@@ -38,6 +38,7 @@ import {
   Eraser,
   Search,
   Mail,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -486,7 +487,14 @@ export function Triage({
   const refreshMeta = useCallback((short: string) => {
     void fetchResumeMeta(short)
       .then((meta) => {
-        if (meta) setMetaCache((prev) => ({ ...prev, [short]: meta }));
+        if (meta) {
+          setMetaCache((prev) => ({ ...prev, [short]: meta }));
+          setRows((prev) =>
+            prev.map((row) =>
+              row.short === short ? { ...row, resumeMeta: meta } : row
+            )
+          );
+        }
       })
       .catch(() => {});
   }, []);
@@ -1469,11 +1477,13 @@ function ResumeButton({
   href,
   onBuild,
   error,
+  noJd,
 }: {
   state: BuildState;
   href: string | null;
   onBuild: () => void;
   error?: string;
+  noJd?: boolean;
 }) {
   const base =
     "inline-flex min-w-[98px] items-center justify-center gap-1.5 rounded-[5px] border px-2 py-[5px] text-[12px] font-medium whitespace-nowrap transition-colors select-none";
@@ -1484,13 +1494,23 @@ function ResumeButton({
         href={href ?? "#"}
         target="_blank"
         rel="noopener noreferrer"
+        title={
+          noJd
+            ? "No job description was found. This resume used only the job title, company, and location."
+            : "Open generated PDF"
+        }
         onClick={(e) => e.stopPropagation()}
         className={cn(
           base,
           "border-[color-mix(in_srgb,var(--color-accent)_42%,transparent)] bg-surface text-accent hover:border-ink-2"
         )}
       >
-        <FileText className="size-3.5" /> resume
+        {noJd ? (
+          <AlertTriangle className="size-3.5 text-amber" aria-hidden="true" />
+        ) : (
+          <FileText className="size-3.5" />
+        )}
+        resume PDF
       </a>
     );
   }
@@ -1724,7 +1744,13 @@ function RowView({
 
       {/* actions — resume docker */}
       <div className="flex items-center gap-1.5 self-center">
-        <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
+        <ResumeButton
+          state={buildState}
+          href={row.resumeUrl}
+          onBuild={onBuild}
+          error={buildError}
+          noJd={row.resumeMeta?.report?.jdSource === "stub"}
+        />
         {buildState === "built" && (
           /* The report affordance: deliberately quiet next to the resume
              button, announcing itself with a two-ring pulse right after a
@@ -1996,7 +2022,13 @@ function MobileCard({
             >
               Open
             </button>
-            <ResumeButton state={buildState} href={row.resumeUrl} onBuild={onBuild} error={buildError} />
+            <ResumeButton
+              state={buildState}
+              href={row.resumeUrl}
+              onBuild={onBuild}
+              error={buildError}
+              noJd={row.resumeMeta?.report?.jdSource === "stub"}
+            />
             {buildState === "built" && (
               <button
                 type="button"

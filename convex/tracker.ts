@@ -350,13 +350,24 @@ export const attachResume = mutation({
       if (existing.prevStorageId) {
         await ctx.storage.delete(existing.prevStorageId);
       }
+      if (existing.prevDocxStorageId) {
+        await ctx.storage.delete(existing.prevDocxStorageId);
+      }
       await ctx.db.patch(existing._id, {
         filename,
         storageId,
+        artifactFormat: "docx",
+        docxStorageId: undefined,
+        docxFilename: undefined,
         updatedAt: Date.now(),
         prevStorageId: existing.storageId,
         prevFilename: existing.filename,
+        prevArtifactFormat: existing.artifactFormat ?? "docx",
+        prevDocxStorageId: existing.docxStorageId,
+        prevDocxFilename: existing.docxFilename,
         prevUpdatedAt: existing.updatedAt,
+        prevReport: existing.report,
+        report: undefined,
       });
     } else {
       await ctx.db.insert("resumes", {
@@ -364,16 +375,16 @@ export const attachResume = mutation({
         short,
         filename,
         storageId,
+        artifactFormat: "docx",
         updatedAt: Date.now(),
       });
     }
   },
 });
 
-// Swap the current and previous builds back (the keep-N=2 restore). The
-// report follows the artifact it describes: after a restore the stored report
-// belongs to the now-previous build, so it swaps out to null rather than lie
-// about the restored file.
+// Swap the complete current and previous bundles. The report and companion
+// DOCX travel with their PDF so a refresh or restore cannot separate the
+// selection scores from the artifact they describe.
 export const restoreResume = mutation({
   args: { user: v.string(), short: v.string(), secret: v.string() },
   handler: async (ctx, { user, short, secret }) => {
@@ -388,11 +399,18 @@ export const restoreResume = mutation({
     await ctx.db.patch(existing._id, {
       filename: existing.prevFilename ?? existing.filename,
       storageId: existing.prevStorageId,
+      artifactFormat: existing.prevArtifactFormat ?? "docx",
+      docxStorageId: existing.prevDocxStorageId,
+      docxFilename: existing.prevDocxFilename,
       updatedAt: Date.now(),
       prevStorageId: existing.storageId,
       prevFilename: existing.filename,
+      prevArtifactFormat: existing.artifactFormat ?? "docx",
+      prevDocxStorageId: existing.docxStorageId,
+      prevDocxFilename: existing.docxFilename,
       prevUpdatedAt: existing.updatedAt,
-      report: undefined,
+      report: existing.prevReport,
+      prevReport: existing.report,
     });
     return { ok: true as const };
   },
@@ -416,8 +434,14 @@ export const getResumeUrls = query({
       filename: string;
       updatedAt: number;
       report: unknown;
+      format: "pdf" | "docx";
+      docxUrl: string | null;
+      docxFilename: string | null;
       prevUrl: string | null;
       prevFilename: string | null;
+      prevFormat: "pdf" | "docx" | null;
+      prevDocxUrl: string | null;
+      prevDocxFilename: string | null;
     }[] = [];
     for (const row of rows) {
       const url = await ctx.storage.getUrl(row.storageId);
@@ -428,10 +452,31 @@ export const getResumeUrls = query({
           filename: row.filename,
           updatedAt: row.updatedAt,
           report: row.report ?? null,
+          format: row.artifactFormat ?? "docx",
+          docxUrl: row.docxStorageId
+            ? await ctx.storage.getUrl(row.docxStorageId)
+            : row.artifactFormat === "pdf"
+              ? null
+              : url,
+          docxFilename:
+            row.docxFilename ?? (row.artifactFormat === "pdf" ? null : row.filename),
           prevUrl: row.prevStorageId
             ? await ctx.storage.getUrl(row.prevStorageId)
             : null,
           prevFilename: row.prevFilename ?? null,
+          prevFormat: row.prevStorageId
+            ? row.prevArtifactFormat ?? "docx"
+            : null,
+          prevDocxUrl: row.prevDocxStorageId
+            ? await ctx.storage.getUrl(row.prevDocxStorageId)
+            : row.prevStorageId && row.prevArtifactFormat !== "pdf"
+              ? await ctx.storage.getUrl(row.prevStorageId)
+              : null,
+          prevDocxFilename:
+            row.prevDocxFilename ??
+            (row.prevStorageId && row.prevArtifactFormat !== "pdf"
+              ? row.prevFilename ?? null
+              : null),
         });
       }
     }

@@ -120,6 +120,13 @@ export type ResumeReport = {
   variant?: string;
   scores: Record<string, number>;
   notes: string[];
+  format?: "pdf";
+  pageCount?: 1;
+  fit?: {
+    heightPt: number;
+    safeHeightPt: number;
+    adjustments: string[];
+  };
   projects: {
     name: string;
     variant?: string;
@@ -134,10 +141,16 @@ export type ResumeReport = {
 export type ResumeMeta = {
   url: string;
   filename: string;
+  format: "pdf" | "docx";
+  docxUrl: string | null;
+  docxFilename: string | null;
   updatedAt?: number;
   report: ResumeReport | null;
   prevUrl: string | null;
   prevFilename: string | null;
+  prevFormat: "pdf" | "docx" | null;
+  prevDocxUrl: string | null;
+  prevDocxFilename: string | null;
 };
 
 export type ResumeUrls = Record<string, ResumeMeta>;
@@ -206,11 +219,23 @@ export async function getResumeUrls(user: string): Promise<ResumeUrls> {
       out[short] = {
         url,
         filename: typeof row.filename === "string" ? row.filename : "resume.docx",
+        format: row.format === "pdf" ? "pdf" : "docx",
+        docxUrl: typeof row.docxUrl === "string" ? row.docxUrl : null,
+        docxFilename:
+          typeof row.docxFilename === "string" ? row.docxFilename : null,
         updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : undefined,
         report: (row.report as ResumeReport | null | undefined) ?? null,
         prevUrl: typeof row.prevUrl === "string" ? row.prevUrl : null,
         prevFilename:
           typeof row.prevFilename === "string" ? row.prevFilename : null,
+        prevFormat:
+          row.prevFormat === "pdf" || row.prevFormat === "docx"
+            ? row.prevFormat
+            : null,
+        prevDocxUrl:
+          typeof row.prevDocxUrl === "string" ? row.prevDocxUrl : null,
+        prevDocxFilename:
+          typeof row.prevDocxFilename === "string" ? row.prevDocxFilename : null,
       };
     }
   }

@@ -165,28 +165,33 @@ export default defineSchema({
     .index("by_user_state", ["user", "state"])
     .index("by_user_message", ["user", "gmailMessageId"]),
 
-  // Built and tailored .docx per (user, short), stored in Convex file
-  // storage. `storageId` is the system file id; attachResume replaces an
-  // existing row on rebuild (deleting the old storage object) so the table
-  // never leaks orphaned files. Nothing is ever committed to the repo on a
-  // convex instance - getResumeUrls serves storage links instead.
+  // Built resume artifacts per (user, short), stored in Convex file storage.
+  // `storageId` is the primary artifact. New native builds use PDF as primary
+  // and keep a DOCX companion; legacy builds may still contain DOCX only.
   resumes: defineTable({
     user: v.string(),
     short: v.string(),
     filename: v.string(),
     storageId: v.id("_storage"),
+    artifactFormat: v.optional(v.union(v.literal("pdf"), v.literal("docx"))),
+    docxStorageId: v.optional(v.id("_storage")),
+    docxFilename: v.optional(v.string()),
     updatedAt: v.number(),
     // Keep-N=2 versioning: a rebuild moves the current build into prev* and
     // deletes the storage object prev* held before, so exactly the last two
     // artifacts exist and nothing orphans (the schema's original no-leak goal).
     prevStorageId: v.optional(v.id("_storage")),
     prevFilename: v.optional(v.string()),
+    prevArtifactFormat: v.optional(v.union(v.literal("pdf"), v.literal("docx"))),
+    prevDocxStorageId: v.optional(v.id("_storage")),
+    prevDocxFilename: v.optional(v.string()),
     prevUpdatedAt: v.optional(v.number()),
     // Build report: what the tailor actually did (JD source and size, project
     // selection scores, before/after bullets, LLM notes, rendered outline).
     // Computed by resume_node.performBuild; rendered by the web app's report
     // dialog. v.any() because it embeds profile-authored strings.
     report: v.optional(v.any()),
+    prevReport: v.optional(v.any()),
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),

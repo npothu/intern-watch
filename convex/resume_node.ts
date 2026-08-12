@@ -12,7 +12,7 @@
 // comment for the precedent in this codebase). The `docx` npm package is a
 // bundler-oriented library not vetted for that isolate, and its output
 // (Packer.toBuffer) is documented as a Node `Buffer`, so the build action -
-// JD fetch -> Gemini call -> docx generation -> storage - runs here under
+// JD fetch -> model call -> PDF/DOCX generation -> storage - runs here under
 // the Node runtime instead of risking a runtime-only failure in the isolate.
 
 import { internalAction } from "./_generated/server";
@@ -27,7 +27,13 @@ import {
   parseRewrites,
   type ProjectPayload,
 } from "./resume_prompt";
-import { composeResumeDoc, projectEntries, resumeFilename, resumeOutline } from "./resume_docx";
+import {
+  composeResumeDoc,
+  projectEntries,
+  resumeFilename,
+  resumeOutline,
+} from "./resume_renderers/docx";
+import { buildResumePdf, pdfFilename } from "./resume_renderers/pdf";
 import {
   callModel,
   chooseLlm,
@@ -142,6 +148,13 @@ type BuildReport = {
   variant?: string;
   scores: Record<string, number>;
   notes: string[];
+  format: "pdf";
+  pageCount: 1;
+  fit: {
+    heightPt: number;
+    safeHeightPt: number;
+    adjustments: string[];
+  };
   projects: {
     name: string;
     variant: string;
@@ -278,7 +291,7 @@ async function performBuild(
       // "emphasize the Go work" steers the same rewrite pass a plain build
       // runs - no separate edit pipeline to maintain.
       const jdForPrompt = opts.instructions
-        ? `${jdText}\n\nAdditional instructions from the candidate (follow these):\n${opts.instructions.slice(0, 1000)}`
+        ? `Additional instructions from the candidate (follow these):\n${opts.instructions.slice(0, 1000)}\n\n${jdText}`
         : jdText;
       const { system, user: userMsg } = assemblePrompt(jdForPrompt, selected);
       const text = await callModel(choice.provider, {
@@ -333,18 +346,27 @@ async function performBuild(
     }
   }
 
-  // Compose + serialize the .docx and store its bytes in Convex storage.
-  // ctx.storage.store() takes a Blob (not a raw Buffer/ArrayBuffer) - the
-  // Blob's type becomes the stored file's Content-Type on retrieval, so it
-  // must match the DOCX Open Packaging mime the Python ConvexStore.put_resume
-  // upload uses (src/store.py's _DOCX_MIME) for the two paths to agree.
+  // Fit and validate the PDF before storing either artifact. The PDF renderer
+  // owns pagination and may deterministically condense or remove the least
+  // relevant optional content. DOCX is composed from that exact fitted plan,
+  // so both downloads contain the same selected projects and bullets.
+  const pdf = await buildResumePdf(profile, content, {
+    scores,
+  });
+  content = pdf.content;
+  notes.push(...pdf.notes.map((note) => note.message));
+
   const DOCX_MIME =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  const doc = composeResumeDoc(profile, content);
+  const doc = composeResumeDoc(pdf.profile, content);
   const buf = await Packer.toBuffer(doc);
   const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-  const blob = new Blob([arrayBuffer], { type: DOCX_MIME });
-  const storageId = await ctx.storage.store(blob);
+  const docxBlob = new Blob([arrayBuffer], { type: DOCX_MIME });
+  const pdfArrayBuffer = pdf.bytes.buffer.slice(
+    pdf.bytes.byteOffset,
+    pdf.bytes.byteOffset + pdf.bytes.byteLength,
+  ) as ArrayBuffer;
+  const pdfBlob = new Blob([pdfArrayBuffer], { type: "application/pdf" });
 
   const report: BuildReport = {
     builtAt: Date.now(),
@@ -356,6 +378,13 @@ async function performBuild(
     variant: opts.variant,
     scores,
     notes,
+    format: "pdf",
+    pageCount: 1,
+    fit: {
+      heightPt: pdf.heightPt,
+      safeHeightPt: pdf.safeHeightPt,
+      adjustments: pdf.notes.map((note) => note.message),
+    },
     projects: content.projects.map((p) => ({
       name: p.name,
       variant: variants[p.name] ?? "base",
@@ -364,17 +393,31 @@ async function performBuild(
       llmRewritten: rewritten.has(p.name),
       overridden: overridden.has(p.name),
     })),
-    outline: resumeOutline(profile, content),
+    outline: resumeOutline(pdf.profile, content),
   };
 
-  // Attach (keep-N=2 upsert) with the report, then clear the marker.
-  await ctx.runMutation(internal.resume.attachResumeInternal, {
-    user,
-    short,
-    filename: resumeFilename(profile, company),
-    storageId,
-    report,
-  });
+  // Store and attach the pair atomically from the table's perspective. If the
+  // second store or mutation fails, delete everything created by this action
+  // so a failed build cannot leak unreferenced files.
+  let pdfStorageId: Awaited<ReturnType<typeof ctx.storage.store>> | undefined;
+  let docxStorageId: Awaited<ReturnType<typeof ctx.storage.store>> | undefined;
+  try {
+    pdfStorageId = await ctx.storage.store(pdfBlob);
+    docxStorageId = await ctx.storage.store(docxBlob);
+    await ctx.runMutation(internal.resume.attachResumeInternal, {
+      user,
+      short,
+      filename: pdfFilename(pdf.profile, company),
+      storageId: pdfStorageId,
+      docxFilename: resumeFilename(pdf.profile, company),
+      docxStorageId,
+      report,
+    });
+  } catch (error) {
+    if (pdfStorageId) await ctx.storage.delete(pdfStorageId);
+    if (docxStorageId) await ctx.storage.delete(docxStorageId);
+    throw error;
+  }
   await ctx.runMutation(internal.resume.clearBuild, { user, short });
 }
 
