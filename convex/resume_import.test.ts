@@ -439,6 +439,124 @@ describe("resume import validation and mappings", () => {
     if (result.ok) expect(result.value.profile.header.contact_line).toBe("");
   });
 
+  test("education institution fields cannot become a fabricated second degree", () => {
+    const lines = extractDocxXml(`<w:document xmlns:w="urn:test"><w:body>
+      <w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10800"/></w:tabs></w:pPr>
+        <w:r><w:rPr><w:b/></w:rPr><w:t>Georgia Institute of Technology</w:t></w:r>
+        <w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> | Atlanta, GA</w:t></w:r>
+        <w:r><w:tab/><w:t>Expected Graduation May 2027</w:t></w:r>
+      </w:p>
+      <w:p><w:r><w:rPr><w:i/></w:rPr><w:t>B.S Computer Science / GPA 3.7</w:t></w:r></w:p>
+      <w:p><w:r><w:rPr><w:i/></w:rPr><w:t>Concentrations: Systems and Architecture &amp; Information Internetworks</w:t></w:r></w:p>
+    </w:body></w:document>`);
+    const importedProfile: ProfileV2 = {
+      ...profile,
+      skills: {},
+      sections: [
+        {
+          id: "education",
+          title: "Education",
+          kind: "education",
+          entries: [
+            {
+              id: "georgia-tech",
+              heading: "Georgia Institute of Technology",
+              location: "Atlanta, GA",
+              date: "Expected Graduation May 2027",
+              degrees: [
+                {
+                  degree: "B.S Computer Science",
+                  concentration:
+                    "Systems and Architecture & Information Internetworks",
+                  grad_date: "May 2027",
+                  gpa: "3.7",
+                },
+                {
+                  degree: "Georgia Institute of Technology",
+                  concentration: "Atlanta, GA",
+                  grad_date: "May 2028",
+                },
+              ],
+              bullets: { base: [] },
+            },
+          ],
+        },
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        lines.map((line) => ({
+          lineId: line.id,
+          targetPaths: ["/sections/0/entries/0/degrees"],
+        })),
+        importedProfile,
+      ),
+      { format: "docx", filename: "resume.docx", lines },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const errors = result.errors.join("\n");
+      expect(errors).toMatch(/education.*degree.*institution/i);
+      expect(errors).toMatch(/education.*concentration.*location/i);
+      expect(errors).toMatch(/education.*graduation.*source/i);
+    }
+  });
+
+  test("labeled education coursework cannot be accepted as an entry bullet", () => {
+    const coursework =
+      "Coursework: Operating Systems, Compilers & Interpreters, Computer Organization";
+    const importedProfile: ProfileV2 = {
+      ...profile,
+      skills: {},
+      sections: [
+        {
+          id: "education",
+          title: "Education",
+          kind: "education",
+          entries: [
+            {
+              id: "georgia-tech",
+              heading: "Georgia Institute of Technology",
+              date: "May 2027",
+              degrees: [
+                {
+                  degree: "B.S Computer Science",
+                  grad_date: "May 2027",
+                },
+              ],
+              bullets: { base: [coursework] },
+            },
+          ],
+        },
+      ],
+    };
+    const result = validateModelOutput(
+      modelResponse(
+        [
+          {
+            lineId: "line-0004",
+            targetPaths: ["/sections/0/entries/0/bullets/base/0"],
+          },
+        ],
+        importedProfile,
+      ),
+      extracted(
+        "Georgia Institute of Technology",
+        "Expected Graduation May 2027",
+        "B.S Computer Science",
+        coursework,
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join("\n")).toMatch(
+        /coursework.*top-level skills\.coursework/i,
+      );
+    }
+  });
+
   test("experience columns cannot be accepted in the wrong semantic fields", () => {
     const extraction = extracted(
       "Example Co\tAtlanta, GA",
@@ -1507,6 +1625,15 @@ describe("resume import prompt and repair", () => {
       "Projects: heading is only the project name, tech is the explicit technology list, and date is only the project period",
     );
     expect(prompt.system).toContain("Education:");
+    expect(prompt.system).toContain(
+      "Create one education entry per institution and one degree item per explicit degree credential",
+    );
+    expect(prompt.system).toContain(
+      "Multiple concentrations for one degree stay together in that degree's concentration string",
+    );
+    expect(prompt.system).toContain(
+      "Never create a degree from an institution, location, or graduation date",
+    );
     expect(prompt.system).toContain("Community:");
     expect(prompt.system).toContain("Skills:");
     expect(prompt.system).toContain(
@@ -1683,6 +1810,91 @@ describe("resume import prompt and repair", () => {
     expect(repairPrompt).toContain("Preserve valid entries and content");
     expect(repairPrompt).toContain("semantic fields");
     expect(repairPrompt).toContain("segment mappings");
+  });
+
+  test("fabricated education degrees receive one actionable repair call", async () => {
+    const extraction = extracted(
+      "Georgia Institute of Technology",
+      "Atlanta, GA",
+      "Expected Graduation May 2027",
+      "B.S Computer Science / GPA 3.7",
+      "Concentrations: Systems and Architecture & Information Internetworks",
+    );
+    const educationEntry = {
+      id: "georgia-tech",
+      heading: "Georgia Institute of Technology",
+      location: "Atlanta, GA",
+      date: "Expected Graduation May 2027",
+      bullets: { base: [] as string[] },
+    };
+    const misplacedProfile: ProfileV2 = {
+      ...profile,
+      skills: {},
+      sections: [
+        {
+          id: "education",
+          title: "Education",
+          kind: "education",
+          entries: [
+            {
+              ...educationEntry,
+              degrees: [
+                {
+                  degree: "B.S Computer Science",
+                  concentration:
+                    "Systems and Architecture & Information Internetworks",
+                  grad_date: "May 2027",
+                  gpa: "3.7",
+                },
+                {
+                  degree: "Georgia Institute of Technology",
+                  concentration: "Atlanta, GA",
+                  grad_date: "May 2028",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const repairedProfile: ProfileV2 = {
+      ...misplacedProfile,
+      sections: [
+        {
+          ...misplacedProfile.sections[0],
+          entries: [
+            {
+              ...educationEntry,
+              degrees: [misplacedProfile.sections[0].entries[0].degrees![0]],
+            },
+          ],
+        },
+      ],
+    };
+    const mappings = extraction.lines.map((line) => ({
+      lineId: line.id,
+      targetPaths: ["/sections/0/entries/0/degrees"],
+    }));
+    const invoke = vi
+      .fn<(prompt: { system: string; user: string }) => Promise<string>>()
+      .mockResolvedValueOnce(modelResponse(mappings, misplacedProfile))
+      .mockResolvedValueOnce(modelResponse(mappings, repairedProfile));
+
+    const result = await mapExtractionWithModel(extraction, invoke);
+
+    expect(result.profile.sections[0].entries[0].degrees).toEqual([
+      {
+        degree: "B.S Computer Science",
+        concentration: "Systems and Architecture & Information Internetworks",
+        grad_date: "May 2027",
+        gpa: "3.7",
+      },
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    const repairPrompt = invoke.mock.calls[1][0].user;
+    expect(repairPrompt).toContain("education degree repeats the institution");
+    expect(repairPrompt).toContain("education concentration repeats the location");
+    expect(repairPrompt).toContain("education graduation date is not supported");
   });
 
   test("provider failures are not retried", async () => {

@@ -1010,7 +1010,7 @@ function credibleSemanticSourceLine(
   pointerRoot: string,
 ): boolean {
   const semanticField = new RegExp(
-    `^${pointerRoot}/(?:heading|subheading|location|date|tech)(?:/|$)`,
+    `^${pointerRoot}/(?:heading|subheading|location|date|tech|degrees)(?:/|$)`,
     "u",
   );
   const paths = [
@@ -1037,6 +1037,22 @@ function semanticErrors(
   mappings: ImportLineMapping[],
 ): string[] {
   const errors: string[] = [];
+  const importedCoursework = normalizedContent(
+    stringLeaves(profile.skills.coursework ?? []).join(" "),
+  );
+  for (const line of extraction.lines) {
+    const match = line.text.match(/^\s*coursework\s*:\s*(.+)$/iu);
+    if (!match) continue;
+    const sourceCoursework = normalizedContent(match[1]);
+    if (
+      sourceCoursework &&
+      (!importedCoursework || !importedCoursework.includes(sourceCoursework))
+    ) {
+      errors.push(
+        `Labeled coursework from ${line.id} must map to top-level skills.coursework, not an education entry bullet`,
+      );
+    }
+  }
   profile.sections.forEach((section, sectionIndex) => {
     section.entries.forEach((entry, entryIndex) => {
       const path = `profile.sections[${sectionIndex}].entries[${entryIndex}]`;
@@ -1067,6 +1083,63 @@ function semanticErrors(
         errors.push(
           `${path} ${section.kind} date is embedded in subheading; put dates only in date`,
         );
+      }
+      if (section.kind === "education") {
+        const normalizedInstitution = normalizedContent(entry.heading);
+        const normalizedLocation = normalizedContent(entry.location ?? "");
+        const sourceText = (sourceLines.length > 0 ? sourceLines : extraction.lines)
+          .map((line) => normalizedContent(line.text))
+          .filter(Boolean);
+        const supportedBySource = (value: string) => {
+          const normalized = normalizedContent(value);
+          return normalized && sourceText.some((source) => source.includes(normalized));
+        };
+        entry.degrees?.forEach((degree, degreeIndex) => {
+          const degreePath = `${path}.degrees[${degreeIndex}]`;
+          if (
+            normalizedInstitution &&
+            normalizedContent(degree.degree) === normalizedInstitution
+          ) {
+            errors.push(
+              `${degreePath} education degree repeats the institution; create degree items only from explicit degree credentials`,
+            );
+          } else if (!supportedBySource(degree.degree)) {
+            errors.push(
+              `${degreePath} education degree is not supported by its mapped source lines; preserve the explicit credential wording`,
+            );
+          }
+          if (
+            degree.concentration &&
+            normalizedLocation &&
+            normalizedContent(degree.concentration) === normalizedLocation
+          ) {
+            errors.push(
+              `${degreePath} education concentration repeats the location; keep the campus place only in location`,
+            );
+          } else if (
+            degree.concentration &&
+            !supportedBySource(degree.concentration)
+          ) {
+            errors.push(
+              `${degreePath} education concentration is not supported by its mapped source lines; do not infer a concentration`,
+            );
+          }
+          if (!looksLikeStandaloneDate(degree.grad_date)) {
+            errors.push(
+              `${degreePath} education graduation must contain only an explicit graduation date`,
+            );
+          } else if (!supportedBySource(degree.grad_date)) {
+            errors.push(
+              `${degreePath} education graduation date is not supported by its mapped source lines; do not infer a date`,
+            );
+          }
+          if (degree.gpa && !supportedBySource(degree.gpa)) {
+            errors.push(
+              `${degreePath} education GPA is not supported by its mapped source lines; do not infer a GPA`,
+            );
+          }
+        });
+        return;
       }
       if (section.kind === "projects") {
         const sourceSegments = structuredSourceLines.flatMap(
@@ -1404,8 +1477,12 @@ export function buildImportPrompt(
     "Experience: heading is the organization, subheading is the role, location is the place, and date is the employment period.",
     "Projects: heading is only the project name, tech is the explicit technology list, and date is only the project period.",
     "Education: heading is the institution, location is an explicit campus place, date is the institution period, and degrees contain degree and grad_date plus optional concentration and gpa.",
+    "Create one education entry per institution and one degree item per explicit degree credential. Never create a degree from an institution, location, or graduation date.",
+    "A labeled Concentration or Concentrations line belongs to the preceding explicit degree. Multiple concentrations for one degree stay together in that degree's concentration string.",
+    "Preserve the source's degree credential wording. Use only graduation dates, concentrations, and GPAs stated in the source. Do not infer another degree or a later graduation date.",
     "Community: heading is the organization or activity, subheading is the role when present, location is the place, date is the participation period, and headingRuns preserve explicit rich heading styling.",
     "Skills: put category values in top-level skills and leave the skills section entries empty.",
+    "A labeled Coursework line always maps to top-level skills.coursework, never to an education entry bullet.",
     "Tabs and pipe separators are layout evidence, not literal heading content. Split their columns into the semantic fields above.",
     "Incorrect: experience heading \"Organization | City, ST\" with empty location. Correct: heading \"Organization\" and location \"City, ST\".",
     "Incorrect: project heading \"Project | Library, Database\" with empty tech. Correct: heading \"Project\" and tech [\"Library\",\"Database\"].",
