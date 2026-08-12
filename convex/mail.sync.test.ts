@@ -168,6 +168,41 @@ test("sync history.list 404 -> full-sync fallback (messages.list + profile re-an
   expect(account!.lastError).toBeUndefined();
 });
 
+test("sync skips a message deleted after history.list and still advances", async () => {
+  const t = convexTest(schema);
+  await seedAccount(t, { historyId: "100" });
+  const message = gmailMessage(
+    "gm-live",
+    "th-live",
+    "hr@bigco.com",
+    "Interview",
+    "2026-08-04T00:00:00Z",
+    "msg-live",
+  );
+  stubFetch(async (url) => {
+    if (url.includes("/token")) return okJson({ access_token: "tok", expires_in: 3600 });
+    if (url.includes("/history")) {
+      return okJson({
+        historyId: "200",
+        history: [{ id: "200", messages: [{ id: "gm-deleted" }, { id: "gm-live" }] }],
+      });
+    }
+    if (url.includes("/messages/gm-deleted")) return errStatus(404);
+    if (url.includes("/messages/gm-live")) return okJson(message);
+    throw new Error(`unexpected url: ${url}`);
+  });
+
+  await t.action(mail.sync, { user: "u1" });
+
+  const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
+  expect(rows).toHaveLength(1);
+  expect(rows[0].gmailMessageId).toBe("gm-live");
+  const account = await getAccountRow(t);
+  expect(account!.historyId).toBe("200");
+  expect(typeof account!.lastSyncAt).toBe("number");
+  expect(account!.lastError).toBeUndefined();
+});
+
 test("sync with no stored cursor uses full-sync path and anchors from profile", async () => {
   const t = convexTest(schema);
   await seedAccount(t, {}); // no historyId yet
