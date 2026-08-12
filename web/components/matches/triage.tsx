@@ -7,7 +7,7 @@
 //                rows in 150ms so a held j/k never outruns it
 //   ticks        the applied check draws its own stroke, both ticks pop -
 //                only on a user toggle, never on mount or hydration
-//   cascade      rows rise in on mount, filter change and settled search
+//   cascade      rows rise in on mount and when filtering adds new rows
 //   dock         keycap press ring in the pressed action's own colour,
 //                fired from clicks and keyboard shortcuts alike
 //   hide         the row collapses first, and the dismiss commits after
@@ -378,8 +378,6 @@ export function Triage({
   });
 
   // Motion state -----------------------------------------------------------
-  // 1b: bumping `epoch` remounts the list container, replaying the cascade.
-  const [epoch, setEpoch] = useState(0);
   // 1a: which tick just got toggled ON ("<short>:a" | "<short>:s").
   const [tickFlash, setTickFlash] = useState<FlashState>({ key: "", n: 0 });
   // 1d: which dock action just fired.
@@ -631,18 +629,6 @@ export function Triage({
     }
     scrollBlock.current = "nearest";
   }, [cursor, animateWindowScroll]);
-
-  // 1b: replay the cascade when the filter changes or the search settles
-  // (150ms after the last keystroke). Never on tick/hide mutations.
-  const skipFirstEpoch = useRef(true);
-  useEffect(() => {
-    if (skipFirstEpoch.current) {
-      skipFirstEpoch.current = false;
-      return;
-    }
-    const id = window.setTimeout(() => setEpoch((e) => e + 1), 150);
-    return () => window.clearTimeout(id);
-  }, [filter, termFilter, query]);
 
   function flashDock(key: string) {
     setPressed((p) => ({ key, n: p.n + 1 }));
@@ -1195,8 +1181,7 @@ export function Triage({
           </div>
         </div>
       ) : (
-        /* 1b: key={epoch} remounts the whole list so the cascade replays */
-        <div key={epoch}>
+        <div>
           {groups.map((g) => {
             const headerIndex = flatIndex;
             return (
