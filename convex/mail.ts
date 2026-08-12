@@ -1206,10 +1206,14 @@ async function fullSync(
   return { ids, cursor };
 }
 
-async function fetchMessage(token: string, id: string): Promise<any> {
+async function fetchMessage(token: string, id: string): Promise<any | null> {
   const res = await fetch(`${GMAIL_ME}/messages/${encodeURIComponent(id)}?format=full`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+  // A message can be deleted after Gmail includes it in history or
+  // messages.list. Treat that race as a consumed item so one vanished message
+  // cannot pin the account's history cursor and block every later sync.
+  if (res.status === 404) return null;
   if (!res.ok) {
     throw new Error(`gmail messages.get failed: ${res.status}`);
   }
@@ -1280,6 +1284,7 @@ export const sync = internalAction({
       for (const id of candidateIds) {
         if (recorded.has(id)) continue;
         const msg = await fetchMessage(token, id);
+        if (!msg) continue;
         const headers = {
           from: getHeader(msg, "From"),
           subject: getHeader(msg, "Subject"),
