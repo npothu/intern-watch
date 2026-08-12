@@ -916,7 +916,18 @@ export function Triage({
 
   function openRow(row?: TriageRow) {
     const r = row ?? currentRow;
-    if (r?.url) window.open(r.url, "_blank", "noopener");
+    if (!r?.url) return;
+
+    // Reuse the rendered anchor so the keyboard shortcut follows the same
+    // browser navigation path as clicking the job title.
+    const link = rootRef.current?.querySelector<HTMLAnchorElement>(
+      '[data-cursor="1"] a[data-open]'
+    );
+    if (link?.href === r.url) {
+      link.click();
+      return;
+    }
+    window.open(r.url, "_blank", "noopener");
   }
 
   function actOnCurrent(kind: "applied" | "saved" | "hide") {
@@ -1673,15 +1684,32 @@ function RowView({
           {company}
         </span>
         <Tags tag={row.tag} />
-        <div
-          className={cn(
-            "truncate text-[12.5px] text-ink transition-opacity duration-[250ms]",
-            applied && "opacity-55"
-          )}
-          title={title}
-        >
-          {title}
-        </div>
+        {row.url ? (
+          <a
+            data-open
+            href={row.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              "block truncate text-[12.5px] text-ink transition-colors hover:text-accent hover:underline underline-offset-3",
+              applied && "opacity-55"
+            )}
+            title={title}
+          >
+            {title}
+          </a>
+        ) : (
+          <div
+            className={cn(
+              "truncate text-[12.5px] text-ink transition-opacity duration-[250ms]",
+              applied && "opacity-55"
+            )}
+            title={title}
+          >
+            {title}
+          </div>
+        )}
         <div className="mt-0.5 text-[11.5px] text-ink-2 tabular-nums">
           {/* Joined rather than concatenated with fixed separators: a manually
               added job often has no location or salary, which left the line
@@ -1895,14 +1923,31 @@ function MobileCard({
               </span>
               <Tags tag={row.tag} />
             </div>
-            <div
-              className={cn(
-                "mt-0.5 line-clamp-2 text-[12px] text-ink transition-opacity duration-[250ms]",
-                applied && "opacity-55"
-              )}
-            >
-              {row.title}
-            </div>
+            {row.url ? (
+              <a
+                data-open
+                href={row.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className={cn(
+                  "mt-0.5 block line-clamp-2 text-[12px] text-ink transition-colors hover:text-accent hover:underline underline-offset-3",
+                  applied && "opacity-55"
+                )}
+                title={row.title}
+              >
+                {row.title}
+              </a>
+            ) : (
+              <div
+                className={cn(
+                  "mt-0.5 line-clamp-2 text-[12px] text-ink transition-opacity duration-[250ms]",
+                  applied && "opacity-55"
+                )}
+              >
+                {row.title}
+              </div>
+            )}
             <div className="mt-1 truncate text-[11px] text-ink-2 tabular-nums">
               {[row.location, row.salary, `seen ${fmtDate(row.added)}`]
                 .filter(Boolean)

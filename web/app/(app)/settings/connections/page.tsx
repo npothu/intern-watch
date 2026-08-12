@@ -8,7 +8,6 @@ import {
 import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { ConnectionsList } from "@/components/settings/connections-list";
-import { DeployChecklist } from "@/components/settings/deploy-checklist";
 
 export const metadata = { title: "Connections - intern-watch" };
 
@@ -16,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Settings -> Connections. The resume-model card (which needs no setup), then
- * the provider cards that do, then the read-only deploy-time env checklist.
+ * the provider cards that do.
  * Secrets are never rendered here - the client components own save/test/remove
  * and this page only loads which providers have a credential on file.
  *
@@ -92,8 +91,6 @@ export default async function ConnectionsPage() {
           mailSync={mailSync}
         />
       </div>
-
-      <DeployChecklist />
     </div>
   );
 }

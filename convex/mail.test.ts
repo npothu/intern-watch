@@ -53,6 +53,33 @@ function envelope(email: string): string {
   });
 }
 
+// -- OAuth readiness --------------------------------------------------------
+
+test("getOAuthConfig requires the complete operator-managed mail setup", async () => {
+  const t = convexTest(schema);
+  const previousTopic = process.env.MAIL_PUBSUB_TOPIC;
+  const previousToken = process.env.MAIL_PUSH_TOKEN;
+  delete process.env.MAIL_PUBSUB_TOPIC;
+  delete process.env.MAIL_PUSH_TOKEN;
+
+  try {
+    const incomplete = await t.query(mail.getOAuthConfig, { secret: SECRET });
+    expect(incomplete.missing).toEqual(
+      expect.arrayContaining(["MAIL_PUBSUB_TOPIC", "MAIL_PUSH_TOKEN"]),
+    );
+
+    process.env.MAIL_PUBSUB_TOPIC = "projects/test/topics/gmail";
+    process.env.MAIL_PUSH_TOKEN = PUSH_TOKEN;
+    const ready = await t.query(mail.getOAuthConfig, { secret: SECRET });
+    expect(ready.missing).toEqual([]);
+  } finally {
+    if (previousTopic === undefined) delete process.env.MAIL_PUBSUB_TOPIC;
+    else process.env.MAIL_PUBSUB_TOPIC = previousTopic;
+    if (previousToken === undefined) delete process.env.MAIL_PUSH_TOKEN;
+    else process.env.MAIL_PUSH_TOKEN = previousToken;
+  }
+});
+
 // -- setMailAccount ---------------------------------------------------------
 
 test("setMailAccount inserts then upserts, clearing lastError", async () => {
