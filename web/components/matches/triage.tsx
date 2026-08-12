@@ -1478,12 +1478,14 @@ function ResumeButton({
   onBuild,
   error,
   noJd,
+  format,
 }: {
   state: BuildState;
   href: string | null;
   onBuild: () => void;
   error?: string;
   noJd?: boolean;
+  format?: "pdf" | "docx";
 }) {
   const base =
     "inline-flex min-w-[98px] items-center justify-center gap-1.5 rounded-[5px] border px-2 py-[5px] text-[12px] font-medium whitespace-nowrap transition-colors select-none";
@@ -1497,7 +1499,9 @@ function ResumeButton({
         title={
           noJd
             ? "No job description was found. This resume used only the job title, company, and location."
-            : "Open generated PDF"
+            : format === "pdf"
+              ? "Open generated PDF"
+              : "Open generated resume"
         }
         onClick={(e) => e.stopPropagation()}
         className={cn(
@@ -1510,7 +1514,7 @@ function ResumeButton({
         ) : (
           <FileText className="size-3.5" />
         )}
-        resume PDF
+        {format === "pdf" ? "resume PDF" : "resume"}
       </a>
     );
   }
@@ -1750,6 +1754,7 @@ function RowView({
           onBuild={onBuild}
           error={buildError}
           noJd={row.resumeMeta?.report?.jdSource === "stub"}
+          format={row.resumeMeta?.format}
         />
         {buildState === "built" && (
           /* The report affordance: deliberately quiet next to the resume
@@ -2028,6 +2033,7 @@ function MobileCard({
               onBuild={onBuild}
               error={buildError}
               noJd={row.resumeMeta?.report?.jdSource === "stub"}
+              format={row.resumeMeta?.format}
             />
             {buildState === "built" && (
               <button

@@ -651,7 +651,7 @@ export function ResumeReportDialog({
             )}
           </span>
           <span className="flex gap-1.5">
-            {meta?.docxUrl && (
+            {meta?.format === "pdf" && meta.docxUrl && (
               <Button variant="outline" size="sm" asChild>
                 <a
                   href={meta.docxUrl}
@@ -673,7 +673,7 @@ export function ResumeReportDialog({
                   download={meta.filename}
                 >
                   <Download className="size-3.5" />
-                  Download PDF
+                  {meta.format === "pdf" ? "Download PDF" : "Download DOCX"}
                 </a>
               </Button>
             )}
