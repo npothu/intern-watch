@@ -10,7 +10,7 @@
 // The dialog is read-only over a `ResumeReport`; rebuild/restore intents are
 // handed up to Triage, which owns the per-row build state machine.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { DocxView } from "@/components/matches/docx-view";
 import { removeResume } from "@/app/(app)/matches-actions";
 import { fetchProfile } from "@/app/(app)/profile/profile-actions";
 import { variantsOf, type ProfileV2 } from "@/lib/profile";
@@ -126,12 +125,9 @@ function PreviewTab({
   url,
 }: {
   report: ResumeReport;
-  /** The stored .docx. Absent until the first successful build. */
+  /** The stored PDF. Legacy DOCX builds fall back to the text outline. */
   url?: string;
 }) {
-  const [failed, setFailed] = useState(false);
-  const onFailed = useCallback(() => setFailed(true), []);
-
   // A build made before the resume header was filled in renders an outline of
   // nothing but empty strings, which paints a blank white rectangle that looks
   // like a broken component. Say what actually happened instead.
@@ -150,16 +146,18 @@ function PreviewTab({
     );
   }
 
-  if (url && !failed) return <DocxView url={url} onFailed={onFailed} />;
+  if (url) {
+    return (
+      <iframe
+        src={`${url}#toolbar=0&navpanes=0&view=FitH`}
+        title="Generated resume PDF preview"
+        className="h-[720px] w-full rounded-md border border-line bg-white"
+      />
+    );
+  }
 
   return (
     <div>
-      {failed && (
-        <p className="mb-2 rounded-md border border-amber/45 bg-amber/10 px-3 py-2 text-[12px] text-amber">
-          The document could not be rendered here - showing the text outline
-          instead. Download the .docx to check its layout.
-        </p>
-      )}
       <OutlineMiniature report={report} />
     </div>
   );
@@ -584,7 +582,11 @@ export function ResumeReportDialog({
             </div>
             <div className="max-h-[56vh] overflow-y-auto py-1 pr-1">
               {tab === "Preview" && (
-                <PreviewTab key={short} report={report} url={meta?.url} />
+                <PreviewTab
+                  key={short}
+                  report={report}
+                  url={meta?.format === "pdf" ? meta.url : undefined}
+                />
               )}
               {tab === "Changes" && <ChangesTab report={report} />}
               {tab === "Selection" && <SelectionTab report={report} />}
@@ -649,11 +651,29 @@ export function ResumeReportDialog({
             )}
           </span>
           <span className="flex gap-1.5">
+            {meta?.format === "pdf" && meta.docxUrl && (
+              <Button variant="outline" size="sm" asChild>
+                <a
+                  href={meta.docxUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={meta.docxFilename ?? undefined}
+                >
+                  <Download className="size-3.5" />
+                  Download DOCX
+                </a>
+              </Button>
+            )}
             {meta?.url && (
               <Button size="sm" asChild>
-                <a href={meta.url} target="_blank" rel="noopener noreferrer">
+                <a
+                  href={meta.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={meta.filename}
+                >
                   <Download className="size-3.5" />
-                  Download .docx
+                  {meta.format === "pdf" ? "Download PDF" : "Download DOCX"}
                 </a>
               </Button>
             )}

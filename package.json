@@ -4,10 +4,13 @@
   "description": "Convex backend (schema + query/mutation functions) for the optional STORE=convex TrackerStore driver.",
   "dependencies": {
     "docx": "^9.7.1",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1",
+    "pdfkit": "^0.19.1"
   },
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
+    "@types/pdfkit": "^0.17.6",
     "convex": "^1.43.0",
     "convex-test": "^0.0.55",
     "vitest": "^4.1.10"

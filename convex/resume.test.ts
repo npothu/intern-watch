@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { Document } from "docx";
 import schema from "./schema";
 import * as resume from "./resume";
+import * as tracker from "./tracker";
 import {
   applyRewrites,
   assemblePrompt,
@@ -495,5 +496,68 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
     const profile =
       typeof row!.data === "string" ? JSON.parse(row!.data as string) : row!.data;
     expect(profile).toEqual(data);
+  });
+});
+
+describe("resume artifact persistence", () => {
+  test("reports and DOCX companions survive refresh reads and version restore", async () => {
+    const t = convexTest(schema);
+    const first = await t.run(async (ctx) => ({
+      pdf: await ctx.storage.store(new Blob(["first-pdf"], { type: "application/pdf" })),
+      docx: await ctx.storage.store(new Blob(["first-docx"])),
+    }));
+    const unicodeProject = "Sys-savesync - Background Save Sync Sysmodule".replace(
+      " - ",
+      " \u2014 ",
+    );
+    const firstReport = {
+      scores: { [unicodeProject]: 7 },
+      projects: [{ name: unicodeProject }],
+    };
+    await t.mutation(resume.attachResumeInternal, {
+      user: "u1",
+      short: "ibm-role",
+      filename: "first.pdf",
+      storageId: first.pdf,
+      docxFilename: "first.docx",
+      docxStorageId: first.docx,
+      report: JSON.stringify(firstReport),
+    });
+
+    const refreshed = await t.query(tracker.getResumeUrls, {
+      user: "u1",
+      secret: SECRET,
+    });
+    expect(JSON.parse(refreshed[0].report as string)).toEqual(firstReport);
+    expect(refreshed[0].format).toBe("pdf");
+    expect(refreshed[0].docxUrl).toMatch(/^https?:/);
+
+    const second = await t.run(async (ctx) => ({
+      pdf: await ctx.storage.store(new Blob(["second-pdf"], { type: "application/pdf" })),
+      docx: await ctx.storage.store(new Blob(["second-docx"])),
+    }));
+    const secondReport = { scores: { IBM: 3 }, projects: [{ name: "IBM" }] };
+    await t.mutation(resume.attachResumeInternal, {
+      user: "u1",
+      short: "ibm-role",
+      filename: "second.pdf",
+      storageId: second.pdf,
+      docxFilename: "second.docx",
+      docxStorageId: second.docx,
+      report: JSON.stringify(secondReport),
+    });
+    await t.mutation(tracker.restoreResume, {
+      user: "u1",
+      short: "ibm-role",
+      secret: SECRET,
+    });
+
+    const restored = await t.query(tracker.getResumeUrls, {
+      user: "u1",
+      secret: SECRET,
+    });
+    expect(restored[0].filename).toBe("first.pdf");
+    expect(restored[0].docxFilename).toBe("first.docx");
+    expect(JSON.parse(restored[0].report as string)).toEqual(firstReport);
   });
 });
