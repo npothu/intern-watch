@@ -22,30 +22,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install
-      # `npx convex codegen` needs a deployment to talk to (it reads the
-      # deployment to type the internal function routes), and we don't want a
-      # cloud deployment here. So boot a throwaway *anonymous* local backend,
-      # let it generate convex/_generated, then stop it. The generated
-      # bindings are what vitest/convex-test compile against.
+      - run: npm ci
+      # Code generation needs a deployment to inspect, but CI must not use a
+      # cloud deployment. A single bounded anonymous local run starts the
+      # backend, generates the bindings, pushes the functions, and shuts the
+      # backend down before Vitest starts.
       - name: Generate convex/_generated via a local backend
-        run: |
-          CONVEX_AGENT_MODE=anonymous npx convex dev --typecheck disable > convex-dev.log 2>&1 &
-          DEV_PID=$!
-          ok=0
-          for i in $(seq 1 300); do
-            if [ -f convex/_generated/server.d.ts ]; then ok=1; break; fi
-            if ! kill -0 "$DEV_PID" 2>/dev/null; then break; fi
-            sleep 1
-          done
-          kill "$DEV_PID" 2>/dev/null || true
-          wait "$DEV_PID" 2>/dev/null || true
-          if [ "$ok" != "1" ]; then
-            echo "convex dev bootstrap did not produce convex/_generated:" >&2
-            cat convex-dev.log >&2
-            exit 1
-          fi
-          # Regenerate/verify the bindings now that a local deployment config
-          # exists (codegen auto-starts/auto-stops its own backend).
-          CONVEX_AGENT_MODE=anonymous npx convex codegen --typecheck disable
+        run: CONVEX_AGENT_MODE=anonymous npx convex dev --once --typecheck disable
       - run: npm test

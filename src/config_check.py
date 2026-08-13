@@ -505,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Local-only: pull STORE/CONVEX_* and GMAIL/GEMINI keys out of the
     # gitignored .env before the feature report. No-op in Actions (no .env).
-    load_dotenv()
+    load_dotenv(root / ".env")
 
     reports, ok = check_configs(users_dir, watch_yml, root=root)
     store_rep = env_store_report(watch_yml)
