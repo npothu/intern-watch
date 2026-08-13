@@ -42,6 +42,56 @@ function checkSecret(secret: string) {
 }
 
 const ERROR_MAX = 200; // truncated error message length for the status row
+const JD_MAX = 20_000;
+
+export const getJobDescription = query({
+  args: { user: v.string(), short: v.string(), secret: v.string() },
+  handler: async (ctx, { user, short, secret }) => {
+    checkSecret(secret);
+    const match = await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (!match?.jobDescription) return { text: null, updatedAt: null };
+    return {
+      text: match.jobDescription,
+      updatedAt: match.jobDescriptionUpdatedAt ?? null,
+    };
+  },
+});
+
+export const saveJobDescription = mutation({
+  args: {
+    user: v.string(),
+    short: v.string(),
+    jdText: v.string(),
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, short, jdText, secret }) => {
+    checkSecret(secret);
+    const text = jdText.trim().slice(0, JD_MAX);
+    if (!text) {
+      return { ok: false as const, error: "Job description cannot be empty." };
+    }
+    const match = await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) =>
+        q.eq("user", user).eq("short", short),
+      )
+      .first();
+    if (!match) {
+      return { ok: false as const, error: "Match not found." };
+    }
+    const updatedAt = Date.now();
+    await ctx.db.patch(match._id, {
+      jobDescription: text,
+      jobDescriptionUpdatedAt: updatedAt,
+    });
+    return { ok: true as const, text, updatedAt };
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Public mutation: kick off a build. Deliberately thin and synchronous so the
@@ -87,6 +137,13 @@ export const requestBuild = mutation({
     if (!match) {
       return { ok: false as const, error: "Match not found." };
     }
+    const suppliedJd = jdText?.trim().slice(0, JD_MAX);
+    if (suppliedJd) {
+      await ctx.db.patch(match._id, {
+        jobDescription: suppliedJd,
+        jobDescriptionUpdatedAt: Date.now(),
+      });
+    }
     // Upsert the in-flight marker to "building".
     const existing = await ctx.db
       .query("resumeBuilds")
@@ -109,7 +166,7 @@ export const requestBuild = mutation({
     await ctx.scheduler.runAfter(0, internal.resume_node.runBuild, {
       user,
       short,
-      jdText,
+      jdText: suppliedJd || match.jobDescription,
       instructions,
       overrides,
       variant,

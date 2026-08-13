@@ -89,6 +89,12 @@ export type MatchItem = {
   applied?: boolean;
   saved?: boolean;
   dismissed?: boolean;
+  hasJobDescription?: boolean;
+};
+
+export type JobDescription = {
+  text: string | null;
+  updatedAt: number | null;
 };
 
 /** One toggle in a batched `setTicks` mutation. Field names must match the
@@ -320,6 +326,43 @@ export async function requestResumeBuild(
   );
   const res = value as ResumeBuildResponse | null;
   return res && typeof res.ok === "boolean" ? res : { ok: true };
+}
+
+export async function getJobDescription(
+  user: string,
+  short: string
+): Promise<JobDescription> {
+  const value = await post(
+    "query",
+    "getJobDescription",
+    { user, short },
+    "resume"
+  );
+  const result = value as Partial<JobDescription> | null;
+  return {
+    text: typeof result?.text === "string" ? result.text : null,
+    updatedAt:
+      typeof result?.updatedAt === "number" ? result.updatedAt : null,
+  };
+}
+
+export async function saveJobDescription(
+  user: string,
+  short: string,
+  jdText: string
+): Promise<{ ok: boolean; error?: string; text?: string; updatedAt?: number }> {
+  const value = await post(
+    "mutation",
+    "saveJobDescription",
+    { user, short, jdText },
+    "resume"
+  );
+  return value as {
+    ok: boolean;
+    error?: string;
+    text?: string;
+    updatedAt?: number;
+  };
 }
 
 /** The live build status for one match, per `resume:getBuildStatus`: while the

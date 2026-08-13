@@ -15,8 +15,11 @@ import {
   deleteResume as convexDeleteResume,
   requestResumeBuild as convexRequestBuild,
   fetchBuildStatus as convexFetchBuildStatus,
+  getJobDescription as convexGetJobDescription,
+  saveJobDescription as convexSaveJobDescription,
   type TickWrite,
   type BuildStatus,
+  type JobDescription,
   type ResumeMeta,
 } from "@/lib/convex";
 
@@ -67,7 +70,8 @@ export type ResumeBuildResult = { ok: true } | { ok: false; error: string };
  * polls fetchBuildStatus until the resume URL appears.
  */
 export async function requestResumeBuild(
-  short: string
+  short: string,
+  opts: { jdText?: string } = {}
 ): Promise<ResumeBuildResult> {
   const user = await resolveTrackerUser();
   if (!user) {
@@ -80,7 +84,11 @@ export async function requestResumeBuild(
     return { ok: false, error: "Invalid short key." };
   }
   try {
-    const res = await convexRequestBuild(user, short);
+    const jdText =
+      typeof opts.jdText === "string"
+        ? opts.jdText.trim().slice(0, 20_000) || undefined
+        : undefined;
+    const res = await convexRequestBuild(user, short, { jdText });
     if (!res.ok) {
       return { ok: false, error: res.error ?? "Couldn't start the resume build." };
     }
@@ -88,6 +96,31 @@ export async function requestResumeBuild(
   } catch (err) {
     return { ok: false, error: (err as Error).message || "Build request failed." };
   }
+}
+
+export async function fetchJobDescription(
+  short: string
+): Promise<JobDescription> {
+  const user = await resolveTrackerUser();
+  if (!user || typeof short !== "string" || !SHORT_RE.test(short)) {
+    return { text: null, updatedAt: null };
+  }
+  return convexGetJobDescription(user, short);
+}
+
+export async function saveJobDescription(
+  short: string,
+  jdText: string
+): Promise<{ ok: boolean; error?: string; text?: string; updatedAt?: number }> {
+  const user = await resolveTrackerUser();
+  if (!user) return { ok: false, error: "Not signed in." };
+  if (typeof short !== "string" || !SHORT_RE.test(short)) {
+    return { ok: false, error: "Bad short key." };
+  }
+  if (typeof jdText !== "string" || !jdText.trim()) {
+    return { ok: false, error: "Job description cannot be empty." };
+  }
+  return convexSaveJobDescription(user, short, jdText.slice(0, 20_000));
 }
 
 /**

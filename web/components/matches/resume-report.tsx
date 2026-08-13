@@ -21,7 +21,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { removeResume } from "@/app/(app)/matches-actions";
+import {
+  fetchJobDescription,
+  removeResume,
+  saveJobDescription,
+} from "@/app/(app)/matches-actions";
 import { fetchProfile } from "@/app/(app)/profile/profile-actions";
 import { variantsOf, type ProfileV2 } from "@/lib/profile";
 import type { ResumeMeta, ResumeReport } from "@/lib/convex";
@@ -233,8 +237,19 @@ function SelectionTab({ report }: { report: ResumeReport }) {
   const entries = Object.entries(report.scores).sort((a, b) => b[1] - a[1]);
   const max = Math.max(...entries.map(([, s]) => s), 1);
   const picked = new Set(report.projects.map((p) => p.name));
+  const variants = new Map(
+    report.projects.map((project) => [project.name, project.variant ?? "base"]),
+  );
   return (
     <div>
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        <Chip tone="accent">
+          {report.variant ? `Requested variant: ${report.variant}` : "Variant mode: Auto"}
+        </Chip>
+        <span className="text-[11.5px] text-ink-2">
+          The exact rendered variant for each selected project is shown below.
+        </span>
+      </div>
       <p className="mb-2 text-[12px] text-ink-2">
         Projects scored against the JD - tags ×3, tech ×2, bullet prose ×1
         (the select.py rules). Top 6 make the page.
@@ -244,11 +259,23 @@ function SelectionTab({ report }: { report: ResumeReport }) {
           const out = !picked.has(name);
           return (
             <div key={name} className="contents">
-              <span className={cn("truncate", out ? "text-ink-2" : "font-medium text-ink")}>
-                {name}
+              <span
+                className={cn(
+                  "flex min-w-0 items-center gap-1.5",
+                  out ? "text-ink-2" : "font-medium text-ink",
+                )}
+              >
+                <span className="truncate">{name}</span>
                 {out && (
-                  <span className="ml-1.5 align-[1px]">
+                  <span className="shrink-0 align-[1px]">
                     <Chip tone="chip">dropped</Chip>
+                  </span>
+                )}
+                {!out && (
+                  <span className="shrink-0 align-[1px]">
+                    <Chip tone="accent">
+                      variant: {variants.get(name) ?? "base"}
+                    </Chip>
                   </span>
                 )}
               </span>
@@ -281,13 +308,65 @@ function SelectionTab({ report }: { report: ResumeReport }) {
 /* ------------------------------ Inputs tab ------------------------------- */
 
 function InputsTab({
+  short,
   report,
   onRebuild,
+  onSaved,
 }: {
+  short: string;
   report: ResumeReport;
   onRebuild: (opts: RebuildOpts) => void;
+  onSaved: () => void;
 }) {
   const [jd, setJd] = useState("");
+  const [savedJd, setSavedJd] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchJobDescription(short)
+      .then((result) => {
+        if (cancelled) return;
+        const text = result.text ?? "";
+        setJd(text);
+        setSavedJd(text);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error("Couldn't load the saved job description.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [short]);
+
+  const clean = jd.trim();
+  const dirty = Boolean(clean) && clean !== savedJd;
+
+  const save = async (rebuild: boolean) => {
+    if (!clean) return;
+    setSaving(true);
+    try {
+      const result = await saveJobDescription(short, clean);
+      if (!result.ok) {
+        toast.error(result.error ?? "Couldn't save the job description.");
+        return;
+      }
+      setJd(result.text ?? clean);
+      setSavedJd(result.text ?? clean);
+      onSaved();
+      toast.success("Job description saved");
+      if (rebuild) onRebuild({ jdText: result.text ?? clean });
+    } catch (error) {
+      toast.error((error as Error).message || "Couldn't save the job description.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="text-[12.5px]">
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -315,24 +394,42 @@ function InputsTab({
         </ul>
       )}
       <p className="mb-1.5 text-ink-2">
-        {report.jdSource === "stub"
-          ? "Paste the job description to rebuild against the real posting:"
-          : "Think the fetched JD was wrong or thin? Paste the real one and rebuild:"}
+        This saved job description is reused by rebuilds and Edit-tab requests.
+        Replace it here whenever the posting changes.
       </p>
       <textarea
         value={jd}
+        maxLength={20_000}
+        disabled={loading || saving}
         onChange={(e) => setJd(e.target.value)}
-        placeholder="Paste the job description here..."
-        className="min-h-[88px] w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-[12.5px] text-ink outline-none transition-colors placeholder:text-ink-2 focus:border-accent"
+        placeholder={
+          loading
+            ? "Loading saved job description..."
+            : "Paste the job description here..."
+        }
+        className="min-h-[180px] w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-[12.5px] text-ink outline-none transition-colors placeholder:text-ink-2 focus:border-accent disabled:opacity-60"
       />
-      <div className="mt-1.5 text-right">
-        <Button
-          size="sm"
-          disabled={jd.trim().length < 100}
-          onClick={() => onRebuild({ jdText: jd.trim() })}
-        >
-          Rebuild with pasted JD
-        </Button>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] text-ink-2 tabular-nums">
+          {clean.length.toLocaleString()} / 20,000 characters
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!dirty || saving}
+            onClick={() => void save(false)}
+          >
+            {saving ? "Saving..." : "Save JD"}
+          </Button>
+          <Button
+            size="sm"
+            disabled={!clean || saving}
+            onClick={() => void save(true)}
+          >
+            Save and rebuild
+          </Button>
+        </span>
       </div>
     </div>
   );
@@ -471,6 +568,7 @@ export function ResumeReportDialog({
   onOpenChange,
   onRebuild,
   onRestore,
+  onJobDescriptionSaved,
 }: {
   company: string;
   /** Open while non-null. */
@@ -479,6 +577,7 @@ export function ResumeReportDialog({
   onOpenChange: (open: boolean) => void;
   onRebuild: (short: string, opts: RebuildOpts) => void;
   onRestore: (short: string) => void;
+  onJobDescriptionSaved: (short: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("Preview");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -590,7 +689,15 @@ export function ResumeReportDialog({
               )}
               {tab === "Changes" && <ChangesTab report={report} />}
               {tab === "Selection" && <SelectionTab report={report} />}
-              {tab === "Inputs" && <InputsTab report={report} onRebuild={rebuild} />}
+              {tab === "Inputs" && short && (
+                <InputsTab
+                  key={short}
+                  short={short}
+                  report={report}
+                  onRebuild={rebuild}
+                  onSaved={() => onJobDescriptionSaved(short)}
+                />
+              )}
               {tab === "Edit" && (
                 <EditTab key={short} report={report} onRebuild={rebuild} variants={variants} />
               )}

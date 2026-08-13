@@ -74,6 +74,7 @@ import {
   type RebuildOpts,
 } from "@/components/matches/resume-report";
 import { AddUrlDialog } from "./add-url-dialog";
+import { ResumeJdPrompt } from "./resume-jd-prompt";
 import { useRouter } from "next/navigation";
 import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
@@ -473,6 +474,7 @@ export function Triage({
   // cache (server-rendered meta first, refetched after in-session builds),
   // and the set of rows whose report icon should play its "just built" pulse.
   const [reportShort, setReportShort] = useState<string | null>(null);
+  const [buildPromptShort, setBuildPromptShort] = useState<string | null>(null);
   const [metaCache, setMetaCache] = useState<Record<string, ResumeMeta>>({});
   const [justBuilt, setJustBuilt] = useState<Set<string>>(new Set());
 
@@ -797,17 +799,21 @@ export function Triage({
       toast.error("Couldn't sync saved state.");
     });
   }
-  function startBuild(short: string) {
+  function queueBuild(short: string, jdText?: string) {
     const row = rows.find((x) => x.short === short);
     if (!row || row.resumeUrl) return;
     if (builds[short] === "building") return;
+    setBuildPromptShort(null);
     delete buildStartedAt.current[short];
     setBuilds((prev) => ({ ...prev, [short]: "building" as const }));
     if (demo) {
       // Walk the button through building -> built locally so the state machine
       // can be seen without dispatching a real Convex build.
       window.setTimeout(() => {
-        updateRow(short, { resumeUrl: "#demo" });
+        updateRow(short, {
+          resumeUrl: "#demo",
+          hasJobDescription: row.hasJobDescription || Boolean(jdText),
+        });
         setBuilds((prev) => {
           const next = { ...prev };
           delete next[short];
@@ -816,11 +822,23 @@ export function Triage({
       }, 1400);
       return;
     }
-    void requestResumeBuild(short).then((res) => {
-      if (res.ok) return;
+    void requestResumeBuild(short, { jdText }).then((res) => {
+      if (res.ok) {
+        if (jdText) updateRow(short, { hasJobDescription: true });
+        return;
+      }
       setBuilds((prev) => ({ ...prev, [short]: { failed: res.error || "Couldn't start the resume build." } }));
       toast.error(res.error || "Couldn't start the resume build.");
     });
+  }
+  function startBuild(short: string) {
+    const row = rows.find((x) => x.short === short);
+    if (!row || row.resumeUrl || builds[short] === "building") return;
+    if (!row.hasJobDescription) {
+      setBuildPromptShort(short);
+      return;
+    }
+    queueBuild(short);
   }
   function dockBuild() {
     if (!currentRow) return;
@@ -1281,6 +1299,27 @@ export function Triage({
         actions={paletteActions}
       />
 
+      {(() => {
+        const row = rows.find((item) => item.short === buildPromptShort);
+        return (
+          <ResumeJdPrompt
+            key={buildPromptShort ?? "closed"}
+            open={Boolean(row)}
+            company={row?.company ?? "this company"}
+            title={row?.title ?? "this role"}
+            onOpenChange={(open) => {
+              if (!open) setBuildPromptShort(null);
+            }}
+            onBuildWithoutJd={() => {
+              if (row) queueBuild(row.short);
+            }}
+            onSaveAndBuild={(jdText) => {
+              if (row) queueBuild(row.short, jdText);
+            }}
+          />
+        );
+      })()}
+
       <ResumeReportDialog
         company={
           rows.find((r) => r.short === reportShort)?.company ?? "Resume"
@@ -1295,6 +1334,9 @@ export function Triage({
         }}
         onRebuild={rebuild}
         onRestore={restore}
+        onJobDescriptionSaved={(short) =>
+          updateRow(short, { hasJobDescription: true })
+        }
       />
 
       <Dock

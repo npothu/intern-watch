@@ -307,7 +307,10 @@ export const getMatches = query({
       .collect();
     // Item payloads in by_user index order; patched rows keep their
     // position, so this is index order, not insertion order.
-    return rows.map((r) => r.item);
+    return rows.map((r) => ({
+      ...r.item,
+      hasJobDescription: Boolean(r.jobDescription?.trim()),
+    }));
   },
 });
 
