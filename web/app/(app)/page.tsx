@@ -42,6 +42,7 @@ export type TriageRow = {
   applied: boolean;
   saved: boolean;
   dismissed: boolean;
+  hasJobDescription: boolean;
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -77,6 +78,7 @@ export default async function AppPage() {
       applied: tick?.applied ?? m.applied ?? false,
       saved: tick?.saved ?? m.saved ?? false,
       dismissed: tick?.dismissed ?? m.dismissed ?? false,
+      hasJobDescription: m.hasJobDescription ?? false,
     };
   });
 

@@ -122,7 +122,8 @@ function selectForBuild(
       // replaces the per-project JD auto-pick everywhere. bulletsFor falls
       // back to "base" when a project has no array for that variant, so a
       // variant with sparse coverage still renders.
-      const variant = forcedVariant ?? pickVariant(e, jd);
+      const requestedVariant = forcedVariant ?? pickVariant(e, jd);
+      const variant = e.bullets[requestedVariant] ? requestedVariant : "base";
       variants[name] = variant;
       return {
         name,
@@ -208,7 +209,7 @@ async function performBuild(
   // single worst failure mode of the flagship feature.
   let jdSource: BuildReport["jdSource"];
   let jdText: string;
-  const manual = (opts.jdText ?? "").trim();
+  const manual = (opts.jdText ?? match.jobDescription ?? "").trim();
   if (manual) {
     jdSource = "manual";
     jdText = manual.slice(0, JD_MAX_CHARS);

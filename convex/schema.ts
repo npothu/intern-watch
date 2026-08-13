@@ -66,6 +66,8 @@ export default defineSchema({
     short: v.string(),
     item: v.any(),
     pushedAt: v.number(),
+    jobDescription: v.optional(v.string()),
+    jobDescriptionUpdatedAt: v.optional(v.number()),
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"]),

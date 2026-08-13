@@ -63,6 +63,51 @@ afterEach(() => {
 });
 
 describe("PDF-first resume build", () => {
+  test("a saved job description can be read and overwritten independently of a build", async () => {
+    const t = convexTest(schema);
+    await t.mutation(tracker.pushMatches, {
+      user: "alice",
+      items: [{ short: "acme-role", company: "Acme, Inc." }],
+      secret: SECRET,
+    });
+
+    await t.mutation(resume.saveJobDescription, {
+      user: "alice",
+      short: "acme-role",
+      jdText: "First job description",
+      secret: SECRET,
+    });
+    expect(
+      await t.query(resume.getJobDescription, {
+        user: "alice",
+        short: "acme-role",
+        secret: SECRET,
+      }),
+    ).toMatchObject({ text: "First job description" });
+
+    await t.mutation(resume.saveJobDescription, {
+      user: "alice",
+      short: "acme-role",
+      jdText: "Updated job description",
+      secret: SECRET,
+    });
+    expect(
+      await t.query(resume.getJobDescription, {
+        user: "alice",
+        short: "acme-role",
+        secret: SECRET,
+      }),
+    ).toMatchObject({ text: "Updated job description" });
+    expect(
+      await t.query(tracker.getMatches, { user: "alice", secret: SECRET }),
+    ).toEqual([
+      expect.objectContaining({
+        short: "acme-role",
+        hasJobDescription: true,
+      }),
+    ]);
+  });
+
   test("request, action, persistence, and download artifacts work together", async () => {
     const t = convexTest(schema);
     await t.mutation(resume.putProfile, {
@@ -90,6 +135,17 @@ describe("PDF-first resume build", () => {
       jdText: "Requirements: TypeScript, React, automated testing, and full-stack development.",
     });
     expect(requested).toEqual({ ok: true });
+    const savedMatch = await t.run(async (ctx) =>
+      ctx.db
+        .query("matches")
+        .withIndex("by_user_short", (q) =>
+          q.eq("user", "alice").eq("short", "acme-role"),
+        )
+        .first(),
+    );
+    expect(savedMatch?.jobDescription).toBe(
+      "Requirements: TypeScript, React, automated testing, and full-stack development.",
+    );
     expect(
       await t.query(resume.getBuildStatus, {
         user: "alice",
@@ -105,7 +161,7 @@ describe("PDF-first resume build", () => {
     await t.action(runBuild, {
       user: "alice",
       short: "acme-role",
-      jdText: "Requirements: TypeScript, React, automated testing, and full-stack development.",
+      variant: "tailored",
     });
 
     expect(
@@ -161,8 +217,11 @@ describe("PDF-first resume build", () => {
       format: "pdf",
       pageCount: 1,
       jdSource: "manual",
+      jdChars: 79,
+      variant: "tailored",
       usedLlm: false,
     });
     expect(report.projects[0].name).toBe("Job Finder");
+    expect(report.projects[0].variant).toBe("base");
   }, 20_000);
 });

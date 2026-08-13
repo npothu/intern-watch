@@ -37,6 +37,7 @@ const row = (
   applied: false,
   saved: false,
   dismissed: false,
+  hasJobDescription: false,
   ...extra,
 });
 
