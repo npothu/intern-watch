@@ -4,10 +4,25 @@ name: resume-ondemand
 # on the "📋 intern-watch matches — <user>" issue and this builds the tailored
 # .docx for that match, publishes it as a release asset (downloads directly as
 # a .docx, no artifact-zip wrapper), and replies with the download link.
+#
+# Reusable from a separate data repo (the issue and the release live there;
+# `github.event` is always the caller's event). The caller keeps the
+# `issue_comment` trigger and the `if:` guard, see watch.yml for the layout.
 
 on:
   issue_comment:
     types: [created]
+  workflow_call:
+    inputs:
+      code_ref:
+        type: string
+        default: ""
+      data_ref:
+        type: string
+        default: ""
+      environment:
+        type: string
+        default: ""
 
 permissions:
   issues: write
@@ -17,10 +32,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     # Only on the matches dashboard, and only for /resume comments.
     if: >-
       contains(github.event.issue.title, 'intern-watch matches') &&
       startsWith(github.event.comment.body, '/resume')
+    env:
+      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
     steps:
       - name: React 👀
         env:
@@ -30,12 +48,26 @@ jobs:
             "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
             -f content=eyes >/dev/null || true
 
-      - uses: actions/checkout@v4
+      - name: Check out data (this repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.data_ref || github.ref }}
+
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository || github.repository }}
+          ref: ${{ inputs.code_ref || job.workflow_sha || github.sha }}
+          path: code
+          token: ${{ secrets.CODE_REPO_TOKEN || github.token }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: code/requirements.txt
+
+      - run: pip install -r code/requirements.txt
 
       - name: Parse short key and user
         id: parse
@@ -64,6 +96,7 @@ jobs:
 
       - name: Build resume
         id: build
+        working-directory: code
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -86,8 +119,10 @@ jobs:
 
       - name: Publish .docx as a release asset
         if: steps.build.outputs.ok == '1'
+        working-directory: code
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           # One rolling "resumes" release holds every build; assets download
           # directly as the .docx (no artifact zip). Filenames are clean

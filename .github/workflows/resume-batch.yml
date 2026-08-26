@@ -9,25 +9,43 @@ name: resume-batch
 # The guard fires only when the trigger box is ticked, so ordinary applied-box
 # ticks don't run this. The repaint always renders the trigger unchecked, so the
 # bot's own edit can't re-trigger the workflow (no loop).
+#
+# Reusable from a separate data repo (the issue lives there; `github.event`
+# is always the caller's event). The caller keeps the `issues: [edited]`
+# trigger and the `if:` guard, see watch.yml for the checkout layout.
 
 on:
   issues:
     types: [edited]
+  workflow_call:
+    inputs:
+      code_ref:
+        type: string
+        default: ""
+      data_ref:
+        type: string
+        default: ""
+      environment:
+        type: string
+        default: ""
 
 permissions:
   issues: write
   contents: write   # commit resumes/ + state/seen.json
 
-concurrency:
-  group: resume-batch-${{ github.event.issue.number }}
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: resume-batch-${{ github.event.issue.number }}
+      cancel-in-progress: false
     if: >-
       contains(github.event.issue.title, 'intern-watch matches') &&
       contains(github.event.issue.body, '[x] **Build selected resumes**')
+    env:
+      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
+      DATA_BRANCH: ${{ inputs.data_ref || github.ref_name }}
     steps:
       - name: React 👀
         env:
@@ -37,12 +55,26 @@ jobs:
             "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/reactions" \
             -f content=eyes >/dev/null || true
 
-      - uses: actions/checkout@v4
+      - name: Check out data (this repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.data_ref || github.ref }}
+
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository || github.repository }}
+          ref: ${{ inputs.code_ref || job.workflow_sha || github.sha }}
+          path: code
+          token: ${{ secrets.CODE_REPO_TOKEN || github.token }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: code/requirements.txt
+
+      - run: pip install -r code/requirements.txt
 
       - name: User from issue title
         id: who
@@ -59,6 +91,7 @@ jobs:
 
       - name: Build selected resumes
         id: build
+        working-directory: code
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -78,12 +111,13 @@ jobs:
           [ -d resumes ] && git add resumes/ || true
           if ! git diff --cached --quiet; then
             git commit -m "resume: batch build from dashboard"
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push
+            git pull --rebase origin "$DATA_BRANCH"
+            git push origin "HEAD:$DATA_BRANCH"
           fi
 
       - name: Repaint dashboard issue
         if: always()
+        working-directory: code
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
