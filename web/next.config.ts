@@ -1,6 +1,19 @@
 import type { NextConfig } from "next";
 
+// Preview builds (scripts/vercel-build.sh) give each branch its own Convex
+// deployment. The server code reads process.env.CONVEX_URL at runtime, but
+// the runtime env on Vercel is the shared Preview environment, so the build
+// script sets CONVEX_INLINE_URL and the preview's URLs are baked into the
+// bundles here. Production keeps reading the runtime env (no inlining).
+const inlinedConvex = process.env.CONVEX_INLINE_URL
+  ? {
+      CONVEX_URL: process.env.CONVEX_URL ?? "",
+      CONVEX_SITE_URL: process.env.CONVEX_SITE_URL ?? "",
+    }
+  : {};
+
 const nextConfig: NextConfig = {
+  env: inlinedConvex,
   async redirects() {
     return [
       {

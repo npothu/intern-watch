@@ -99,6 +99,11 @@ the Convex deployment, not in this repo's `.env`.
 Its backend functions live under `convex/` and share the deployment with the Python pipeline.
 See `web/README.md` for the web reference and `docs/local-web-development.md` for complete local setup instructions.
 
+Every pull request gets its own Convex backend.
+`scripts/vercel-build.sh` is the Vercel build command: a preview build creates a Convex preview deployment named after the branch (the branch's schema and functions), seeds it from a snapshot, and builds the web app against it; a production build is a plain `next build`.
+The snapshot is the `convex-seed.zip` asset on the `convex-seed` release of the private data repo; refresh it with `scripts/publish-convex-seed.sh <owner/data-repo> [snapshot.zip]`.
+The Preview environment on Vercel needs `CONVEX_DEPLOY_KEY` (a preview deploy key), `PREVIEW_CREDENTIALS_KEY`, `CONVEX_SEED_REPO` and `CONVEX_SEED_TOKEN` (Contents: read on the data repo); the header of `scripts/vercel-build.sh` lists them.
+
 ## Setup
 
 Everything splits into two tiers. **REQUIRED** is the minimum for a working

@@ -197,10 +197,12 @@ real URLs). Shipping is:
    `environment=staging`. The staging environment sets `STORE=github`, the
    staging data branch has its own users/ and state/ and emails only the
    owner, so the run is real (fetch, filter, LLM, email, state commit) and
-   touches nothing in production. Preview deployments for the web app come
-   from Vercel's git integration on this repo; they run against the dev
-   Convex deployment, so push a schema change to dev with `npx convex dev`
-   first.
+   touches nothing in production. Web changes: every PR gets a Vercel
+   preview with its OWN Convex preview deployment (the branch's schema and
+   functions, seeded from the data repo's `convex-seed` release), built by
+   `scripts/vercel-build.sh`; a schema change is therefore exercised on real-
+   shaped data before merge. Refresh the seed with
+   `scripts/publish-convex-seed.sh`.
 3. **Merge.** Watcher instances pick up `main` on their next cron tick (their
    callers are pinned to `@main`). `deploy-convex.yml` pushes `convex/` to
    production on the same merge when `CONVEX_DEPLOY_KEY` is set. Vercel
