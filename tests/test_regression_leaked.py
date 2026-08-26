@@ -14,6 +14,7 @@ layers of protection:
    future keyword edit reopens a hole, this fails.
 """
 
+import datetime as dt
 import re
 from pathlib import Path
 
@@ -28,13 +29,14 @@ from src.adapters.vanshb03_md import Vanshb03MdAdapter
 from src.filters import UserFilter
 from src.models import Job, SourceConfig
 
+FIXTURE_DATE = dt.date(2026, 6, 11)
 ROOT = Path(__file__).parent.parent
 
 
 @pytest.fixture(scope="module")
 def uf() -> UserFilter:
     cfg = yaml.safe_load((ROOT / "users" / "example.yaml").read_text(encoding="utf-8"))
-    return UserFilter(cfg, ROOT)
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
 
 
 def _job(title, company, source, **kw):

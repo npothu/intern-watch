@@ -330,13 +330,33 @@ term filter → company/location rules → LLM for the still-ambiguous survivors
   patterns; "BS/MS" and "Undergraduate" stay), `active_clearance`
   (already-held TS/SCI/poly/"cleared"; clearance-obtainable roles stay), and
   `veteran_only` (SkillBridge/active-duty/veteran programs).
-- **Term filter**: `terms_wanted` vs. the posting's term (taken from Simplify's
-  `terms` field, else regex-inferred from the title: explicit "Fall 2026" /
-  "Summer '27", month patterns like "Jan 2027", a bare "2027" → Summer 2027).
-  Unknown terms follow `unknown_term_policy: llm | drop | keep`.
-- **Rules**: per-term accept conditions — company in `data/top_companies.txt`,
-  company in `data/atlanta_companies.txt`, location in the Atlanta-metro
-  allowlist, location/work-model "remote", or `always: true`.
+- **Term filter**: the wanted terms vs. the posting's term (taken from
+  Simplify's `terms` field, else regex-inferred from the title: explicit
+  "Fall 2026" / "Summer '27", month patterns like "Jan 2027", a bare "2027"
+  → Summer 2027). The wanted set is **rolling** (`terms:` block): every
+  Spring/Summer/Fall term starting between `lead_weeks` and
+  `horizon_months` from today, plus `include` / minus `exclude`, so the list
+  never needs a manual edit as seasons pass. A static `terms_wanted: [...]`
+  list still works. Unknown terms follow
+  `unknown_term_policy: llm | drop | keep`.
+- **Rules**: what a job needs per **season** (`term_rules:`), as a preset:
+  `top_atl_remote` (a priority or top company, an Atlanta company or
+  location, or a remote role when `location.remote_counts`),
+  `priority_only`, or `anything`. The legacy `rules:` list of per-term
+  `accept_if_any` conditions (`company_in_file`, `location_within`,
+  `location_matches`, `always`) is still honored when `term_rules` is
+  absent.
+- **Priority companies** (`priority.companies`, widened by the alias groups
+  in `data/top_companies.txt`, optionally plus every employer in your
+  applications ledger): accepted for any wanted term, tagged `[PRIORITY]`,
+  sorted first in every digest and on the dashboard, named in the digest
+  subject, and with `email_immediately` emailed on the run that found them
+  instead of at the next digest slot. Rejected jobs stay final: adding a
+  company delivers new postings only.
+- **Settings > Watch** in the hosted web app edits the same knobs (terms
+  window, presets, priority list, remote, digest time and recipients) and
+  stores them in the Convex `settings` row; each run overlays that object on
+  the yaml (store wins) and reports the resolved config back for the page.
 - **JD deepening (ATS jobs only)**: Lever/Ashby postings carry their full
   description inline; Greenhouse postings get one extra per-job fetch (new
   jobs only, capped per run). The eliminations above then also scan the JD

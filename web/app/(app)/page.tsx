@@ -34,6 +34,8 @@ export type TriageRow = {
   term: string;
   added: string;
   tag: string;
+  /** Priority employer at match time: pinned to the top of its term group. */
+  priority?: boolean;
   salary: string;
   url: string;
   resumeUrl: string | null;
@@ -68,6 +70,7 @@ export default async function AppPage() {
       term: str(m.term),
       added: str(m.added),
       tag: str(m.tag),
+      priority: m.priority === true,
       salary: str(m.salary),
       url: str(m.url),
       // Only an actually-resolved external URL counts as "built"; a

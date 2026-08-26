@@ -36,6 +36,10 @@ class FakeStore:
         # shorts whose resume get_resume_urls serves as a remote URL (a
         # hosted store) rather than the default GitHub repo-relative path.
         self.remote_resumes: set[str] = set()
+        # watch prefs: what the hosted settings page saved, per user, and a
+        # record of every resolved-config report the watcher pushed back
+        self.watch_prefs: dict[str, dict | None] = {}
+        self.watch_reports: list[tuple[str, dict]] = []
 
     @property
     def writable(self) -> bool:
@@ -79,6 +83,12 @@ class FakeStore:
 
     def get_matches(self, user: str) -> list[dict] | None:
         return self.matches.get(user)
+
+    def get_watch_prefs(self, user: str) -> dict | None:
+        return self.watch_prefs.get(user)
+
+    def put_watch_report(self, user: str, report: dict) -> None:
+        self.watch_reports.append((user, report))
 
     def get_actions(self, user: str) -> dict | None:
         """The configured inbox, or None when mail sync is unavailable."""

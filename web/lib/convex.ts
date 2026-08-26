@@ -1,5 +1,11 @@
 import "server-only";
 import type { ProfileV2, SectionKind } from "../../convex/profile_schema";
+// watch_types has no imports, so the web build can type-check it without the
+// root `convex` package (see CLAUDE.md "The web build only ever installs
+// web/package.json"). Never import watch_schema here: it pulls convex/values.
+import type { Preset, WatchPrefs } from "../../convex/watch_types";
+
+export type { Preset, WatchPrefs };
 
 /**
  * Server-only Convex client.
@@ -90,6 +96,9 @@ export type MatchItem = {
   saved?: boolean;
   dismissed?: boolean;
   hasJobDescription?: boolean;
+  /** Set (only ever true) when the employer was on the user's priority
+   *  list at match time; pins the row to the top of its term group. */
+  priority?: boolean;
 };
 
 export type JobDescription = {
@@ -743,6 +752,68 @@ export type ResumeLlm = {
    *  meaningless and tailoring needs the user's own key. */
   sharedAvailable: boolean;
 };
+
+// -- Settings > Watch ---------------------------------------------------------
+
+/** One term as the watcher reported it (src/prefs.py watch_report). */
+export type WatchReportTermRow = {
+  term: string;
+  start: string;
+  wanted: boolean;
+  status: "auto" | "included" | "excluded" | "past" | "beyond";
+  added_on: string;
+  drops_on: string;
+};
+
+/** The resolved configuration the watcher last ran with. Python-owned
+ *  shape (snake_case); every field is read defensively on the page. */
+export type WatchReport = {
+  reported_at: string;
+  terms: {
+    rolling: boolean;
+    lead_weeks: number;
+    horizon_months: number;
+    include: string[];
+    exclude: string[];
+    rows: WatchReportTermRow[];
+  };
+  rules: { legacy: boolean; Spring?: Preset; Summer?: Preset; Fall?: Preset };
+  priority: {
+    companies: string[];
+    from_tracker: boolean;
+    tracker_companies: string[];
+    email_immediately: boolean;
+    subject_names: boolean;
+  };
+  location: { metro: string; radius_miles: number; remote_counts: boolean };
+  email: { send_at_local: number[]; timezone: string; to: string[] };
+};
+
+export type WatchSettings = {
+  watch: WatchPrefs | null;
+  updatedAt: number | null;
+  report: WatchReport | null;
+};
+
+export async function getWatchSettings(user: string): Promise<WatchSettings> {
+  const value = await post("query", "getWatch", { user }, "settings");
+  const v = (value ?? {}) as Partial<WatchSettings>;
+  return {
+    watch: v.watch ?? null,
+    updatedAt: v.updatedAt ?? null,
+    report: v.report ?? null,
+  };
+}
+
+/** Replace the whole Settings > Watch object. Throws the deployment's
+ *  validation message on a bad value. */
+export async function setWatchSettings(
+  user: string,
+  watch: WatchPrefs
+): Promise<WatchPrefs> {
+  const value = await post("mutation", "setWatch", { user, watch }, "settings");
+  return (value as { watch: WatchPrefs }).watch;
+}
 
 export async function getResumeLlm(user: string): Promise<ResumeLlm> {
   const value = await post("query", "getResumeLlm", { user }, "settings");

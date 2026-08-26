@@ -371,6 +371,16 @@ def outbox_clear(state: dict, user: str) -> None:
     state["outbox"].pop(user, None)
 
 
+def outbox_remove(state: dict, user: str, keys: set[str]) -> None:
+    """Drop the given dedup keys from the outbox (a priority alert already
+    delivered them), leaving the rest for the next digest."""
+    box = [i for i in state["outbox"].get(user, []) if i.get("key") not in keys]
+    if box:
+        state["outbox"][user] = box
+    else:
+        state["outbox"].pop(user, None)
+
+
 # Match history: every accepted job, as a display-ready snapshot, feeding the
 # per-user dashboard issue. Unlike the outbox these survive delivery; they age
 # out with the normal prune window. "applied" is synced back from the

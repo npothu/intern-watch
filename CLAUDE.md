@@ -21,12 +21,26 @@ one YAML (see the README's fork checklist).
 2. **Eliminations**: country allowlist (unknown locations kept), unpaid,
    grad-only (MS/PhD-only), active-clearance-required (obtainable kept),
    veteran-only. Titles and (for ATS jobs) JD bodies, separate patterns.
-3. **Term**: `terms_wanted` in the user yaml. Unknown term → LLM infers it.
+3. **Term**: the wanted terms -- rolling from today's date via the `terms:`
+   block (`src/terms.py`; lead_weeks / horizon_months / include / exclude),
+   or the legacy static `terms_wanted` list. Unknown term → LLM infers it.
    If even the LLM returns null, the job is accepted only if it passes the
    rules under EVERY wanted term (most restrictive assumption); otherwise
    rejected `term-unresolved`.
-4. **Rules** (per-term accept conditions in the user yaml): company list
-   match, metro-area match, remote, or accept-always.
+4. **Rules**: a per-season preset in `term_rules:` (`top_atl_remote` /
+   `priority_only` / `anything`, expanded by `filters.rules_from_presets`)
+   or the legacy per-term `rules:` list: company list match, metro-area
+   match, remote, or accept-always. A **priority company**
+   (`priority.companies`, widened by the alias groups in
+   `data/top_companies.txt`, plus ledger employers when `from_tracker`) is
+   accepted for any wanted term before the rules run, tagged `[PRIORITY]`,
+   sorted first everywhere, and with `email_immediately` emailed on the run
+   that found it (`main._send_priority_alert`; a failed send leaves it in
+   the outbox for the digest).
+   The hosted app's Settings > Watch page stores these knobs in the Convex
+   `settings` row; `src/prefs.py` overlays that object on the yaml at the
+   start of `process_user` (store wins) and pushes the resolved config back
+   (`put_watch_report`). With STORE=github the yaml is the whole config.
 5. **LLM facts** for ambiguous cases (term, metro, top-company), batched,
    cost-capped per run, verdicts cached in state. "Top company" is judged
    **per employer** (normalized company name), per user, cached in

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
+from . import terms as terms_mod
 from .models import Job
 from .normalize import norm_company
 
@@ -230,17 +231,76 @@ class CompanyList:
 
     def __init__(self, path: Path):
         self.names: set[str] = set()
+        # Each line's aliases as one group, so a name typed elsewhere (the
+        # priority list) can be widened to its siblings: AWS -> Amazon.
+        self._group_of: dict[str, frozenset[str]] = {}
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
-            for name in line.split("|"):
-                n = norm_company(name)
-                if n:
-                    self.names.add(n)
+            group = frozenset(n for n in (norm_company(a) for a in line.split("|"))
+                              if n)
+            self.names |= group
+            for n in group:
+                self._group_of[n] = group
 
     def match(self, company: str) -> bool:
         return norm_company(company) in self.names
+
+    def aliases(self, norm: str) -> frozenset[str]:
+        """The alias group containing `norm` (normalized), or just itself."""
+        return self._group_of.get(norm, frozenset({norm}))
+
+
+# --- Per-season accept presets (`term_rules:` in the user yaml). Each preset
+# expands to the same `accept_if_any` condition list the legacy `rules:`
+# block spells out by hand, so the rule engine below stays one code path.
+#   top_atl_remote  a priority or top company, an Atlanta-rooted company or
+#                   location, or (when `location.remote_counts`) a remote role
+#   priority_only   only the user's priority companies
+#   anything        every job that passed the role filter and eliminations
+PRESETS = ("top_atl_remote", "priority_only", "anything")
+# A wanted term whose season has no preset (only Winter, pinned via
+# `include`, can get here) falls back to the SAFE side: rejected jobs are
+# final, so an accidental "anything" would be the costlier mistake.
+DEFAULT_PRESET = "priority_only"
+# The one condition every rule carries first: priority companies are wanted
+# for any term whatever else the rule says (see UserFilter.priority_names).
+_PRIORITY_COND: dict = {"priority": True}
+_METRO_MATCHES = ["atlanta", "alpharetta", "sandy springs", "marietta"]
+TOP_COMPANIES = "data/top_companies.txt"
+ATLANTA_COMPANIES = "data/atlanta_companies.txt"
+
+
+def preset_conds(preset: str, location_cfg: dict | None = None) -> list[dict]:
+    if preset not in PRESETS:
+        raise ValueError(f"unknown term rule preset {preset!r} "
+                         f"(have: {', '.join(PRESETS)})")
+    if preset == "anything":
+        return [dict(_PRIORITY_COND), {"always": True}]
+    if preset == "priority_only":
+        return [dict(_PRIORITY_COND)]
+    remote = bool((location_cfg or {}).get("remote_counts", True))
+    return [
+        dict(_PRIORITY_COND),
+        {"company_in_file": TOP_COMPANIES},
+        {"company_in_file": ATLANTA_COMPANIES},
+        {"location_within": {"center": "Atlanta, GA", "radius_miles": 35}},
+        {"location_matches": _METRO_MATCHES + (["remote"] if remote else [])},
+    ]
+
+
+def rules_from_presets(term_rules: dict, wanted_terms: list[str],
+                       location_cfg: dict | None = None) -> list[dict]:
+    """One legacy-shaped rule per wanted term, from its season's preset.
+    A season absent from `term_rules` gets DEFAULT_PRESET."""
+    rules: list[dict] = []
+    for term in wanted_terms:
+        season = terms_mod.term_season(term)
+        preset = term_rules.get(season, DEFAULT_PRESET) if season else DEFAULT_PRESET
+        rules.append({"when": {"term": [term]},
+                      "accept_if_any": preset_conds(preset, location_cfg)})
+    return rules
 
 
 @dataclass
@@ -259,10 +319,16 @@ def _reject(*reasons: str) -> Verdict:
 
 
 class UserFilter:
-    def __init__(self, cfg: dict, repo_root: Path):
+    def __init__(self, cfg: dict, repo_root: Path,
+                 today: date | None = None):
+        """`today` anchors the rolling term window (default date.today());
+        the same date must be passed to evaluate() so both agree."""
         self.cfg = cfg
         self.name = cfg["name"]
         self.repo_root = repo_root
+        if today is None:
+            today = date.today()
+        self._company_lists: dict[str, CompanyList] = {}
         role = cfg.get("role_filter", {})
         self.include = [k.casefold() for k in role.get("include_keywords", [])]
         self.exclude = [k.casefold() for k in role.get("exclude_keywords", [])]
@@ -272,13 +338,36 @@ class UserFilter:
         self.strict_sources: set[str] = set(role.get("strict_sources", []))
         self.strict_include = [k.casefold()
                                for k in role.get("strict_include_keywords", [])]
-        self.terms_wanted: set[str] = set(cfg.get("terms_wanted", []))
+        # Chronological list for grouping/ordering; the set for membership.
+        self.terms_order: list[str] = terms_mod.wanted_terms(cfg, today)
+        self.terms_wanted: set[str] = set(self.terms_order)
         self.unknown_term_policy = cfg.get("unknown_term_policy", "llm")
-        self.rules: list[dict] = cfg.get("rules", [])
+        # `term_rules:` (per-season presets) wins over a legacy `rules:` list.
+        term_rules = cfg.get("term_rules")
+        if isinstance(term_rules, dict):
+            self.legacy_rules = False
+            self.rules: list[dict] = rules_from_presets(
+                term_rules, self.terms_order, cfg.get("location"))
+        else:
+            # Legacy hand-written rules predate priority companies: give
+            # each rule the same leading priority condition the presets
+            # carry, so both forms accept them through one mechanism (and
+            # the reasons trail reads "company:priority" either way).
+            self.legacy_rules = True
+            self.rules = [
+                {**rule, "accept_if_any": [dict(_PRIORITY_COND),
+                                           *rule.get("accept_if_any", [])]}
+                for rule in cfg.get("rules", []) if isinstance(rule, dict)]
+        # Priority companies: accepted for any wanted term regardless of the
+        # term's rule, tagged and delivered ahead of everything else. The
+        # yaml/prefs list plus whatever main.py adds from the tracker, each
+        # widened to its alias group in the top-company list (AWS ~ Amazon).
+        self.priority_names: set[str] = set()
+        self.add_priority({norm_company(c) for c in
+                           (cfg.get("priority") or {}).get("companies") or []})
         llm = cfg.get("llm", {})
         self.llm_enabled = bool(llm.get("enabled"))
         self.llm_tasks = set(llm.get("tasks", []))
-        self._company_lists: dict[str, CompanyList] = {}
         elim = cfg.get("eliminate", {})
         self.elim_unpaid = bool(elim.get("unpaid"))
         self.elim_grad_only = bool(elim.get("grad_only"))
@@ -300,6 +389,21 @@ class UserFilter:
 
     # ----------------------------------------------------------- helpers
 
+    def add_priority(self, names: set[str]) -> None:
+        """Extend the priority set with already-normalized names, plus their
+        aliases from data/top_companies.txt when that list exists."""
+        aliases = None
+        if (self.repo_root / TOP_COMPANIES).exists():
+            aliases = self._company_list(TOP_COMPANIES)
+        for n in names:
+            if not n:
+                continue
+            self.priority_names |= set(aliases.aliases(n)) if aliases else {n}
+
+    def is_priority(self, company: str) -> bool:
+        return bool(self.priority_names) \
+            and norm_company(company) in self.priority_names
+
     def _company_list(self, rel_path: str) -> CompanyList:
         if rel_path not in self._company_lists:
             self._company_lists[rel_path] = CompanyList(self.repo_root / rel_path)
@@ -309,6 +413,8 @@ class UserFilter:
         """Return a reason string if the condition passes, else None."""
         if cond.get("always"):
             return "always"
+        if cond.get("priority"):
+            return "company:priority" if self.is_priority(job.company) else None
         if "company_in_file" in cond:
             path = cond["company_in_file"]
             if self._company_list(path).match(job.company):
