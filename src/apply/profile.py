@@ -19,8 +19,7 @@ from pydantic import BaseModel, Field
 # `as load_dotenv` is the explicit-re-export form (PEP 484): it tells ruff and
 # mypy this unused-looking import is the module's public surface, not dead.
 from ..envfile import load_dotenv as load_dotenv
-
-ROOT = Path(__file__).resolve().parents[2]
+from ..paths import DATA_ROOT as DATA_ROOT
 
 # EEO questions are optional everywhere; default to the legally-safe non-answer.
 DECLINE = "Decline to self-identify"
@@ -116,7 +115,7 @@ class CloudConfig(BaseModel):
     project_id_env: str = "BROWSERBASE_PROJECT_ID"
     # Persisted Playwright storage_state per ATS family lives under here, so a
     # one-time interactive login is reused across runs (the "persistent
-    # session" approach). Relative paths resolve against ROOT.
+    # session" approach). Relative paths resolve against DATA_ROOT.
     session_dir: str = "state/apply_sessions"
     headless: bool = True               # local provider only; cloud is remote
     solve_captcha: bool = False         # opt-in; ToS-hostile, off by default
@@ -197,7 +196,7 @@ class ApplyProfile(BaseModel):
     def session_path(self, family: str) -> Path:
         d = Path(self.cloud.session_dir)
         if not d.is_absolute():
-            d = ROOT / d
+            d = DATA_ROOT / d
         return d / f"{family}.json"
 
 
@@ -206,7 +205,7 @@ def detect_user() -> str:
     (users/apply.example.yaml) deliberately doesn't match the pattern, so it
     can never be picked up as a real profile. Zero or several profiles ->
     a clear error demanding --user."""
-    profiles = sorted((ROOT / "users").glob("*_apply.yaml"))
+    profiles = sorted((DATA_ROOT / "users").glob("*_apply.yaml"))
     if len(profiles) == 1:
         return profiles[0].name[:-len("_apply.yaml")]
     if not profiles:
@@ -223,7 +222,7 @@ def load_profile(user: str = "", path: Path | None = None) -> ApplyProfile:
     An explicit `path` (tests, tooling) bypasses user resolution entirely."""
     if path is None:
         user = user or detect_user()
-        path = ROOT / "users" / f"{user}_apply.yaml"
+        path = DATA_ROOT / "users" / f"{user}_apply.yaml"
     if not path.exists():
         raise FileNotFoundError(
             f"no apply profile at {path} — create users/{user}_apply.yaml")

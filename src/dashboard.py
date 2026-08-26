@@ -26,6 +26,7 @@ from . import content_dedup
 from . import state as st
 from .normalize import canonical_url
 from .notify import _group_items
+from .paths import DATA_ROOT as DATA_ROOT
 
 if TYPE_CHECKING:  # annotation-only; .store imports this module at runtime
     from .store import TicksView, TrackerStore
@@ -510,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
                                  description=main.__doc__)
     ap.add_argument("--user", default="",
                     help="watcher user (default: the sole users/*.yaml)")
-    ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]),
+    ap.add_argument("--root", default=str(DATA_ROOT),
                     help="repo root (override for tests)")
     args = ap.parse_args(argv)
 

@@ -37,12 +37,12 @@ from .notify import (
     send_discord,
     send_email,
 )
+from .paths import DATA_ROOT as DATA_ROOT
+from .paths import ROOT as ROOT
 from .resume.build import build_for_job, resume_build_cfg
 from .store import GitHubStore, make_store
 
 log = logging.getLogger("intern-watch")
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_sources(path: Path) -> list[SourceConfig]:
@@ -397,11 +397,11 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         log.info("user %s: dry run, would build %d resume(s)", name, n)
         return {}
 
-    store = make_store(ROOT, user_cfg)
+    store = make_store(DATA_ROOT, user_cfg)
     # Build into a gitignored scratch dir; the STORE owns where the .docx
     # finally lands (GitHub: resumes/<user>/, committed as ever; Convex: file
     # storage, so the watch commit step finds nothing new under resumes/).
-    out_dir = ROOT / "out" / "autobuild" / name
+    out_dir = DATA_ROOT / "out" / "autobuild" / name
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: dict[str, str] = {}
     cap = int(cfg["max_per_run"])
@@ -411,7 +411,7 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
                      "resume(s) to a later run", name, cap, len(accepted) - cap)
             break
         try:
-            result = build_for_job(job, name, out_dir=out_dir, root=ROOT,
+            result = build_for_job(job, name, out_dir=out_dir, root=DATA_ROOT,
                                    use_llm=cfg["use_llm"],
                                    allow_scrape=cfg["allow_scrape"])
         except Exception as exc:  # noqa: BLE001 - a build never drops the match
@@ -574,7 +574,7 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                  "skipping dashboard update", name)
         return
     try:
-        store = make_store(ROOT, user_cfg or {"name": name})
+        store = make_store(DATA_ROOT, user_cfg or {"name": name})
         ticks = store.get_ticks(name)
         # interactive only when the store has a GitHub-issue dashboard (then
         # its repo/token match the Actions env); otherwise -- e.g. a convex
@@ -587,14 +587,14 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                             store=store)
         # applied ticks just read back from the issue become permanent
         # ledger records (seen.json prunes at 120 days; the ledger never does)
-        ledger.sync_file(state, name, ledger.ledger_path(ROOT), now.date())
+        ledger.sync_file(state, name, ledger.ledger_path(DATA_ROOT), now.date())
         if not isinstance(store, GitHubStore):
             # Git-versioned backup of the permanent record: the store owns
             # human state, so mirror its (authoritative) ledger book into
             # state/applications.json for history and backup.
             book = store.get_ledger(name)
             if book:
-                lpath = ledger.ledger_path(ROOT)
+                lpath = ledger.ledger_path(DATA_ROOT)
                 saved = ledger.load_ledger(lpath)
                 saved[name] = book
                 ledger.save_ledger(saved, lpath)
@@ -712,7 +712,7 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         rel = item.get("resume")
         if not rel:
             continue
-        path = ROOT / Path(rel)
+        path = DATA_ROOT / Path(rel)
         if path.exists():  # missing build skips silently, never blocks the send
             attachments.append(path)
     if send_email(smtp_user, smtp_pass, to_addr, subject, html_body, text_body,
@@ -898,7 +898,8 @@ def main(argv: list[str] | None = None) -> int:
                              "state write")
     parser.add_argument("--user", metavar="NAME",
                         help="with --explain, trace only this user")
-    parser.add_argument("--state-file", default=str(ROOT / "state" / "seen.json"))
+    parser.add_argument("--state-file",
+                        default=str(DATA_ROOT / "state" / "seen.json"))
     args = parser.parse_args(argv)
 
     # Local-only: pull STORE/CONVEX_* and GEMINI_API_KEY out of the gitignored
@@ -930,7 +931,7 @@ def main(argv: list[str] | None = None) -> int:
     st.migrate_url_index(state)
 
     if args.explain:
-        users = load_users(ROOT / "users")
+        users = load_users(DATA_ROOT / "users")
         for line in explain(args.explain, state, today, users, args.user):
             print(line)
         return 0  # read-only: state NOT written, nothing notified
@@ -966,7 +967,7 @@ def main(argv: list[str] | None = None) -> int:
             st.save_state(state, state_path)
         return 0
 
-    users = load_users(ROOT / "users")
+    users = load_users(DATA_ROOT / "users")
     if not users:
         log.warning("no user configs in users/ -- nothing to notify")
     merged_by_key = {job.dedup_key: job for job in merged}

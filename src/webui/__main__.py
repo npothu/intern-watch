@@ -15,13 +15,11 @@ import argparse
 import logging
 import sys
 import webbrowser
-from pathlib import Path
 
 from ..envfile import load_dotenv
 from ..filters import load_users
+from ..paths import DATA_ROOT as DATA_ROOT
 from .server import Hub, make_server
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     # .env before the store/hub is built. No-op in Actions (no .env file).
     load_dotenv()
 
-    users = {u["name"]: u for u in load_users(ROOT / "users")}
+    users = {u["name"]: u for u in load_users(DATA_ROOT / "users")}
     if not users:
         print("no watcher configs in users/*.yaml", file=sys.stderr)
         return 1
@@ -57,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
 
-    hub = Hub(ROOT, user, list(users[user].get("terms_wanted", [])),
+    hub = Hub(DATA_ROOT, user, list(users[user].get("terms_wanted", [])),
               fetch=not args.no_fetch)
     hub.refresh()
     for warning in hub.warnings:

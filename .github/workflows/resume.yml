@@ -6,6 +6,9 @@ name: resume
 # .docx, not a zip — Actions artifacts are always zipped). The build
 # report (project order, keyword gaps, page estimate) lands in the run
 # summary.
+#
+# Reusable from a separate data repo exactly like watch.yml (see there);
+# the release is created in the calling (data) repo.
 
 on:
   workflow_dispatch:
@@ -13,29 +16,85 @@ on:
       company:
         description: "Company name (used in the filename)"
         required: true
+        type: string
       jd:
         description: "Paste the job description text"
         required: true
+        type: string
       user:
         description: "User (users/<name>_resume.json; blank = the sole bank)"
         required: false
+        type: string
+        default: ""
       use_llm:
         description: "LLM bullet rewrite (needs the provider API key secret)"
         type: boolean
         default: true
+      code_ref:
+        description: "Code ref to run; blank = this workflow's commit"
+        type: string
+        default: ""
+      data_ref:
+        description: "Data branch; blank = current branch"
+        type: string
+        default: ""
+      environment:
+        description: "GitHub environment (e.g. staging); blank = repo-level"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      company:
+        required: true
+        type: string
+      jd:
+        required: true
+        type: string
+      user:
+        type: string
+        default: ""
+      use_llm:
+        type: boolean
+        default: true
+      code_ref:
+        type: string
+        default: ""
+      data_ref:
+        type: string
+        default: ""
+      environment:
+        type: string
+        default: ""
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     permissions:
       contents: write          # required to publish the Release asset
+    env:
+      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out data (this repo)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.data_ref || github.ref }}
+
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository || github.repository }}
+          ref: ${{ inputs.code_ref || job.workflow_sha || github.sha }}
+          path: code
+          token: ${{ secrets.CODE_REPO_TOKEN || github.token }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: code/requirements.txt
+
+      - run: pip install -r code/requirements.txt
 
       - name: Write JD to file
         env:
@@ -43,6 +102,7 @@ jobs:
         run: printf '%s' "$JD" > /tmp/jd.txt
 
       - name: Build resume
+        working-directory: code
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -57,11 +117,13 @@ jobs:
 
       - name: Report to run summary
         if: always()
-        run: cat out/report.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: cat code/out/report.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Publish .docx as a Release asset
+        working-directory: code
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           docx=$(ls out/*.docx | head -n1)
           [ -n "$docx" ] || { echo "no .docx produced"; exit 1; }

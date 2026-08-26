@@ -32,8 +32,7 @@ from pathlib import Path
 
 from . import dashboard, ledger
 from . import state as st
-
-ROOT = Path(__file__).resolve().parents[1]
+from .paths import DATA_ROOT as DATA_ROOT
 
 
 def _find_match(state: dict, user: str, short: str) -> dict | None:
@@ -94,9 +93,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="true/false, or a status name for --field status")
     ap.add_argument("--note", default="",
                     help="history note (only with --field status)")
-    ap.add_argument("--state", default=str(ROOT / "state" / "seen.json"),
+    ap.add_argument("--state", default=str(DATA_ROOT / "state" / "seen.json"),
                     help="state file path (tests)")
-    ap.add_argument("--ledger", default=str(ledger.ledger_path(ROOT)),
+    ap.add_argument("--ledger", default=str(ledger.ledger_path(DATA_ROOT)),
                     help="applications ledger path (tests)")
     args = ap.parse_args(argv)
 

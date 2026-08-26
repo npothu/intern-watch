@@ -1,0 +1,56 @@
+name: deploy-convex
+
+# Push convex/ (schema + functions) to the production deployment whenever
+# main changes under convex/. Needs the CONVEX_DEPLOY_KEY secret (a
+# *production* deploy key from the Convex dashboard: Settings -> Deploy keys).
+# Without the secret the job is skipped, so the template stays inert until an
+# instance opts in. The web app deploys separately (Vercel git integration).
+#
+# Order matters for schema changes: Convex validates the new schema against
+# live data at deploy time, so exercise the change on the dev deployment
+# (`npx convex dev`) before merging.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "convex/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-convex.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-convex
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for a deploy key
+        id: key
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: echo "present=${CONVEX_DEPLOY_KEY:+true}" >> "$GITHUB_OUTPUT"
+
+      - if: steps.key.outputs.present != 'true'
+        run: echo "CONVEX_DEPLOY_KEY not set; skipping (template default)."
+
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.present == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+        if: steps.key.outputs.present == 'true'
+
+      - name: Deploy to production
+        if: steps.key.outputs.present == 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: npx convex deploy --yes

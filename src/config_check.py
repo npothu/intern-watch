@@ -37,8 +37,8 @@ from .envfile import load_dotenv
 # it too, else apply answer-books become phantom watcher users).
 from .filters import is_watcher_config as _is_watcher_config
 from .llm import api_key_env_for
-
-ROOT = Path(__file__).resolve().parent.parent
+from .paths import DATA_ROOT as DATA_ROOT
+from .paths import ROOT as ROOT
 
 # Known top-level keys. Anything else is an unknown-key *warning* (typos are
 # usually silent no-ops in the loaders, so surface them) -- not a hard error,
@@ -499,15 +499,19 @@ def check_configs(users_dir: Path, watch_yml: Path, *,
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    root = Path(argv[0]).resolve() if argv else ROOT
-    users_dir = root / "users"
-    watch_yml = root / ".github" / "workflows" / "watch.yml"
+    if argv:
+        data_dir = code_root = Path(argv[0]).resolve()
+        env_path: Path | None = data_dir / ".env"
+    else:
+        data_dir, code_root, env_path = DATA_ROOT, ROOT, None
+    users_dir = data_dir / "users"
+    watch_yml = code_root / ".github" / "workflows" / "watch.yml"
 
     # Local-only: pull STORE/CONVEX_* and GMAIL/GEMINI keys out of the
     # gitignored .env before the feature report. No-op in Actions (no .env).
-    load_dotenv(root / ".env")
+    load_dotenv(env_path)
 
-    reports, ok = check_configs(users_dir, watch_yml, root=root)
+    reports, ok = check_configs(users_dir, watch_yml, root=code_root)
     store_rep = env_store_report(watch_yml)
     if store_rep is not None:
         ok = ok and store_rep.ok
@@ -516,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
     if store_rep is not None:
         print(store_rep.render())
     print()
-    feats = check_features(users_dir, watch_yml, root=root)
+    feats = check_features(users_dir, watch_yml, root=code_root)
     print(render_features(feats))
     print()
     if ok:

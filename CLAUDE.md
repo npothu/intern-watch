@@ -55,9 +55,10 @@ speedyapply, and `ats-boards` (direct Greenhouse/Lever/Ashby JSON APIs for
 ## Debugging "why did job X (not) show up"
 
 The jobright URL hex id is the dedup key: `jr:<24-hex>`. Authoritative state
-is `state/seen.json` on **origin/main** (Actions commits it every run; the
-local checkout is usually stale — `git fetch origin main && git show
-origin/main:state/seen.json`). Per job entry:
+is `state/seen.json` on **origin/main of the data repo** (Actions commits it
+every run; the local checkout is usually stale — `git fetch origin main &&
+git show origin/main:state/seen.json` there). For an instance that is the
+private data repo, not this one. Per job entry:
 - `notified_for: ["<user>"]` → delivered. Empty + `llm_top`/companies verdict
   false → LLM rejected the company. No `llm` key at all → rejected before the
   LLM (role filter / elimination / term-not-wanted — simulate the title
@@ -71,8 +72,11 @@ origin/main:state/seen.json`). Per job entry:
   yaml and deleting that entry.
 
 `python -m src.main --dry-run` runs the full pipeline locally without
-notifying or writing state. `ruff check .`, `python -m mypy`, `pytest -q`
-and `python -m src.config_check` must all stay green (see Code review).
+notifying or writing state; against an instance's real config and state,
+prefix it with `INTERN_WATCH_DATA_DIR=<path to the data repo checkout>`
+(same for `src.webui`, `src.dashboard`, `src.resume`, `src.apply`).
+`ruff check .`, `python -m mypy`, `pytest -q` and `python -m src.config_check`
+must all stay green (see Code review).
 
 ## Local web UI (`python -m src.webui`)
 
@@ -100,8 +104,25 @@ progressed past "applied". NEVER pruned — do not "clean it up".
 - `.gitattributes` forces LF (seen.json churns otherwise).
 - `state/seen.json` and `state/applications.json` are written by Actions —
   avoid committing local edits to them; branch from origin/main.
-- Prefer branch + PR over pushing straight to main: Actions commits state to
-  main between your pull and your push, so direct pushes race it.
+- Prefer branch + PR over pushing straight to main.
+- **Code vs data.** `src/paths.py` splits the tree in two: `ROOT` (this
+  checkout: `src/`, `sources.yaml`, `data/`) and `DATA_ROOT` (`users/`,
+  `state/`, `resumes/`, `out/`, and the git repo whose `origin/main` the
+  webui and GitHubStore read). `DATA_ROOT` is `INTERN_WATCH_DATA_DIR` when
+  set, else `ROOT`. The template runs with both equal; an instance keeps its
+  private data in a separate repo and points the env var at it. Every new
+  path must go through one of the two - never recompute
+  `Path(__file__).parents[n]`.
+- **Reusable workflows.** `watch`, `dashboard-write`, `resume`,
+  `resume-batch` and `resume-ondemand` all carry a `workflow_call` trigger
+  next to their own. A data repo calls them with `secrets: inherit`; the job
+  checks out the caller (data) at the workspace root and this repo under
+  `code/`, runs from `code/` with `INTERN_WATCH_DATA_DIR` set, and commits
+  state back to the caller. Inputs `code_ref` / `data_ref` / `environment`
+  pick the code ref, the data branch and the GitHub environment (e.g. a
+  `staging` environment that overrides `STORE`). Anything that changes a
+  workflow's env var list or checkout layout must be made in the reusable
+  body, not the thin caller.
 
 ## Code review
 
@@ -160,40 +181,38 @@ will not find them:
 - **The webui is local-only.** It must never be reachable from the watcher
   cron.
 
-## Shipping a change (template → instance → deployed)
+## Shipping a change (code repo → deployed)
 
-This repo is the TEMPLATE. It has no hosted Convex deployment of its own —
-local work runs against an anonymous deployment (`CONVEX_DEPLOYMENT=anonymous:…`
-in `.env.local`), and `dev` / `prod` belong to the downstream INSTANCE repo.
-So "deploy this" is never one step here; it is this chain:
+This repo is the CODE. All the code, for the template and for every instance.
+An instance is a separate private DATA repo (users/, state/, secrets, the
+dashboard issue) whose workflows call the reusable ones here; nothing in this
+repo names an instance (no deployment names, team names, personal config or
+real URLs). Shipping is:
 
 1. **Branch + PR here.** Worktree, tests green, no Claude/Co-Authored-By
-   trailers. Merge once CI is green (`test`, `convex-test`, `web` — `web` only
-   runs when `web/**` changed).
-2. **Sync template → instance.** In the instance repo, dispatch the
-   `sync-template` workflow (`gh workflow run sync-template.yml`); it opens a
-   PR merging `template/main`. It also runs weekly on its own.
-   **Merge that PR with a MERGE COMMIT, never squash** — squashing severs the
-   shared ancestry and turns the next sync into unrelated-histories surgery.
-   Never push instance-specific things the other way: no deployment names, team
-   names, personal config, or real URLs in this repo.
-3. **Deploy from the instance**, from a checkout of its `main` that contains
-   ALL merged `convex/` work — deploying from a stale tree silently reverts
-   whatever it is missing:
-   - dev: `npx convex dev --once` (the `CONVEX_DEPLOYMENT` in the instance's
-     root `.env.local`)
-   - prod: `npx convex deploy`
-   Convex `deploy` pushes schema + functions together; a schema change lands on
-   live data, so deploy dev first and exercise the changed path there. Do not
-   trust the "deployed" line — run one real call against the changed path
-   (`npx convex run <fn> '<json>'`, add `--prod`) and clean up any test row.
-4. **Deploy the web app** — it is a SEPARATE deploy and it is NOT automatic.
-   There is no git integration; every production release is
-   `npx vercel --prod` run **from the repo root** (the project's Root Directory
-   is already `web`, so running it inside `web/` resolves `web/web` and fails).
-   Convex and Vercel drifting apart is a half-released state: the backend is
-   additive so the old UI keeps working, but nothing new is visible until this
-   step runs.
+   trailers. CI: `test`, `convex-test`, `web` (`web` only when `web/**`
+   changed).
+2. **Test it end to end from the data repo before merging.** Dispatch the
+   instance's `watch` with `code_ref=<this branch>`, `data_ref=staging`,
+   `environment=staging`. The staging environment sets `STORE=github`, the
+   staging data branch has its own users/ and state/ and emails only the
+   owner, so the run is real (fetch, filter, LLM, email, state commit) and
+   touches nothing in production. Preview deployments for the web app come
+   from Vercel's git integration on this repo; they run against the dev
+   Convex deployment, so push a schema change to dev with `npx convex dev`
+   first.
+3. **Merge.** Watcher instances pick up `main` on their next cron tick (their
+   callers are pinned to `@main`). `deploy-convex.yml` pushes `convex/` to
+   production on the same merge when `CONVEX_DEPLOY_KEY` is set. Vercel
+   builds production from `main`.
+4. **Verify the deployed path**, not the deploy log: one real call against
+   the changed Convex function (`npx convex run <fn> '<json>' --prod`, clean
+   up any test row) and a look at the production web app. Convex validates a
+   schema change against live data at deploy time, so exercise it on dev
+   before merging.
+
+A manual production web deploy, if ever needed, is `npx vercel --prod` from
+the repo root (Root Directory is `web`; inside `web/` it resolves `web/web`).
 
 ### The web build only ever installs `web/package.json`
 

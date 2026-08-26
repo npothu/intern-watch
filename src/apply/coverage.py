@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .. import dashboard
+from ..paths import DATA_ROOT as DATA_ROOT
 from .base import ATSFamily
 from .dom import advance_to_application_form
 from .fillers.agent import _extract_fields, map_fields
@@ -46,8 +47,7 @@ if TYPE_CHECKING:
 
     from .profile import ApplyProfile
 
-ROOT = Path(__file__).resolve().parents[2]
-COVERAGE_ROOT = ROOT / "state" / "apply_coverage"
+COVERAGE_ROOT = DATA_ROOT / "state" / "apply_coverage"
 
 
 def _skip_labels(profile: ApplyProfile) -> list[str]:

@@ -32,11 +32,12 @@ import sys
 from pathlib import Path
 
 from .. import ledger as ledger_mod
+from ..paths import DATA_ROOT as DATA_ROOT
 from .auth import load_logins
 from .base import ApplyMode
 from .coverage import format_table, run_coverage
 from .profile import load_dotenv, load_profile
-from .queue import DEFAULT_STATE, ROOT, build_plan, load_matches, run_item, save
+from .queue import DEFAULT_STATE, build_plan, load_matches, run_item, save
 from .queue import approve as approve_match
 from .resolve import resolve
 
@@ -165,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     # The applications ledger is the authoritative no-double-apply guard: a job
     # with a recorded submit attempt (or a hand-ticked applied record) is never
     # re-submitted, regardless of what the match status says.
-    ledger_path = ledger_mod.ledger_path(ROOT)
+    ledger_path = ledger_mod.ledger_path(DATA_ROOT)
     ledger = ledger_mod.load_ledger(ledger_path)
 
     only = {args.key} if args.key else None
@@ -216,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     return rc
 
 
-ROOT_ARTIFACTS = Path(__file__).resolve().parents[2] / "state" / "apply_artifacts"
+ROOT_ARTIFACTS = DATA_ROOT / "state" / "apply_artifacts"
 
 
 if __name__ == "__main__":

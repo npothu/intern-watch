@@ -13,13 +13,13 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from pathlib import Path
 
 import httpx
 import yaml
 
 from ..models import Job
 from ..normalize import infer_terms, split_locations, strip_html, strip_tracking
+from ..paths import ROOT as ROOT
 from . import smartrecruiters_api as sr
 from .base import Adapter, fetch_text
 
@@ -28,8 +28,6 @@ log = logging.getLogger(__name__)
 INTERN_RE = re.compile(r"\bintern(ship)?s?\b|\bco-?op\b", re.I)
 
 JD_MAX_CHARS = 6000  # requirements sections usually live mid-document
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _API = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
@@ -63,7 +61,7 @@ def _iso_date(value: str | None) -> dt.date | None:
 
 class AtsBoardsAdapter(Adapter):
     def fetch(self, client: httpx.Client, today: dt.date) -> list[Job]:
-        boards_path = _REPO_ROOT / (self.cfg.boards_file or "data/ats_boards.yaml")
+        boards_path = ROOT / (self.cfg.boards_file or "data/ats_boards.yaml")
         boards = yaml.safe_load(boards_path.read_text(encoding="utf-8"))["boards"]
         jobs: list[Job] = []
         failures = 0

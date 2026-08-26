@@ -27,18 +27,17 @@ from __future__ import annotations
 import logging
 import re
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 from pydantic import BaseModel, Field
 
+from ..paths import DATA_ROOT as DATA_ROOT
 from .base import ATSFamily
 
 if TYPE_CHECKING:
     from playwright.sync_api import Page
 
-ROOT = Path(__file__).resolve().parents[2]
 log = logging.getLogger(__name__)
 
 PROBE_MS = 1500
@@ -89,7 +88,7 @@ def load_logins(user: str = "") -> Logins:
     from .profile import detect_user
 
     user = user or detect_user()
-    path = ROOT / "users" / f"{user}_logins.yaml"
+    path = DATA_ROOT / "users" / f"{user}_logins.yaml"
     if not path.exists():
         return Logins()
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

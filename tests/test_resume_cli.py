@@ -3,8 +3,9 @@
 import pytest
 from docx import Document
 
+from src.paths import ROOT
 from src.resume import __main__ as rm
-from src.resume.__main__ import ROOT, _llm_cfg, main
+from src.resume.__main__ import _llm_cfg, main
 
 FIXTURE_BANK = ROOT / "tests" / "fixtures" / "resume_bank.json"
 

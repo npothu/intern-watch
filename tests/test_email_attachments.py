@@ -67,8 +67,8 @@ def test_notify_email_passes_only_existing_resumes(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(main, "send_email",
                         lambda *a, **kw: captured.update(kw) or True)
-    # Point ROOT at a temp tree so the relative paths resolve there.
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    # Point DATA_ROOT at a temp tree so the relative paths resolve there.
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     resumes = tmp_path / "resumes" / "example"
     resumes.mkdir(parents=True)
     _docx(resumes / "First_Last_Acme.docx")

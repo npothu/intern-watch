@@ -17,7 +17,7 @@ from src.apply.base import ATSFamily
 
 def test_load_logins_missing_returns_empty(tmp_path, monkeypatch):
     import src.apply.auth as auth
-    monkeypatch.setattr(auth, "ROOT", tmp_path)
+    monkeypatch.setattr(auth, "DATA_ROOT", tmp_path)
     logins = load_logins("nobody")
     assert logins.default is None and logins.accounts == []
 

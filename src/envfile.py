@@ -18,13 +18,18 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .paths import DATA_ROOT as DATA_ROOT
+from .paths import ROOT as ROOT
+
 
 def load_dotenv(path: Path | None = None) -> None:
     """Read KEY=VALUE lines from `path` into os.environ for keys not already
-    present. Defaults to the repo-root .env (gitignored). Comments and blank
-    lines are skipped; surrounding quotes on values are stripped. A missing
-    file is a silent no-op."""
-    path = path or (Path(__file__).resolve().parents[1] / ".env")
+    present. Defaults to the data-root .env when present, then the code-root
+    .env. Comments and blank lines are skipped; surrounding quotes on values
+    are stripped. A missing file is a silent no-op."""
+    if path is None:
+        data_path = DATA_ROOT / ".env"
+        path = data_path if data_path.exists() else ROOT / ".env"
     if not path.exists():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
