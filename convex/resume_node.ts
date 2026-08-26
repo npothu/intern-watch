@@ -15,7 +15,7 @@
 // JD fetch -> model call -> PDF/DOCX generation -> storage - runs here under
 // the Node runtime instead of risking a runtime-only failure in the isolate.
 
-import { internalAction } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -50,6 +50,20 @@ import {
   meteredInvoke,
 } from "./resume_import";
 import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
+import { exportResume, parseExportProfile } from "./resume_export";
+
+// The TRACKER_SECRET env var set in the Convex dashboard (same gate as
+// resume.ts - every public endpoint of the builder is private to the web app).
+function checkSecret(secret: string) {
+  if (secret !== process.env.TRACKER_SECRET) {
+    throw new Error("bad secret");
+  }
+}
+
+// saveProfile's cap (web/app/(app)/profile/profile-actions.ts), so any profile
+// the editor could save also exports; the route re-checks it before calling.
+const EXPORT_MAX_BYTES = 256 * 1024;
+const EXPORT_VARIANT_MAX = 40;
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
 const JD_MAX_CHARS = 6000; // generous cap for the tailor prompt excerpt
@@ -568,5 +582,37 @@ export const runProfileImport = internalAction({
         error: message,
       });
     }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Public action ("use node"): render one variant of a profile whole, as a PDF
+// or DOCX, and hand the bytes straight back. Nothing is stored: unlike a
+// tailored build there is no JD fetch or model call to wait on, so the render
+// (well under a second) can hold the web server's request open, and a file
+// that never touches storage has nothing to sweep.
+//
+// The profile arrives as JSON rather than being read from the `profiles`
+// table so the download matches what is on the editor's screen, including
+// edits the autosave has not flushed yet. Its only consumer is the user it
+// came from, so the render trusts it as far as putProfile would.
+// ---------------------------------------------------------------------------
+export const exportProfile = action({
+  args: {
+    data: v.string(),
+    variant: v.string(),
+    format: v.union(v.literal("pdf"), v.literal("docx")),
+    secret: v.string(),
+  },
+  handler: async (_ctx, { data, variant, format, secret }) => {
+    checkSecret(secret);
+    if (Buffer.byteLength(data) > EXPORT_MAX_BYTES) throw new Error("profile is too large");
+    const name = variant.trim().slice(0, EXPORT_VARIANT_MAX) || "base";
+    const exported = await exportResume(parseExportProfile(data), name, format);
+    return {
+      filename: exported.filename,
+      contentType: exported.contentType,
+      base64: Buffer.from(exported.bytes).toString("base64"),
+    };
   },
 });
