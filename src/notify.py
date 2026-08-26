@@ -37,6 +37,8 @@ def primary_term(job: Job, terms_order: list[str]) -> str:
 
 
 def _tag(reasons: list[str]) -> str:
+    if "company:priority" in reasons:
+        return "[PRIORITY] "
     for r in reasons:
         if r.startswith("company:top"):
             return "[TOP*] " if "LLM" in r else "[TOP] "
@@ -48,6 +50,16 @@ def _tag(reasons: list[str]) -> str:
         if r.startswith("location:"):
             return "[ATL] "
     return ""
+
+
+def _rank_tag(tag: str) -> int:
+    """Delivery order within a term group: priority, then top, then the rest.
+    Alphabetical by company after that (see the sort keys below)."""
+    if tag.startswith("[PRIORITY]"):
+        return 0
+    if tag.startswith("[TOP"):
+        return 1
+    return 2
 
 
 def _line(job: Job, reasons: list[str]) -> str:
@@ -77,7 +89,10 @@ def build_digest(matches: list[tuple[Job, list[str]]], terms_order: list[str],
              f"({now.strftime('%b %d, %I:%M %p UTC').lstrip('0')})"]
     for term in order:
         lines.append(f"── **{term}** ──")
-        for job, reasons in sorted(groups[term], key=lambda m: m[0].company.casefold()):
+        ordered = sorted(groups[term],
+                         key=lambda m: (_rank_tag(_tag(m[1])),
+                                        m[0].company.casefold()))
+        for job, reasons in ordered:
             lines.append(_line(job, reasons))
 
     chunks: list[str] = []
@@ -101,9 +116,14 @@ def outbox_item(job: Job, reasons: list[str], terms_order: list[str]) -> dict:
     loc = job.locations[0] if job.locations else (job.work_model or "?")
     if len(job.locations) > 1:
         loc += f" +{len(job.locations) - 1}"
-    return {"key": job.dedup_key, "company": job.company, "title": job.title,
-            "location": loc, "salary": job.salary, "url": job.url,
-            "tag": _tag(reasons).strip(), "term": primary_term(job, terms_order)}
+    item: dict = {
+        "key": job.dedup_key, "company": job.company, "title": job.title,
+        "location": loc, "salary": job.salary, "url": job.url,
+        "tag": _tag(reasons).strip(), "term": primary_term(job, terms_order)}
+    if "company:priority" in reasons:
+        # Only ever True; absent otherwise so older snapshots read the same.
+        item["priority"] = True
+    return item
 
 
 def match_item(job: Job, reasons: list[str], terms_order: list[str]) -> dict:
@@ -132,22 +152,61 @@ def _group_items(items: list[dict], terms_order: list[str]) -> list[tuple[str, l
     order = [t for t in terms_order if t in groups] \
         + sorted(t for t in groups if t not in terms_order and t != _UNKNOWN) \
         + ([_UNKNOWN] if _UNKNOWN in groups else [])
-    return [(t, sorted(groups[t], key=lambda i: i["company"].casefold()))
+    return [(t, sorted(groups[t], key=lambda i: (_rank_tag(i.get("tag") or ""),
+                                                 i["company"].casefold())))
             for t in order]
+
+
+def priority_names(items: list[dict], limit: int = 3) -> str:
+    """'Microsoft, Meta' / 'Microsoft, Meta, Amazon +2' -- the priority
+    companies among `items`, first-seen order, for a subject line. Empty when
+    none are priority."""
+    seen: list[str] = []
+    for it in items:
+        if it.get("priority") and it["company"] not in seen:
+            seen.append(it["company"])
+    if not seen:
+        return ""
+    head = ", ".join(seen[:limit])
+    extra = len(seen) - limit
+    return f"{head} +{extra}" if extra > 0 else head
+
+
+_EMAIL_STYLE = ("font-family:Arial,Helvetica,sans-serif;"
+                "font-size:14px;line-height:1.5")
+
+
+def _item_lines(it: dict) -> tuple[str, str]:
+    """(html <li>, text bullet) for one outbox item."""
+    esc = html_mod.escape
+    tag_html = f"<b>{esc(it['tag'])}</b> " if it.get("tag") else ""
+    salary_html = f" <i>[{esc(it['salary'])}]</i>" if it.get("salary") else ""
+    html = (f"<li>{tag_html}{esc(it['company'])} &mdash; "
+            f"<a href=\"{esc(it['url'])}\">{esc(it['title'])}</a> "
+            f"({esc(it['location'])}){salary_html}</li>")
+    tag_txt = f"{it['tag']} " if it.get("tag") else ""
+    salary_txt = f" [{it['salary']}]" if it.get("salary") else ""
+    text = (f"• {tag_txt}{it['company']} — {it['title']} "
+            f"({it['location']}){salary_txt}\n  {it['url']}")
+    return html, text
 
 
 def build_email(items: list[dict], terms_order: list[str],
                 now: dt.datetime,
-                health_warnings: list[str] | None = None) -> tuple[str, str, str]:
-    """Returns (subject, html_body, text_body) for the accumulated outbox."""
+                health_warnings: list[str] | None = None,
+                subject_names: bool = True) -> tuple[str, str, str]:
+    """Returns (subject, html_body, text_body) for the accumulated outbox.
+    With `subject_names`, priority companies in the batch are named in the
+    subject so the alert reads from the inbox list."""
     grouped = _group_items(items, terms_order)
     counts = ", ".join(f"{t}: {len(g)}" for t, g in grouped)
-    subject = f"intern-watch: {len(items)} new ({counts})"
+    names = priority_names(items) if subject_names else ""
+    subject = (f"intern-watch: {len(items)} new · {names} ({counts})" if names
+               else f"intern-watch: {len(items)} new ({counts})")
 
     esc = html_mod.escape
     html_parts = [
-        "<html><body style=\"font-family:Arial,Helvetica,sans-serif;"
-        "font-size:14px;line-height:1.5\">",
+        f"<html><body style=\"{_EMAIL_STYLE}\">",
         f"<p><b>{len(items)} new internship match"
         f"{'es' if len(items) != 1 else ''}</b> &mdash; "
         f"{esc(now.strftime('%b %d, %I:%M %p UTC').lstrip('0'))}</p>",
@@ -159,16 +218,9 @@ def build_email(items: list[dict], terms_order: list[str],
                           "style=\"margin:0;padding-left:20px\">")
         text_parts.append(f"\n== {term} ==")
         for it in group:
-            tag_html = f"<b>{esc(it['tag'])}</b> " if it.get("tag") else ""
-            salary_html = f" <i>[{esc(it['salary'])}]</i>" if it.get("salary") else ""
-            html_parts.append(
-                f"<li>{tag_html}{esc(it['company'])} &mdash; "
-                f"<a href=\"{esc(it['url'])}\">{esc(it['title'])}</a> "
-                f"({esc(it['location'])}){salary_html}</li>")
-            tag_txt = f"{it['tag']} " if it.get("tag") else ""
-            salary_txt = f" [{it['salary']}]" if it.get("salary") else ""
-            text_parts.append(f"• {tag_txt}{it['company']} — {it['title']} "
-                              f"({it['location']}){salary_txt}\n  {it['url']}")
+            html, text = _item_lines(it)
+            html_parts.append(html)
+            text_parts.append(text)
         html_parts.append("</ul>")
     if health_warnings:
         esc_w = [esc(w) for w in health_warnings]
@@ -180,6 +232,37 @@ def build_email(items: list[dict], terms_order: list[str],
         text_parts.append("\n== Source health ==")
         text_parts.extend(f"⚠ {w}" for w in health_warnings)
     html_parts.append("</body></html>")
+    return subject, "".join(html_parts), "\n".join(text_parts)
+
+
+def build_priority_email(items: list[dict], terms_order: list[str],
+                         now: dt.datetime) -> tuple[str, str, str]:
+    """A priority alert: sent on the run that found the match instead of at
+    the next digest slot. One match puts the company and title in the
+    subject; several name the companies. Ordered like the digest."""
+    ordered = [it for _t, g in _group_items(items, terms_order) for it in g]
+    n = len(ordered)
+    if n == 1:
+        it = ordered[0]
+        subject = f"intern-watch: {it['company']} - {it['title']} ({it['term']})"
+    else:
+        subject = f"intern-watch: {n} priority matches · {priority_names(ordered)}"
+    esc = html_mod.escape
+    stamp = now.strftime('%b %d, %I:%M %p UTC').lstrip('0')
+    html_parts = [
+        f"<html><body style=\"{_EMAIL_STYLE}\">",
+        f"<p><b>Priority match{'es' if n != 1 else ''}</b> &mdash; {esc(stamp)}</p>",
+        "<ul style=\"margin:0;padding-left:20px\">",
+    ]
+    text_parts = [f"Priority match{'es' if n != 1 else ''} — {stamp}", ""]
+    for it in ordered:
+        html, text = _item_lines(it)
+        html_parts.append(html)
+        text_parts.append(text)
+    html_parts.append(
+        "</ul><p style=\"color:#666\"><i>Sent right away; the daily digest "
+        "will not repeat these.</i></p></body></html>")
+    text_parts.append("\nSent right away; the daily digest will not repeat these.")
     return subject, "".join(html_parts), "\n".join(text_parts)
 
 

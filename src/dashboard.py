@@ -238,7 +238,10 @@ def build_body(matches: list[dict], terms_order: list[str],
         ]
         for term, group in _group_items(shown, terms_order):
             parts.append(f"\n### {term}\n")
-            group = sorted(group, key=lambda i: (i.get("added", ""),
+            # Priority rows pin to the top of their term; the rest stay
+            # newest-first as before.
+            group = sorted(group, key=lambda i: (bool(i.get("priority")),
+                                                 i.get("added", ""),
                                                  i["company"].casefold()),
                            reverse=True)
             parts.extend(_row(item, repo, branch, interactive, resume_urls)

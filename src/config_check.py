@@ -46,7 +46,7 @@ from .paths import ROOT as ROOT
 KNOWN_TOP_LEVEL = {
     "name", "notify", "dashboard", "eliminate", "role_filter",
     "terms_wanted", "unknown_term_policy", "rules", "llm", "resume_llm",
-    "resume_build",
+    "resume_build", "terms", "term_rules", "priority", "location",
 }
 
 LLM_PROVIDERS = {"gemini", "anthropic"}
@@ -182,6 +182,9 @@ def validate_user(user: dict, label: str, *, root: Path,
                 rep.error(f"resume_build.modes has unknown entries {bad} "
                           f"(allowed: {sorted(RESUME_BUILD_MODES)})")
 
+    # 1b'. Rolling terms / per-season presets / priority block.
+    _validate_watch_blocks(user, rep)
+
     # 1c. company_in_file paths under data/ must exist.
     for cif in _iter_company_in_file(user.get("rules")):
         if not str(cif).replace("\\", "/").startswith("data/"):
@@ -208,6 +211,75 @@ def validate_user(user: dict, label: str, *, root: Path,
                 f"             {name}: ${{{{ secrets.{name} }}}}")
 
     return rep
+
+
+def _validate_watch_blocks(user: dict, rep: Report) -> None:
+    """`terms:` (rolling window), `term_rules:` (per-season presets),
+    `priority:` and `location:` -- the blocks the hosted settings page also
+    writes, so a malformed value here is the same mistake the overlay in
+    src/prefs.py ignores silently."""
+    from . import terms as terms_mod
+    from .filters import PRESETS
+
+    t = user.get("terms")
+    if t is not None:
+        if not isinstance(t, dict):
+            rep.error("terms must be a mapping (rolling/lead_weeks/"
+                      "horizon_months/include/exclude)")
+        else:
+            for key in ("lead_weeks", "horizon_months"):
+                if key in t and (not isinstance(t[key], int)
+                                 or isinstance(t[key], bool) or t[key] < 0):
+                    rep.error(f"terms.{key} must be a non-negative integer")
+            for key in ("include", "exclude"):
+                vals = t.get(key) or []
+                if not isinstance(vals, list):
+                    rep.error(f"terms.{key} must be a list")
+                    continue
+                for term in vals:
+                    if terms_mod.parse_term(str(term)) is None:
+                        rep.error(f"terms.{key} entry {term!r} is not "
+                                  "'<Spring|Summer|Fall|Winter> <year>'")
+            if user.get("terms_wanted"):
+                rep.warn("both terms: and terms_wanted: set -- terms: "
+                         "(rolling) wins, terms_wanted is ignored")
+
+    tr = user.get("term_rules")
+    if tr is not None:
+        if not isinstance(tr, dict):
+            rep.error("term_rules must be a mapping of season -> preset")
+        else:
+            for season, preset in tr.items():
+                if season not in terms_mod.SEASON_START:
+                    rep.error(f"term_rules season {season!r} not in "
+                              f"{sorted(terms_mod.SEASON_START)}")
+                if preset not in PRESETS:
+                    rep.error(f"term_rules.{season} = {preset!r} not in "
+                              f"{list(PRESETS)}")
+            if user.get("rules"):
+                rep.warn("both term_rules: and rules: set -- term_rules "
+                         "wins, rules is ignored")
+
+    p = user.get("priority")
+    if p is not None:
+        if not isinstance(p, dict):
+            rep.error("priority must be a mapping")
+        else:
+            companies = p.get("companies")
+            if companies is not None and (
+                    not isinstance(companies, list)
+                    or not all(isinstance(c, str) for c in companies)):
+                rep.error("priority.companies must be a list of strings")
+            for flag in ("from_tracker", "email_immediately", "subject_names"):
+                if flag in p and not isinstance(p[flag], bool):
+                    rep.error(f"priority.{flag} must be true/false")
+
+    loc = user.get("location")
+    if loc is not None:
+        if not isinstance(loc, dict):
+            rep.error("location must be a mapping")
+        elif "remote_counts" in loc and not isinstance(loc["remote_counts"], bool):
+            rep.error("location.remote_counts must be true/false")
 
 
 def _iter_company_in_file(rules) -> list[str]:

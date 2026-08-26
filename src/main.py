@@ -20,6 +20,7 @@ import httpx
 import yaml
 
 from . import content_dedup, dashboard, ledger
+from . import prefs as prefs_mod
 from . import state as st
 from .adapters import make_adapter
 from .dedupe import dedupe
@@ -32,6 +33,7 @@ from .notify import (
     build_digest,
     build_email,
     build_health_email,
+    build_priority_email,
     match_item,
     primary_term,
     send_discord,
@@ -40,7 +42,7 @@ from .notify import (
 from .paths import DATA_ROOT as DATA_ROOT
 from .paths import ROOT as ROOT
 from .resume.build import build_for_job, resume_build_cfg
-from .store import GitHubStore, make_store
+from .store import ApiError, GitHubStore, TrackerStore, make_store
 
 log = logging.getLogger("intern-watch")
 
@@ -425,12 +427,44 @@ def _build_resumes(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
     return paths
 
 
+def _prefs_store(user_cfg: dict) -> TrackerStore | None:
+    """The hosted store that may hold watch prefs, or None. Only a hosted
+    driver (STORE=convex) serves them; the GitHub driver is skipped rather
+    than constructed, since its init shells out to git for issue plumbing
+    this path never needs. A misconfigured hosted store is logged and the
+    run continues on the yaml alone."""
+    if os.environ.get("STORE", "github") == "github":
+        return None
+    try:
+        return make_store(DATA_ROOT, user_cfg)
+    except (ApiError, ValueError) as exc:
+        log.warning("user %s: store unavailable for watch prefs (%s) -- "
+                    "using the yaml alone", user_cfg.get("name"), exc)
+        return None
+
+
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
                  enricher: _JobrightEnricher | None = None,
-                 resolver=None) -> None:
-    uf = UserFilter(user_cfg, ROOT)
+                 resolver=None, store: TrackerStore | None = None) -> None:
+    today = now.date()
+    # Settings > Watch (hosted store) overlays the yaml: terms window,
+    # per-season presets, priority companies, remote, digest time/recipients.
+    if store is None:
+        store = _prefs_store(user_cfg)
+    prefs = store.get_watch_prefs(user_cfg["name"]) if store else None
+    user_cfg = prefs_mod.apply_overlay(user_cfg, prefs)
+    uf = UserFilter(user_cfg, ROOT, today=today)
     name = uf.name
+    # Employers from the applications ledger count as priority when asked.
+    tracker: dict[str, str] = {}
+    if (user_cfg.get("priority") or {}).get("from_tracker"):
+        tracker = prefs_mod.tracker_companies(name, DATA_ROOT)
+        uf.add_priority(set(tracker))
+    if uf.priority_names:
+        log.info("user %s: %d priority compan%s (%d from the tracker)", name,
+                 len(uf.priority_names),
+                 "y" if len(uf.priority_names) == 1 else "ies", len(tracker))
     llm_cfg = user_cfg.get("llm", {})
     llm_key_env = api_key_env_for(llm_cfg)
     llm_available = uf.llm_enabled and bool(os.environ.get(llm_key_env))
@@ -442,7 +476,6 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     accepted: list[tuple[Job, list[str]]] = []
     llm_queue: list[Job] = []
 
-    today = now.date()
     for job in candidates:
         verdict = uf.evaluate(job, today=today)
         if verdict.status == "accept":
@@ -519,7 +552,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # urls FIRST so a jobright job carries the same canonical identity as its
     # ATS twin, then join on that url (deterministic), then fall back to the
     # fuzzy content signature for jobs whose url couldn't be canonicalized.
-    terms_order = list(user_cfg.get("terms_wanted", []))
+    terms_order = uf.terms_order
     _resolve_employer_urls(accepted, state, resolver)
     accepted = _drop_url_dupes(state, name, accepted, terms_order, today)
     accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
@@ -551,6 +584,10 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         log.info("user %s: no new matches", name)
     if user_cfg.get("dashboard"):
         _sync_dashboard(name, state, dry_run, now, terms_order, user_cfg)
+    if store is not None and not dry_run:
+        # What this run resolved (yaml + prefs), for the settings page.
+        store.put_watch_report(name, prefs_mod.watch_report(
+            user_cfg, today, now, tracker, uf.legacy_rules))
 
 
 def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
@@ -665,6 +702,15 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         st.outbox_add(state, name, item)
         st.clear_pending(state, job.dedup_key, name)  # outbox now owns delivery
 
+    # Priority matches go out on the run that found them; a failed send
+    # leaves them in the outbox, so the worst case is the normal digest.
+    pri_cfg = user_cfg.get("priority") or {}
+    if pri_cfg.get("email_immediately"):
+        alerts = [it for it in st.outbox_items(state, name) if it.get("priority")]
+        if alerts:
+            _send_priority_alert(name, email_cfg, alerts, state, dry_run, now,
+                                 terms_order)
+
     items = st.outbox_items(state, name)
     # `send_at_local` (hours in the configured `timezone`, DST-tracking) is
     # preferred; `send_at_utc` stays as a fixed-UTC fallback for older configs.
@@ -688,8 +734,9 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
                  "slot (hours %s, tz %s)", name, len(items), send_hours, tz)
         return
 
-    subject, html_body, text_body = build_email(items, terms_order, now,
-                                                health_warnings=health)
+    subject, html_body, text_body = build_email(
+        items, terms_order, now, health_warnings=health,
+        subject_names=bool(pri_cfg.get("subject_names", True)))
     if dry_run:
         print(f"\n===== email for {name} (dry run) =====")
         print(f"Subject: {subject}\n\n{text_body}")
@@ -725,6 +772,51 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         log.info("user %s: emailed %d match(es) to %s", name, len(items), to_addr)
     else:
         log.error("user %s: email FAILED -- outbox kept for retry", name)
+
+
+def _smtp_creds(name: str, email_cfg: dict,
+                what: str) -> tuple[str, str, str] | None:
+    """(smtp_user, smtp_pass, to_addr) from the env, or None (logged) when
+    the channel is unconfigured."""
+    smtp_user_env = email_cfg.get("smtp_user_env", "")
+    smtp_pass_env = email_cfg.get("smtp_pass_env", "")
+    smtp_user = os.environ.get(smtp_user_env, "")
+    smtp_pass = os.environ.get(smtp_pass_env, "")
+    if not smtp_user or not smtp_pass:
+        missing = [n for n, v in ((smtp_user_env, smtp_user),
+                                  (smtp_pass_env, smtp_pass)) if not v]
+        log.error("user %s: email channel OFF -- %s not set; cannot send "
+                  "%s", name, ", ".join(missing), what)
+        return None
+    return smtp_user, smtp_pass, email_cfg.get("to") or smtp_user
+
+
+def _send_priority_alert(name: str, email_cfg: dict, alerts: list[dict],
+                         state: dict, dry_run: bool, now: dt.datetime,
+                         terms_order: list[str]) -> None:
+    """Email the priority matches now. On success they leave the outbox
+    (the digest must not repeat them) and are marked notified; on failure
+    they stay queued and ride the next digest instead."""
+    subject, html_body, text_body = build_priority_email(alerts, terms_order,
+                                                         now)
+    if dry_run:
+        print(f"\n===== priority alert for {name} (dry run) =====")
+        print(f"Subject: {subject}\n\n{text_body}")
+        return
+    creds = _smtp_creds(name, email_cfg, "the priority alert")
+    if creds is None:
+        return
+    smtp_user, smtp_pass, to_addr = creds
+    if send_email(smtp_user, smtp_pass, to_addr, subject, html_body, text_body,
+                  user=name):
+        for item in alerts:
+            st.mark_notified(state, item["key"], name)
+        st.outbox_remove(state, name, {it["key"] for it in alerts})
+        log.info("user %s: priority alert emailed %d match(es) to %s", name,
+                 len(alerts), to_addr)
+    else:
+        log.error("user %s: priority alert FAILED -- %d match(es) stay in "
+                  "the outbox for the next digest", name, len(alerts))
 
 
 def _send_health_alert(name: str, email_cfg: dict, health: list[str],
@@ -875,7 +967,8 @@ def explain(key: str, state: dict, today: dt.date, users: list[dict],
         out.append(f"(no user config named '{user}')")
         return out
     for user_cfg in chosen:
-        out.extend(_explain_user(UserFilter(user_cfg, ROOT), job, state))
+        out.extend(_explain_user(UserFilter(user_cfg, ROOT, today=today),
+                                 job, state))
     return out
 
 

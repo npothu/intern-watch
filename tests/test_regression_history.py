@@ -10,6 +10,7 @@ term/company/location, never role) may carry a research or
 non-SW-discipline title.
 """
 
+import datetime as dt
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from src.filters import UserFilter
 
 from .test_regression_leaked import _NON_SW_RE, _RESEARCH_RE, _cfg
 
+FIXTURE_DATE = dt.date(2026, 6, 11)
 ROOT = Path(__file__).parent.parent
 HISTORY = Path(__file__).parent / "fixtures" / "history"
 DATES = sorted(p.name for p in HISTORY.iterdir() if p.is_dir())
@@ -30,7 +32,7 @@ DATES = sorted(p.name for p in HISTORY.iterdir() if p.is_dir())
 @pytest.fixture(scope="module")
 def uf() -> UserFilter:
     cfg = yaml.safe_load((ROOT / "users" / "example.yaml").read_text(encoding="utf-8"))
-    return UserFilter(cfg, ROOT)
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
 
 
 def _day_jobs(date: str):

@@ -18,6 +18,7 @@ driver, defaulting to github.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -30,6 +31,8 @@ import httpx
 from . import dashboard, ledger
 from . import state as st
 from .webui import core
+
+log = logging.getLogger(__name__)
 
 API = "https://api.github.com"
 
@@ -125,6 +128,17 @@ class TrackerStore(Protocol):
         paths already on the match items, which surfaces rebuild into their
         repo-blob (dashboard) or /files/repo (webui) link as always. A
         Convex deployment's serving URL per short comes back in one batched query."""
+        ...
+
+    def get_watch_prefs(self, user: str) -> dict | None:
+        """The user's watch preferences (the Settings > Watch object, see
+        src/prefs.py) or None when the driver holds none / the read failed.
+        A failed read must degrade to the yaml, never abort the run."""
+        ...
+
+    def put_watch_report(self, user: str, report: dict) -> None:
+        """Record the resolved preferences this run used (prefs.watch_report)
+        so the settings page can show them. Best-effort: never raises."""
         ...
 
     @property
@@ -382,6 +396,16 @@ class GitHubStore:
         """The GitHub driver doesn't serve a snapshot; callers keep reading
         seen.json directly."""
         return None
+
+    # -- watch prefs (not served by this driver) ----------------------------
+
+    def get_watch_prefs(self, user: str) -> dict | None:
+        """No hosted settings page behind this driver: the yaml is the whole
+        configuration."""
+        return None
+
+    def put_watch_report(self, user: str, report: dict) -> None:
+        """Nothing reads a report here."""
 
     # -- mail sync (not served by this driver) ------------------------------
 
@@ -686,6 +710,35 @@ class ConvexStore:
             return {}
         return {row["short"]: row["url"] for row in rows
                 if row.get("url")}
+
+    # -- watch prefs ---------------------------------------------------------
+
+    def get_watch_prefs(self, user: str) -> dict | None:
+        """The Settings > Watch object, or None (no row yet, or the read
+        failed -- logged, since a silent fallback to the yaml would make the
+        page's saved values look ignored)."""
+        try:
+            value = self._post("query", "getWatch",
+                               {"user": user, "secret": self.secret},
+                               module="settings")
+        except ApiError as exc:
+            log.warning("watch prefs read failed for %s (%s) -- using the "
+                        "yaml alone this run", user, exc)
+            return None
+        if not isinstance(value, dict):
+            return None
+        prefs = value.get("watch")
+        return prefs if isinstance(prefs, dict) else None
+
+    def put_watch_report(self, user: str, report: dict) -> None:
+        """Best-effort: the report is a courtesy to the settings page and
+        must never fail the run that produced the matches."""
+        try:
+            self._post("mutation", "putWatchReport",
+                       {"user": user, "report": report, "secret": self.secret},
+                       module="settings")
+        except ApiError as exc:
+            log.warning("watch report push failed for %s (%s)", user, exc)
 
 
 def make_store(root: Path, user_cfg: dict | None = None) -> TrackerStore:

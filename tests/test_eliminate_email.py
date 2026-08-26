@@ -11,6 +11,7 @@ from src.filters import UserFilter, location_country
 from src.models import Job
 from src.notify import build_email, outbox_item
 
+FIXTURE_DATE = dt.date(2026, 6, 11)
 ROOT = Path(__file__).parent.parent
 NOW = dt.datetime(2026, 6, 12, 12, 40, tzinfo=dt.UTC)
 TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
@@ -19,7 +20,7 @@ TERMS = ["Fall 2026", "Spring 2027", "Summer 2027"]
 @pytest.fixture
 def uf() -> UserFilter:
     cfg = yaml.safe_load((ROOT / "users" / "example.yaml").read_text(encoding="utf-8"))
-    return UserFilter(cfg, ROOT)
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
 
 
 def _job(**kw):

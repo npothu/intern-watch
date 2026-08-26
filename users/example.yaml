@@ -76,21 +76,41 @@ role_filter:
                              security, cyber, robotics, computer vision, quant,
                              product manag, apm, technical program]
 
-terms_wanted: ["Fall 2026", "Spring 2027", "Summer 2027"]
+# Which terms to want, derived from today's date so the list never rots:
+# every Spring/Summer/Fall term starting between `lead_weeks` from now and
+# `horizon_months` from now. Pin exceptions with include/exclude. The legacy
+# form is a static list, `terms_wanted: ["Fall 2026", ...]`, plus a `rules:`
+# block of per-term accept conditions (see README "How filtering works").
+terms:
+  rolling: true
+  lead_weeks: 3          # a term this close to starting is no longer wanted
+  horizon_months: 14     # a term starting further out is not wanted yet
+  include: []            # e.g. ["Summer 2028"]
+  exclude: []            # e.g. ["Spring 2027"]
 unknown_term_policy: llm        # llm | drop | keep
 
-rules:
-  - when: { term: ["Fall 2026", "Spring 2027"] }
-    accept_if_any:
-      - company_in_file: data/top_companies.txt
-      - company_in_file: data/atlanta_companies.txt   # ATL-rooted companies whose
-                                                      # postings sometimes omit the city
-      - location_within: { center: "Atlanta, GA", radius_miles: 35 }  # covers Alpharetta,
-                                                  # Marietta, etc.; city allowlist in v1
-      - location_matches: [atlanta, alpharetta, sandy springs, marietta, "remote"]
-  - when: { term: ["Summer 2027"] }
-    accept_if_any:
-      - always: true
+# What a job needs, per season, beyond the role filter and eliminations:
+#   top_atl_remote  a priority or top company, an Atlanta company/location,
+#                   or (with location.remote_counts) a remote role
+#   priority_only   only the priority companies below
+#   anything        everything that passed the role filter
+term_rules:
+  Spring: top_atl_remote
+  Summer: anything
+  Fall: top_atl_remote
+
+# The short list you would drop everything for: accepted for any wanted
+# term, tagged [PRIORITY], first in every digest, and (email_immediately)
+# emailed on the run that found them instead of at the next digest slot.
+# Aliases from data/top_companies.txt apply (AWS counts as Amazon).
+priority:
+  companies: []
+  from_tracker: true        # employers in your applications ledger count too
+  email_immediately: true
+  subject_names: true       # "7 new · Microsoft, Meta" in the digest subject
+
+location:
+  remote_counts: true       # remote roles satisfy the local part of a preset
 
 llm:
   enabled: true

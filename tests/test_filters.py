@@ -1,6 +1,7 @@
 """Rule engine tested against the real users/example.yaml + data lists."""
 
 import copy
+import datetime as dt
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,13 +11,14 @@ import yaml
 from src.filters import UserFilter, in_atlanta_metro
 from src.models import Job
 
+FIXTURE_DATE = dt.date(2026, 6, 11)
 ROOT = Path(__file__).parent.parent
 
 
 @pytest.fixture
 def uf() -> UserFilter:
     cfg = yaml.safe_load((ROOT / "users" / "example.yaml").read_text(encoding="utf-8"))
-    return UserFilter(cfg, ROOT)
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
 
 
 def _job(**kw):
@@ -128,7 +130,7 @@ def _stale_uf(max_age_days: int) -> UserFilter:
     cfg = yaml.safe_load((ROOT / "users" / "example.yaml").read_text(encoding="utf-8"))
     cfg = copy.deepcopy(cfg)
     cfg["eliminate"]["max_age_days"] = max_age_days
-    return UserFilter(cfg, ROOT)
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
 
 
 def test_max_age_days_unset_no_change(uf):

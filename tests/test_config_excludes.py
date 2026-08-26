@@ -2,6 +2,7 @@
 users/example.yaml -- a stopgap for PhD-only R&D titles that title-only
 sources (jobright) ship without a JD for the grad-only filter to catch."""
 
+import datetime as dt
 from pathlib import Path
 
 import pytest
@@ -9,13 +10,14 @@ import pytest
 from src.filters import UserFilter, load_users
 from src.models import Job
 
+FIXTURE_DATE = dt.date(2026, 6, 11)
 ROOT = Path(__file__).parent.parent
 
 
 @pytest.fixture
 def uf() -> UserFilter:
     cfg = next(c for c in load_users(ROOT / "users") if c["name"] == "example")
-    return UserFilter(cfg, ROOT)
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
 
 
 def _gm_job(**kw) -> Job:
