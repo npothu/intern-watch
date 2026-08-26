@@ -205,4 +205,5 @@ The most common causes are a missing deployment variable, a Google client ID and
 | Deploy Convex to production | `npx convex deploy --yes --typecheck disable` |
 
 The production web app deploys through the repository's Vercel Git integration when `main` is pushed.
+Pull requests get a preview deployment with its own Convex preview backend, created and seeded by `scripts/vercel-build.sh`; see the header of that script for the Vercel Preview environment variables it needs.
 Development and production Convex deployments require separate environment-variable values and separate Google callback URLs.
