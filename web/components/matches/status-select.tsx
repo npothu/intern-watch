@@ -21,7 +21,6 @@ import { cn } from "@/lib/utils";
 
 export type StatusFilter =
   | "all"
-  | "priority"
   | "todo"
   | "applied"
   | "saved"
@@ -30,7 +29,6 @@ export type StatusFilter =
 
 const OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "priority", label: "Priority" },
   { value: "todo", label: "To apply" },
   { value: "applied", label: "Applied" },
   { value: "saved", label: "Saved" },
