@@ -4,6 +4,7 @@ import {
   blankProfile,
   bulletsFor,
   isProfileEmpty,
+  normalizeProfile,
   outlineLines,
   profileCounts,
   variantsOf,
@@ -207,5 +208,30 @@ describe("profileCounts and isProfileEmpty (import review scale)", () => {
     expect(isProfileEmpty(headerOnly)).toBe(false);
     const skillsOnly = { ...blankProfile(), skills: { tools: ["Docker"] } };
     expect(isProfileEmpty(skillsOnly)).toBe(false);
+  });
+});
+
+describe("normalizeProfile (mirror of convex/profile_schema.ts)", () => {
+  it("splits a piped institution into heading + location and cleans the prefix", () => {
+    const p = normalizeProfile({
+      version: 2,
+      header: { name: "A", contact_line: "", citizen_prefix: "US Citizen | " },
+      skills: {},
+      sections: [
+        {
+          id: "s",
+          title: "Education",
+          kind: "education",
+          entries: [
+            { id: "e", heading: "Georgia Institute of Technology | Atlanta, GA", date: "", bullets: {} },
+          ],
+        },
+      ],
+    });
+    expect(p.header.citizen_prefix).toBe("US Citizen");
+    expect(p.sections[0].entries[0]).toMatchObject({
+      heading: "Georgia Institute of Technology",
+      location: "Atlanta, GA",
+    });
   });
 });

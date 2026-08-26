@@ -122,6 +122,9 @@ export function HeaderEditor(props: {
           placeholder="US Citizen"
           className={INPUT}
         />
+        <span className="mt-1 block text-[11px] text-ink-2">
+          Renders at the start of the links line; the separator is added for you
+        </span>
       </label>
 
       <div>

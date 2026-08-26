@@ -239,6 +239,23 @@ describe("resume_docx: section composition (render.py port)", () => {
     expect(resumeOutline(migrated, CONTENT)).toEqual(V1_GOLDEN_OUTLINE);
   });
 
+  test("a clean work-authorisation prefix renders the same links line as the legacy piped one", () => {
+    const clean: ProfileV2 = {
+      ...V2_PROFILE,
+      header: { ...V2_PROFILE.header, citizen_prefix: "US Citizen" },
+    };
+    const legacy: ProfileV2 = {
+      ...V2_PROFILE,
+      header: { ...V2_PROFILE.header, citizen_prefix: "US Citizen | " },
+    };
+    const line = (p: ProfileV2) => resumeOutline(p, CONTENT)[2];
+    expect(line(clean)).toBe("US Citizen | linkedin.com/in/alex");
+    expect(line(legacy)).toBe(line(clean));
+    // No prefix: the links alone, no leading separator.
+    const none: ProfileV2 = { ...V2_PROFILE, header: { ...V2_PROFILE.header, citizen_prefix: undefined } };
+    expect(line(none)).toBe("linkedin.com/in/alex");
+  });
+
   test("a hand-written v2 education with two schools and a second-degree entry renders both", () => {
     const p: ProfileV2 = {
       version: 2,

@@ -294,9 +294,59 @@ export function migrateProfile(v1: ProfileV1): ProfileV2 {
   };
 }
 
-/** Accepts either shape and always hands back v2. */
+/** Accepts either shape and always hands back v2, normalised (see below). */
 export function toV2(data: unknown): ProfileV2 {
-  return isV2(data) ? data : migrateProfile(data as ProfileV1);
+  return normalizeProfile(isV2(data) ? data : migrateProfile(data as ProfileV1));
+}
+
+// --- normalisation ------------------------------------------------------------
+// Two legacy shapes the Python-era JSON (and a careless import) carry, and
+// that the editor exposes as separate fields:
+//
+//  - `header.citizen_prefix` used to INCLUDE its separator ("US Citizen | ")
+//    because render.py glued it straight onto the links. The renderers now add
+//    the separator themselves, so the stored value is just the text.
+//  - An institution heading of the form "Name | City, ST" with no `location`
+//    - v1 had a single `institution` string. Split at the last pipe so the
+//    place lands in the Location field. Rendering is unchanged (both
+//    renderers join an education heading and location with " | "), so this
+//    is a lossless move between fields, not a content edit.
+//
+// Applied by toV2 to every profile read server-side and by the editor on
+// load, so a profile stored before this existed is fixed the next time it is
+// saved. Pure and idempotent; never mutates its input.
+
+/** Trim a work-authorisation prefix and drop any separator it carries. */
+export function cleanCitizenPrefix(value: string | undefined): string | undefined {
+  const clean = (value ?? "").replace(/^[\s|]+|[\s|]+$/g, "");
+  return clean || undefined;
+}
+
+/** "Name | City, ST" with no location -> { heading: "Name", location: "City, ST" },
+ *  splitting at the last pipe. Education only: it is the one kind whose
+ *  renderers rejoin heading and location with " | ", so the move is invisible
+ *  on the page. Experience puts location in the date column and community
+ *  ignores it, so splitting those would change or lose text. */
+export function splitHeadingLocation(entry: Entry): Entry {
+  if (entry.location?.trim()) return entry;
+  const parts = entry.heading.split("|").map((part) => part.trim());
+  if (parts.length < 2 || parts.some((part) => !part)) return entry;
+  return { ...entry, heading: parts.slice(0, -1).join(" | "), location: parts[parts.length - 1] };
+}
+
+export function normalizeProfile(p: ProfileV2): ProfileV2 {
+  const citizen_prefix = cleanCitizenPrefix(p.header.citizen_prefix);
+  const header = citizen_prefix ? { ...p.header, citizen_prefix } : { ...p.header };
+  if (!citizen_prefix) delete header.citizen_prefix;
+  return {
+    ...p,
+    header,
+    sections: p.sections.map((section) =>
+      section.kind === "education"
+        ? { ...section, entries: section.entries.map(splitHeadingLocation) }
+        : section,
+    ),
+  };
 }
 
 // --- variant helpers ---------------------------------------------------------

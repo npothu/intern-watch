@@ -442,7 +442,7 @@ function layout(
     align: "center",
   });
   const links = [
-    (profile.header.citizen_prefix ?? "").replace(/[|\s]+$/, ""),
+    profile.header.citizen_prefix ?? "",
     ...(profile.header.links ?? []).map((link) => link.text),
   ]
     .filter(Boolean)
