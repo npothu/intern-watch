@@ -49,7 +49,7 @@ const DEFAULTS: Form = {
 };
 
 const PRESET_LABEL: Record<Preset, string> = {
-  top_atl_remote: "Top company, Atlanta, or remote",
+  top_atl_remote: "Top company, Atlanta, remote",
   priority_only: "Priority companies only",
   anything: "Anything",
 };
@@ -408,35 +408,40 @@ export function WatchSettings({
               </li>
             ))}
           </ul>
-          <Hint>
-            Stop wanting a term{" "}
-            <select
-              aria-label="Lead time"
-              className={cn(SELECT, "mx-1 py-1")}
-              value={form.terms.leadWeeks}
-              onChange={(e) => patch("terms", { leadWeeks: Number(e.target.value) })}
-            >
-              {LEAD_OPTIONS.map((w) => (
-                <option key={w} value={w}>
-                  {w} week{w === 1 ? "" : "s"}
-                </option>
-              ))}
-            </select>{" "}
-            before it starts; start wanting it{" "}
-            <select
-              aria-label="Horizon"
-              className={cn(SELECT, "mx-1 py-1")}
-              value={form.terms.horizonMonths}
-              onChange={(e) => patch("terms", { horizonMonths: Number(e.target.value) })}
-            >
-              {HORIZON_OPTIONS.map((m) => (
-                <option key={m} value={m}>
-                  {m} months
-                </option>
-              ))}
-            </select>{" "}
-            ahead.
-          </Hint>
+          <div className="mt-2 flex flex-col gap-1.5 text-[11.5px] leading-snug text-ink-2">
+            <label className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span>Stop wanting a term</span>
+              <select
+                aria-label="Lead time"
+                className={cn(SELECT, "py-1")}
+                value={form.terms.leadWeeks}
+                onChange={(e) => patch("terms", { leadWeeks: Number(e.target.value) })}
+              >
+                {LEAD_OPTIONS.map((w) => (
+                  <option key={w} value={w}>
+                    {w} week{w === 1 ? "" : "s"}
+                  </option>
+                ))}
+              </select>
+              <span>before it starts.</span>
+            </label>
+            <label className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span>Start wanting a term</span>
+              <select
+                aria-label="Horizon"
+                className={cn(SELECT, "py-1")}
+                value={form.terms.horizonMonths}
+                onChange={(e) => patch("terms", { horizonMonths: Number(e.target.value) })}
+              >
+                {HORIZON_OPTIONS.map((m) => (
+                  <option key={m} value={m}>
+                    {m} months
+                  </option>
+                ))}
+              </select>
+              <span>ahead of its start.</span>
+            </label>
+          </div>
         </SettingsRow>
 
         <SettingsRow
