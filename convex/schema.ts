@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { watchValidator } from "./watch_schema";
 
 // Convex backend for the optional STORE=convex TrackerStore driver.
 //
@@ -309,12 +310,22 @@ export default defineSchema({
   // llmDay/llmCount are the per-user daily allowance for the OPERATOR's key,
   // mirroring the LLM_DAILY_CAP counter on mailAccounts. A user running their
   // own key is never counted here - it is their quota to spend.
+  //
+  // `watch` is the Settings > Watch object (convex/watch_schema.ts): the
+  // watcher preferences a person edits in the app. The Python watcher
+  // overlays it on the user yaml every run and writes `watchReport`, the
+  // resolved configuration it actually used (snake_case, Python-owned shape,
+  // hence v.any()), so the page can show terms with their window dates and
+  // the tracker-derived priority companies.
   settings: defineTable({
     user: v.string(),
     resumeProvider: v.optional(v.string()),
     resumeModel: v.optional(v.string()),
     llmDay: v.optional(v.string()),    // "YYYY-MM-DD" (UTC)
     llmCount: v.optional(v.number()),  // operator-key builds used that day
+    watch: v.optional(watchValidator),
+    watchUpdatedAt: v.optional(v.number()),
+    watchReport: v.optional(v.any()),
     updatedAt: v.number(),
   }).index("by_user", ["user"]),
 

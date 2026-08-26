@@ -9,6 +9,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { isProvider, OPERATOR_MODEL, OPERATOR_PROVIDER } from "./llm_providers";
+import { normalizeWatch, watchValidator } from "./watch_schema";
 
 /**
  * Operator-key resume builds allowed per user per day.
@@ -84,6 +85,28 @@ export const operatorCapReached = internalQuery({
   },
 });
 
+/**
+ * The Settings > Watch page's read: what the user saved (`watch`, null until
+ * the first save) and what the watcher last resolved (`report`, null until
+ * its first run against this deployment). The Python watcher calls the same
+ * query at the start of every run and keeps only `watch`.
+ */
+export const getWatch = query({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    assertSecret(secret);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    return {
+      watch: row?.watch ?? null,
+      updatedAt: row?.watchUpdatedAt ?? null,
+      report: row?.watchReport ?? null,
+    };
+  },
+});
+
 export const getSettingsInternal = internalQuery({
   args: { user: v.string() },
   handler: async (ctx, { user }) =>
@@ -127,6 +150,53 @@ export const setResumeLlm = mutation({
       await ctx.db.patch(row._id, patch);
     } else {
       await ctx.db.insert("settings", { user, ...patch });
+    }
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Save the whole Settings > Watch object. The page always submits every
+ * block it renders, so this is a replace, not a patch: a block the page
+ * chose not to send (none today) would fall back to the yaml. Throws with a
+ * human-readable message on a value the page should have refused.
+ */
+export const setWatch = mutation({
+  args: { user: v.string(), watch: watchValidator, secret: v.string() },
+  handler: async (ctx, { user, watch, secret }) => {
+    assertSecret(secret);
+    const clean = normalizeWatch(watch);
+    const now = Date.now();
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (row) {
+      await ctx.db.patch(row._id, { watch: clean, watchUpdatedAt: now, updatedAt: now });
+    } else {
+      await ctx.db.insert("settings", { user, watch: clean, watchUpdatedAt: now, updatedAt: now });
+    }
+    return { ok: true as const, watch: clean };
+  },
+});
+
+/**
+ * The watcher's report of the configuration it resolved this run (yaml +
+ * `watch`). Opaque here: Python owns the shape (src/prefs.py watch_report)
+ * and the page reads it defensively.
+ */
+export const putWatchReport = mutation({
+  args: { user: v.string(), report: v.any(), secret: v.string() },
+  handler: async (ctx, { user, report, secret }) => {
+    assertSecret(secret);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_user", (q) => q.eq("user", user))
+      .first();
+    if (row) {
+      await ctx.db.patch(row._id, { watchReport: report });
+    } else {
+      await ctx.db.insert("settings", { user, watchReport: report, updatedAt: Date.now() });
     }
     return { ok: true as const };
   },

@@ -187,8 +187,10 @@ function groupByTerm(rows: TriageRow[]): { term: string; rows: TriageRow[] }[] {
     groups.get(t)!.push(r);
   }
   for (const arr of groups.values()) {
+    // Priority rows pin to the top of their term; the rest stay newest-first.
     arr.sort(
       (a, b) =>
+        Number(Boolean(b.priority)) - Number(Boolean(a.priority)) ||
         (b.added || "").localeCompare(a.added || "") ||
         a.company.localeCompare(b.company)
     );
@@ -267,7 +269,11 @@ function CollapseShell({
 function Tags({ tag }: { tag: string }) {
   if (!tag) return null;
   const raw = tag.replace(/[\[\]*]/g, "").toLowerCase();
-  const cls = raw.includes("top")
+  // Priority is the one filled badge on the row: it is the reason the row
+  // sits at the top of its group, so it should read before the title does.
+  const cls = raw === "priority"
+    ? "bg-accent font-semibold text-accent-ink"
+    : raw.includes("top")
     ? "border border-[color-mix(in_srgb,var(--color-accent)_38%,transparent)] text-accent"
     : raw.includes("gone")
       ? "bg-[color-mix(in_srgb,var(--color-amber)_13%,transparent)] text-amber"

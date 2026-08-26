@@ -2,13 +2,14 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 /**
- * The small two-item switch at the top of the Settings pages. Appearance and
+ * The small switch at the top of the Settings pages. Appearance, Watch and
  * Connections live on sibling routes, so this is plain next/link navigation
  * (no in-place switching like the app's ViewSwitch).
  */
 
 const TABS = [
   { id: "appearance", label: "Appearance", href: "/settings" },
+  { id: "watch", label: "Watch", href: "/settings/watch" },
   { id: "connections", label: "Connections", href: "/settings/connections" },
 ] as const;
 
