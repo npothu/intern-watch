@@ -5,7 +5,7 @@ from shutil import copy2
 
 import pytest
 
-from src import main
+from src import main, paths
 from src.filters import load_users
 from src.paths import ROOT, data_root
 
@@ -40,3 +40,18 @@ def test_main_loads_users_from_data_root_and_sources_from_code_root(
     assert [user["name"] for user in users] == ["example"]
     assert sources
     assert not (tmp_path / "sources.yaml").exists()
+
+
+def test_data_root_falls_back_to_the_code_checkout_dotenv(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("INTERN_WATCH_DATA_DIR", raising=False)
+    fake_root = tmp_path / "code"
+    fake_root.mkdir()
+    data = tmp_path / "data"
+    (fake_root / ".env").write_text(
+        f"GEMINI_API_KEY=x\nINTERN_WATCH_DATA_DIR=\"{data}\"\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "ROOT", fake_root)
+
+    assert data_root() == data.resolve()
+
+    monkeypatch.setenv("INTERN_WATCH_DATA_DIR", str(tmp_path / "env-wins"))
+    assert data_root() == (tmp_path / "env-wins").resolve()
