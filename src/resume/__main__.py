@@ -14,9 +14,10 @@ import re
 import sys
 from pathlib import Path
 
+from ..paths import DATA_ROOT as DATA_ROOT
 from . import select
 from .bank import load_bank
-from .build import ROOT, bank_path, build_resume, resume_llm_cfg
+from .build import bank_path, build_resume, resume_llm_cfg
 
 
 def _llm_cfg(user_yaml: Path) -> dict:
@@ -48,15 +49,15 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     jd_text = Path(args.jd).read_text(encoding="utf-8")
-    bank = load_bank(bank_path(args.user, ROOT))
+    bank = load_bank(bank_path(args.user, DATA_ROOT))
 
-    llm_cfg = resume_llm_cfg(args.user, ROOT)
+    llm_cfg = resume_llm_cfg(args.user, DATA_ROOT)
 
     surname = bank.header.name.split()[-1]
     first = bank.header.name.split()[0]
     company = re.sub(r"[^A-Za-z0-9]+", "", args.company) or "Tailored"
     default_name = f"{first}_{surname}_{company}.docx"
-    out = Path(args.out) if args.out else ROOT / "resumes" / default_name
+    out = Path(args.out) if args.out else DATA_ROOT / "resumes" / default_name
     if out.suffix.lower() != ".docx":          # treat as directory
         out = out / default_name
 

@@ -30,6 +30,7 @@ def test_short_key_reconstructs_job_and_prints_path(monkeypatch, tmp_path, capsy
     state = _state_with_match(key, jobright_id="b" * 24,
                               jd_url="https://x.test/jd")
 
+    monkeypatch.setattr(ondemand, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(ondemand.st, "load_state", lambda _p: state)
 
     captured = {}
@@ -57,7 +58,7 @@ def test_short_key_reconstructs_job_and_prints_path(monkeypatch, tmp_path, capsy
     assert job.source == "dashboard"
     assert job.jobright_id == "b" * 24
     assert job.jd_url == "https://x.test/jd"
-    assert captured["out_dir"] == Path("out")
+    assert captured["out_dir"] == tmp_path / "out"
 
 
 def test_pasted_jd_bypasses_acquisition(monkeypatch, tmp_path, capsys):

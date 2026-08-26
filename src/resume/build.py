@@ -22,8 +22,6 @@ from .jd_source import acquire_jd
 
 log = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parents[2]
-
 # Default config keeps the watcher's auto-build OFF: an absent/empty
 # `resume_build` block must mean "behave exactly as before" so enabling is
 # always an explicit opt-in.

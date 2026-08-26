@@ -74,14 +74,30 @@ def test_missing_file_is_noop(tmp_path) -> None:
 
 
 def test_default_root_is_repo_dotenv(tmp_path, monkeypatch) -> None:
-    # the no-arg call resolves parents[1] of the module file == <repo>/src/../.env
     import src.envfile as envfile
 
-    fake = tmp_path / "src" / "envfile.py"
-    fake.parent.mkdir(parents=True, exist_ok=True)
-    fake.touch()
-    monkeypatch.setattr(envfile, "__file__", str(fake))
+    monkeypatch.setattr(envfile, "DATA_ROOT", tmp_path / "missing-data")
+    monkeypatch.setattr(envfile, "ROOT", tmp_path)
     (tmp_path / ".env").write_text("STORE=convex\n", encoding="utf-8")
+    store_old = _clear(monkeypatch, "STORE")
+
+    try:
+        load_dotenv()
+
+        assert os.environ["STORE"] == "convex"
+    finally:
+        _restore("STORE", store_old)
+
+
+def test_default_prefers_data_root_dotenv(tmp_path, monkeypatch) -> None:
+    import src.envfile as envfile
+
+    data_root = tmp_path / "instance"
+    data_root.mkdir()
+    (data_root / ".env").write_text("STORE=convex\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("STORE=github\n", encoding="utf-8")
+    monkeypatch.setattr(envfile, "DATA_ROOT", data_root)
+    monkeypatch.setattr(envfile, "ROOT", tmp_path)
     store_old = _clear(monkeypatch, "STORE")
 
     try:

@@ -9,7 +9,10 @@ The repository has three separate runtime environments:
 | --- | --- | --- |
 | Next.js | `web/.env.local` | Clerk keys, Convex URLs, the tracker secret, and the Clerk-email mapping |
 | Convex | Development deployment environment variables | Google OAuth credentials, encryption key, Pub/Sub configuration, and the tracker secret |
-| Python watcher | Root `.env` | Watcher, notification, and optional standalone CLI values |
+| Python watcher | `.env` in the data directory (falls back to the repo root) | Watcher, notification, and optional standalone CLI values |
+
+The Python tools read `users/` and `state/` from `INTERN_WATCH_DATA_DIR` when it is set.
+An instance keeps those in a private data repo cloned next to this one, for example `INTERN_WATCH_DATA_DIR=../autojobfinder python -m src.webui`.
 
 Setting a value in one environment does not copy it into either of the others.
 
@@ -27,7 +30,7 @@ The deployment operator configures one Web application OAuth client for the whol
 
 Run these commands from the repository root:
 
-```powershell
+```bash
 npm install
 npm --prefix web install
 ```
@@ -36,7 +39,7 @@ npm --prefix web install
 
 Run this once from the repository root:
 
-```powershell
+```bash
 npx convex dev --once --typecheck disable
 ```
 
@@ -68,23 +71,22 @@ Never replace an existing `CREDENTIALS_KEY` unless you intentionally want to inv
 If you create a key for this checkout, append the deployment name and key to the local `secrets/deployment-keys.log` before setting it.
 That file is excluded through `.git/info/exclude` in the maintained checkout and must never be committed.
 
-For a brand-new development deployment, this PowerShell sequence creates the key, appends it before use, and passes it to Convex without putting the value in shell history:
+For a brand-new development deployment, this sequence creates the key, appends it before use, and passes it to Convex without putting the value in shell history:
 
-```powershell
-New-Item -ItemType Directory -Force secrets | Out-Null
-$deploymentLabel = "development:<deployment-name>"
-$credentialsKey = node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-Add-Content -LiteralPath secrets/deployment-keys.log -Value "$(Get-Date -Format o) $deploymentLabel CREDENTIALS_KEY=$credentialsKey"
-$credentialsKey | npx convex env set CREDENTIALS_KEY
-Remove-Variable credentialsKey
+```bash
+mkdir -p secrets
+label="development:<deployment-name>"
+key=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")
+printf '%s %s CREDENTIALS_KEY=%s\n' "$(date -Iseconds)" "$label" "$key" >> secrets/deployment-keys.log
+printf '%s' "$key" | npx convex env set CREDENTIALS_KEY
+unset key
 ```
-
 Do not run that sequence for a deployment that already has encrypted credential rows.
-Use `Add-Content` for later entries and never rewrite or truncate the log.
+Append later entries the same way and never rewrite or truncate the log.
 
 You can inspect the deployment's current environment:
 
-```powershell
+```bash
 npx convex env list
 ```
 
@@ -95,8 +97,8 @@ The same commands with `--prod` inspect or change production instead.
 
 Copy the example file:
 
-```powershell
-Copy-Item web/.env.example web/.env.local
+```bash
+cp web/.env.example web/.env.local
 ```
 
 Fill in `web/.env.local`:
@@ -143,7 +145,7 @@ Complete the Gmail API and Pub/Sub setup in [mail-sync.md](mail-sync.md) before 
 
 For ongoing development, run Convex and Next.js together from the repository root:
 
-```powershell
+```bash
 npx convex dev --start "npm --prefix web run dev" --typecheck disable
 ```
 
@@ -151,7 +153,7 @@ Then open [http://localhost:3000](http://localhost:3000), sign in through Clerk,
 
 If another process is already watching and deploying Convex, run only the frontend:
 
-```powershell
+```bash
 npm --prefix web run dev
 ```
 

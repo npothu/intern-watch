@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 
 from ..normalize import strip_tracking
+from ..paths import DATA_ROOT as DATA_ROOT
 from . import jobright_page
 from .jobright_page import _PAGE_UA
 
@@ -25,15 +26,13 @@ log = logging.getLogger(__name__)
 _LOGIN_URL = "https://jobright.ai/swan/auth/login/pwd"
 _OK_CODE = 10000
 _SESSION_COOKIE = "SESSION_ID"
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 class JobrightSession:
     def __init__(self, email, password, session_path=None, cap=25):
         self.email = email
         self.password = password
         self.session_path = Path(session_path) if session_path else (
-            _REPO_ROOT / "state" / "jobright_session.json")
+            DATA_ROOT / "state" / "jobright_session.json")
         self.cap = cap
         self.disabled = False
         self.auth_failed_msg = None

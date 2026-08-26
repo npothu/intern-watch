@@ -27,8 +27,9 @@ from pathlib import Path
 from .. import dashboard
 from .. import state as st
 from ..models import Job
+from ..paths import DATA_ROOT as DATA_ROOT
 from ..store import make_store
-from .build import ROOT, build_for_job, resume_build_cfg
+from .build import build_for_job, resume_build_cfg
 
 
 def _selected_unbuilt(state: dict, user: str,
@@ -67,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="path to the edited issue body; defaults to $ISSUE_BODY")
     ap.add_argument("--summary", default="",
                     help="path to write a markdown summary comment to")
-    ap.add_argument("--root", default=str(ROOT),
+    ap.add_argument("--root", default=str(DATA_ROOT),
                     help="repo root (override for tests)")
     args = ap.parse_args(argv)
     root = Path(args.root)

@@ -61,7 +61,7 @@ def _stub_build(monkeypatch, calls):
 # ----------------------------------------------------------- enabled => path set
 
 def test_enabled_sets_resume_path_on_match(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     calls = _stub_build(monkeypatch, [])
     cfg = _accepting_cfg(dashboard=True,
                          resume_build={"enabled": True, "modes": ["commit"],
@@ -83,7 +83,7 @@ def test_enabled_sets_resume_path_on_match(monkeypatch, tmp_path):
 
 
 def test_disabled_builds_nothing(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     calls = _stub_build(monkeypatch, [])
     cfg = _accepting_cfg(dashboard=True)  # no resume_build block => off
     state = st.empty_state()
@@ -95,7 +95,7 @@ def test_disabled_builds_nothing(monkeypatch, tmp_path):
 
 def test_dashboard_only_mode_does_not_build(monkeypatch, tmp_path):
     """`dashboard` is on-demand: accept-time builds only for commit/email."""
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     calls = _stub_build(monkeypatch, [])
     cfg = _accepting_cfg(dashboard=True,
                          resume_build={"enabled": True, "modes": ["dashboard"]})
@@ -107,7 +107,7 @@ def test_dashboard_only_mode_does_not_build(monkeypatch, tmp_path):
 
 def test_dry_run_builds_nothing(monkeypatch, tmp_path, caplog):
     import logging
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     calls = _stub_build(monkeypatch, [])
     cfg = _accepting_cfg(dashboard=True,
                          resume_build={"enabled": True, "modes": ["commit"]})
@@ -120,7 +120,7 @@ def test_dry_run_builds_nothing(monkeypatch, tmp_path, caplog):
 
 
 def test_max_per_run_caps_builds(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     calls = _stub_build(monkeypatch, [])
     cfg = _accepting_cfg(dashboard=True,
                          resume_build={"enabled": True, "modes": ["commit"],
@@ -137,7 +137,7 @@ def test_max_per_run_caps_builds(monkeypatch, tmp_path):
 
 
 def test_build_failure_keeps_match(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
 
     def boom(*a, **k):
         raise RuntimeError("scrape exploded")
@@ -155,7 +155,7 @@ def test_build_failure_keeps_match(monkeypatch, tmp_path):
 
 def test_jd_miss_returns_none_no_resume_key(monkeypatch, tmp_path):
     """build_for_job returning None (no JD) leaves the match without a link."""
-    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(main, "build_for_job", lambda *a, **k: None)
     cfg = _accepting_cfg(dashboard=True,
                          resume_build={"enabled": True, "modes": ["email"]})

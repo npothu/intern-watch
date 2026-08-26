@@ -23,7 +23,8 @@ from pathlib import Path
 from .. import dashboard
 from .. import state as st
 from ..models import Job
-from .build import ROOT, build_for_job
+from ..paths import DATA_ROOT as DATA_ROOT
+from .build import build_for_job
 
 
 def _find_item(state: dict, user: str, short: str) -> dict | None:
@@ -55,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         if jd_path.exists():
             pasted = jd_path.read_text(encoding="utf-8", errors="replace").strip()
 
-    state = st.load_state(ROOT / "state" / "seen.json")
+    state = st.load_state(DATA_ROOT / "state" / "seen.json")
     item = _find_item(state, args.user, args.short)
     if item is None:
         print(f"no match found for short key {args.short!r} "
@@ -69,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
               dedup_key=item["key"], jobright_id=item.get("jobright_id"),
               jd_url=item.get("jd_url"))
 
-    result = build_for_job(job, args.user, out_dir=Path("out"), root=ROOT,
+    result = build_for_job(job, args.user, out_dir=DATA_ROOT / "out",
+                           root=DATA_ROOT,
                            allow_scrape=True, jd_text=pasted or None)
     if result is None:
         print(f"no JD found for {job.company} — {job.title}; nothing built. "

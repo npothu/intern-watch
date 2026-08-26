@@ -23,8 +23,6 @@ from ..dom import advance_to_application_form, has_visible_captcha
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page
 
-ROOT = Path(__file__).resolve().parents[3]
-
 log = logging.getLogger(__name__)
 
 # Short timeout (ms) for "is this element present?" probes — we never want to

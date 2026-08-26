@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from ... import llm as llm_mod
+from ...paths import DATA_ROOT as DATA_ROOT
 from ..answers import answer_for, canonical_answers, match_option
 from ..base import ApplyContext, ApplyMode, ApplyResult, ApplyStatus, ATSFamily
 from ..dom import advance_to_application_form, has_visible_captcha
@@ -36,8 +37,6 @@ if TYPE_CHECKING:
     from ..profile import ApplyProfile
 
 log = logging.getLogger(__name__)
-
-ROOT = Path(__file__).resolve().parents[3]
 
 # Keep the LLM payload small and cheap, but large enough not to DROP required
 # fields. 40 silently starved real forms (Notion has 61 fields — the dropped
@@ -116,7 +115,7 @@ def _llm_cfg(user: str) -> dict:
     user need not share a name). So try users/<user>.yaml, then
     users/example.yaml, then any other watcher yaml — never the *_apply /
     *_logins answer-book files, which carry no LLM block."""
-    users = ROOT / "users"
+    users = DATA_ROOT / "users"
     candidates = [users / f"{user}.yaml", users / "example.yaml"]
     candidates += [p for p in sorted(users.glob("*.yaml"))
                    if not p.name.endswith(("_apply.yaml", "_logins.yaml",
@@ -1526,7 +1525,7 @@ def _repo_rel(path: Path | None) -> str | None:
     if path is None:
         return None
     try:
-        return Path(path).resolve().relative_to(ROOT).as_posix()
+        return Path(path).resolve().relative_to(DATA_ROOT).as_posix()
     except Exception:
         return Path(path).as_posix()
 

@@ -25,6 +25,7 @@ from pathlib import Path
 from .. import dashboard
 from .. import ledger as ledger_mod
 from .. import state as state_mod
+from ..paths import DATA_ROOT as DATA_ROOT
 from .auth import Logins, account_for
 from .base import ApplyContext, ApplyMode, ApplyResult, ApplyStatus, ATSFamily
 from .driver import browser_session
@@ -33,10 +34,9 @@ from .inbox import Inbox
 from .profile import ApplyProfile
 from .resolve import resolve
 
-ROOT = Path(__file__).resolve().parents[2]
 log = logging.getLogger(__name__)
 
-DEFAULT_STATE = ROOT / "state" / "seen.json"
+DEFAULT_STATE = DATA_ROOT / "state" / "seen.json"
 
 
 def resume_path_for(profile: ApplyProfile, company: str) -> Path:
@@ -44,7 +44,7 @@ def resume_path_for(profile: ApplyProfile, company: str) -> Path:
     slug = re.sub(r"[^A-Za-z0-9]+", "", company) or "Tailored"
     rd = Path(profile.resume_dir)
     if not rd.is_absolute():
-        rd = ROOT / rd
+        rd = DATA_ROOT / rd
     return rd / f"{profile.first_name}_{profile.last_name}_{slug}.docx"
 
 
@@ -181,7 +181,7 @@ def run_item(item: PlanItem, profile: ApplyProfile, mode: ApplyMode,
     _record(item.match, res, today)
     if res.submit_attempt is not None:
         _record_submit_attempt(item.match, res, user, today,
-                               ledger_path or ledger_mod.ledger_path(ROOT))
+                               ledger_path or ledger_mod.ledger_path(DATA_ROOT))
     return res
 
 

@@ -208,6 +208,45 @@ features one at a time. The step-by-step happy path is `docs/quickstart.md`.
 11. **Convex store / hosted web app**: see "Database backend" and "Hosted
     web app (optional)".
 
+### Separate data repo (recommended for a real instance)
+
+The fork checklist above keeps code and private data in one repo.
+The alternative is two repos: this one (public, code only) and a small private DATA repo that holds `users/`, `state/`, the secrets and the dashboard issue.
+Nothing needs syncing between them, and a code branch can be tested end to end against the instance before it merges.
+
+1. Create a private repo with `users/` (your config), an empty `state/`, and a copy of `.gitattributes`.
+2. Add the same secrets and variables there that the checklist puts on a single repo.
+3. Add one thin caller per workflow you use. `watch.yml`:
+
+   ```yaml
+   on:
+     schedule: [{cron: "0 */2 * * *"}]
+     workflow_dispatch:
+       inputs:
+         send_now: {type: boolean, default: false}
+         code_ref: {type: string, default: ""}
+         data_ref: {type: string, default: ""}
+         environment: {type: string, default: ""}
+   permissions: {contents: write, issues: write}
+   jobs:
+     watch:
+       uses: <you>/intern-watch/.github/workflows/watch.yml@main
+       with:
+         send_now: ${{ inputs.send_now || false }}
+         code_ref: ${{ inputs.code_ref || '' }}
+         data_ref: ${{ inputs.data_ref || '' }}
+         environment: ${{ inputs.environment || '' }}
+       secrets: inherit
+   ```
+
+   `dashboard-write`, `resume`, `resume-batch` and `resume-ondemand` follow the same shape (keep their own triggers and `if:` guards; the bodies live here).
+   The reusable job checks out the data repo at the workspace root and this repo under `code/`, runs from `code/` with `INTERN_WATCH_DATA_DIR` set, and commits state back to the data repo.
+4. To test a code branch before merging: `gh workflow run watch.yml -f code_ref=<branch> -f data_ref=staging -f environment=staging` in the data repo, where `staging` is a data branch with a test `users/` and a GitHub environment whose `STORE` variable is `github`.
+
+Locally, run every tool from this checkout with `INTERN_WATCH_DATA_DIR=<path to the data repo>`.
+That directory owns `users/`, `state/`, `resumes/`, `out/` and its own `.env`; this checkout keeps `sources.yaml`, `data/` and the web UI.
+When the variable is unset or blank, both live here, which is the single-repo layout above.
+
 ### Config & secrets model
 
 The golden rule: **config files name secrets, they never hold secret values.**

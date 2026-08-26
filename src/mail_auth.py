@@ -24,14 +24,12 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .envfile import load_dotenv
 from .filters import load_users
+from .paths import DATA_ROOT as DATA_ROOT
 from .store import ConvexStore
-
-ROOT = Path(__file__).resolve().parents[1]
 
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -251,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
               "the Convex backend)", file=sys.stderr)
         return 1
 
-    users = {u["name"]: u for u in load_users(ROOT / "users")}
+    users = {u["name"]: u for u in load_users(DATA_ROOT / "users")}
     if not users:
         print("no watcher configs in users/*.yaml", file=sys.stderr)
         return 1
@@ -266,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        store = ConvexStore(ROOT, {"name": user})
+        store = ConvexStore(DATA_ROOT, {"name": user})
         email, _ = oauth_flow(client_id, client_secret, user, store)
     except MailAuthError as exc:
         print(f"error: {exc}", file=sys.stderr)
