@@ -6,13 +6,14 @@ import PDFDocument from "pdfkit/js/pdfkit.standalone.js";
 import { PDFDocument as ParsedPdf } from "pdf-lib";
 import { bulletsFor, toV2, visibleEntries } from "../profile_schema";
 import type { Entry, ProfileV2, Section, SkillItem } from "../profile_schema";
-import type { TailoredContent } from "./docx";
+import { filenameStem, fullResumeContent, type TailoredContent } from "./docx";
 
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
 const MARGIN = 36;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const CONTENT_HEIGHT = PAGE_HEIGHT - MARGIN * 2;
+const PAGE_BOTTOM = PAGE_HEIGHT - MARGIN;
 const SAFE_HEIGHT = CONTENT_HEIGHT * 0.98;
 
 const FONT_REGULAR = "Times-Roman";
@@ -53,6 +54,24 @@ export type PdfFitOptions = {
 
 type LayoutMode = "measure" | "draw";
 
+/**
+ * Where the layout draws (or pretends to). The same layout code serves two
+ * callers with opposite ideas about the page bottom:
+ *
+ *  - The one-page tailored build (`buildResumePdf`) measures content as if the
+ *    page were infinitely tall and compares that height to SAFE_HEIGHT, then
+ *    draws only once the fitter has made it fit. `paginate` is false: nothing
+ *    ever moves, so the measured height is the pure content height.
+ *  - The full-bank export (`renderFullResumePdf`) wants every entry on as many
+ *    pages as it takes. `paginate` is true: a block that would cross the
+ *    bottom margin starts a new page instead.
+ */
+type Canvas = {
+  doc: PDFKit.PDFDocument;
+  mode: LayoutMode;
+  paginate: boolean;
+};
+
 function skillName(item: SkillItem): string {
   return typeof item === "string" ? item : item.name;
 }
@@ -72,6 +91,28 @@ function lineHeight(size: number): number {
   return size * 1.15;
 }
 
+function addPage(doc: PDFKit.PDFDocument): void {
+  doc.addPage({
+    size: [PAGE_WIDTH, PAGE_HEIGHT],
+    margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
+  });
+}
+
+/**
+ * The y a block of `height` starting at `y` actually lands on: `y` itself, or
+ * the top of a fresh page when pagination is on and the block would cross the
+ * bottom margin. A block taller than a whole page stays where it is rather
+ * than looping forever - PDFKit then wraps its tail onto the next page.
+ *
+ * Every block goes through here BEFORE it is drawn, so PDFKit's own overflow
+ * pagination never fires mid-block: a block is only ever drawn where it fits.
+ */
+function place(c: Canvas, y: number, height: number): number {
+  if (!c.paginate || y + height <= PAGE_BOTTOM || y <= MARGIN) return y;
+  if (c.mode === "draw") addPage(c.doc);
+  return MARGIN;
+}
+
 function textHeight(
   doc: PDFKit.PDFDocument,
   text: string,
@@ -83,25 +124,28 @@ function textHeight(
   return doc.heightOfString(text || " ", { width, lineGap: 0 });
 }
 
-function renderText(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
+type TextOpts = {
+  bold?: boolean;
+  italic?: boolean;
+  align?: "left" | "center" | "right";
+  color?: string;
+  link?: string;
+};
+
+/** Draw text at exactly (x, y) - no placement - and return its height. Used by
+ *  the row primitives that place a whole row once, then draw its cells. */
+function drawText(
+  c: Canvas,
   text: string,
   x: number,
   y: number,
   width: number,
   size: number,
-  opts: {
-    bold?: boolean;
-    italic?: boolean;
-    align?: "left" | "center" | "right";
-    color?: string;
-    link?: string;
-  } = {},
+  opts: TextOpts = {},
 ): number {
-  const height = textHeight(doc, text, width, size, opts);
-  if (mode === "draw") {
-    doc
+  const height = textHeight(c.doc, text, width, size, opts);
+  if (c.mode === "draw") {
+    c.doc
       .font(fontFor(opts))
       .fontSize(size)
       .fillColor(opts.color ?? "#111111")
@@ -116,15 +160,31 @@ function renderText(
   return height;
 }
 
+/** Place and draw one block of text; returns the y below it. */
+function renderText(
+  c: Canvas,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  size: number,
+  opts: TextOpts = {},
+): number {
+  const height = textHeight(c.doc, text, width, size, opts);
+  const top = place(c, y, height);
+  drawText(c, text, x, top, width, size, opts);
+  return top + height;
+}
+
 function datedLine(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
+  c: Canvas,
   left: string,
   right: string,
   y: number,
   size: number,
   opts: { bold?: boolean; italic?: boolean } = {},
 ): number {
+  const { doc } = c;
   doc.font(fontFor(opts)).fontSize(size);
   const rightWidth = right ? Math.min(doc.widthOfString(right) + 4, CONTENT_WIDTH * 0.4) : 0;
   const leftWidth = CONTENT_WIDTH - rightWidth - (right ? 12 : 0);
@@ -132,55 +192,54 @@ function datedLine(
   const rightHeight = right
     ? textHeight(doc, right, rightWidth, size, {})
     : lineHeight(size);
-  if (mode === "draw") {
-    renderText(doc, mode, left, MARGIN, y, leftWidth, size, opts);
+  const rowHeight = Math.max(leftHeight, rightHeight);
+  const top = place(c, y, rowHeight);
+  if (c.mode === "draw") {
+    drawText(c, left, MARGIN, top, leftWidth, size, opts);
     if (right) {
-      renderText(
-        doc,
-        mode,
-        right,
-        PAGE_WIDTH - MARGIN - rightWidth,
-        y,
-        rightWidth,
-        size,
-        { align: "right" },
-      );
+      drawText(c, right, PAGE_WIDTH - MARGIN - rightWidth, top, rightWidth, size, {
+        align: "right",
+      });
     }
   }
-  return Math.max(leftHeight, rightHeight);
+  return top + rowHeight;
 }
 
-function bullet(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
-  text: string,
-  y: number,
-): number {
-  const height = textHeight(doc, text, BULLET_WIDTH, SIZE_BODY);
-  if (mode === "draw") {
-    renderText(doc, mode, "•", BULLET_X, y, 12, SIZE_BODY);
-    renderText(doc, mode, text, BULLET_TEXT_X, y, BULLET_WIDTH, SIZE_BODY);
+function bullet(c: Canvas, text: string, y: number): number {
+  const height = textHeight(c.doc, text, BULLET_WIDTH, SIZE_BODY);
+  const top = place(c, y, height);
+  if (c.mode === "draw") {
+    drawText(c, "•", BULLET_X, top, 12, SIZE_BODY);
+    drawText(c, text, BULLET_TEXT_X, top, BULLET_WIDTH, SIZE_BODY);
   }
-  return height;
+  return top + height;
 }
 
-function sectionHeader(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
-  title: string,
-  y: number,
-): number {
-  const height = textHeight(doc, title, CONTENT_WIDTH, SIZE_SECTION, { bold: true });
-  if (mode === "draw") {
-    renderText(doc, mode, title, MARGIN, y, CONTENT_WIDTH, SIZE_SECTION, { bold: true });
-    doc
-      .moveTo(MARGIN, y + height + 0.5)
-      .lineTo(PAGE_WIDTH - MARGIN, y + height + 0.5)
+/**
+ * Keep an entry's heading with the start of its body: if `lines` body lines
+ * would not fit under `y`, move to the next page first. Approximate on purpose
+ * (a line count, not measured text) - it only decides where a page may break,
+ * and a no-op without pagination.
+ */
+function keepWithNext(c: Canvas, y: number, lines: number): number {
+  return place(c, y, lineHeight(SIZE_BODY) * lines);
+}
+
+function sectionHeader(c: Canvas, title: string, y: number): number {
+  const height = textHeight(c.doc, title, CONTENT_WIDTH, SIZE_SECTION, { bold: true });
+  // Keep the header with at least one body line so a page never ends on a
+  // heading whose content starts on the next one.
+  const top = place(c, y, height + 2 + lineHeight(SIZE_BODY));
+  if (c.mode === "draw") {
+    drawText(c, title, MARGIN, top, CONTENT_WIDTH, SIZE_SECTION, { bold: true });
+    c.doc
+      .moveTo(MARGIN, top + height + 0.5)
+      .lineTo(PAGE_WIDTH - MARGIN, top + height + 0.5)
       .lineWidth(0.75)
       .strokeColor("#111111")
       .stroke();
   }
-  return height + 2;
+  return top + height + 2;
 }
 
 function degreeText(degree: string, gpa?: string): string {
@@ -202,19 +261,19 @@ function institutionText(entry: Entry): string {
 }
 
 function renderEducation(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
+  c: Canvas,
   profile: ProfileV2,
   section: Section,
+  variant: string,
   yStart: number,
 ): number {
   let y = yStart;
-  const entries = visibleEntries(section, "base");
+  const entries = visibleEntries(section, variant);
   entries.forEach((entry, index) => {
     const degrees = entry.degrees ?? [];
-    y += datedLine(
-      doc,
-      mode,
+    y = keepWithNext(c, y, 2);
+    y = datedLine(
+      c,
       institutionText(entry),
       graduationText(degrees[0]?.grad_date || entry.date),
       y,
@@ -225,108 +284,67 @@ function renderEducation(
       const text = degreeText(degree.degree, degree.gpa);
       if (degreeIndex === 0) {
         if (text) {
-          y += renderText(doc, mode, text, MARGIN, y, CONTENT_WIDTH, SIZE_EDUCATION, {
+          y = renderText(c, text, MARGIN, y, CONTENT_WIDTH, SIZE_EDUCATION, {
             italic: true,
           });
         }
       } else if (text || degree.grad_date) {
-        y += datedLine(
-          doc,
-          mode,
-          text,
-          graduationText(degree.grad_date),
-          y,
-          SIZE_EDUCATION,
-          { italic: true },
-        );
+        y = datedLine(c, text, graduationText(degree.grad_date), y, SIZE_EDUCATION, {
+          italic: true,
+        });
       }
       if (degree.concentration) {
         const concentration = /^concentrations?\s*:/i.test(degree.concentration)
           ? degree.concentration
           : `Concentrations: ${degree.concentration}`;
-        y += renderText(
-          doc,
-          mode,
-          concentration,
-          MARGIN,
-          y,
-          CONTENT_WIDTH,
-          SIZE_EDUCATION,
-          { italic: true },
-        );
+        y = renderText(c, concentration, MARGIN, y, CONTENT_WIDTH, SIZE_EDUCATION, {
+          italic: true,
+        });
       }
     });
     for (const extra of entry.extras ?? []) {
-      y += datedLine(
-        doc,
-        mode,
-        extra.text,
-        extra.date ?? "",
-        y,
-        SIZE_EDUCATION,
-        { italic: extra.italics ?? true },
-      );
+      y = datedLine(c, extra.text, extra.date ?? "", y, SIZE_EDUCATION, {
+        italic: extra.italics ?? true,
+      });
     }
-    for (const text of bulletsFor(entry, "base")) y += bullet(doc, mode, text, y);
+    for (const text of bulletsFor(entry, variant)) y = bullet(c, text, y);
     if (index < entries.length - 1) y += lineHeight(SIZE_BODY);
   });
   const coursework = (profile.skills.coursework ?? []).map(skillName).join(", ");
   if (coursework) {
-    y += renderText(
-      doc,
-      mode,
-      `Coursework: ${coursework}`,
-      MARGIN,
-      y,
-      CONTENT_WIDTH,
-      SIZE_EDUCATION,
-    );
+    y = renderText(c, `Coursework: ${coursework}`, MARGIN, y, CONTENT_WIDTH, SIZE_EDUCATION);
   }
-  return y - yStart;
+  return y;
 }
 
-function renderEntries(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
-  section: Section,
-  yStart: number,
-): number {
+function renderEntries(c: Canvas, section: Section, variant: string, yStart: number): number {
   let y = yStart;
-  const entries = visibleEntries(section, "base");
+  const entries = visibleEntries(section, variant);
   entries.forEach((entry, index) => {
+    y = keepWithNext(c, y, entry.subheading ? 3 : 2);
     if (section.kind === "community") {
       const heading = (entry.headingRuns ?? [{ text: entry.heading }])
         .map((run) => run.text)
         .join("");
-      y += datedLine(doc, mode, heading, entry.date, y, SIZE_BODY, { bold: true });
+      y = datedLine(c, heading, entry.date, y, SIZE_BODY, { bold: true });
     } else {
-      y += datedLine(
-        doc,
-        mode,
-        entry.heading,
-        entry.location ?? "",
-        y,
-        SIZE_BODY,
-        { bold: true },
-      );
+      y = datedLine(c, entry.heading, entry.location ?? "", y, SIZE_BODY, { bold: true });
       if (entry.subheading) {
-        y += datedLine(doc, mode, entry.subheading, entry.date, y, SIZE_BODY, {
-          italic: true,
-        });
+        y = datedLine(c, entry.subheading, entry.date, y, SIZE_BODY, { italic: true });
       }
     }
-    for (const text of bulletsFor(entry, "base")) y += bullet(doc, mode, text, y);
+    for (const text of bulletsFor(entry, variant)) y = bullet(c, text, y);
     if (index < entries.length - 1) y += lineHeight(SIZE_BODY);
   });
-  return y - yStart;
+  return y;
 }
 
 function renderProjects(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
+  c: Canvas,
   projects: TailoredContent["projects"],
   yStart: number,
 ): number {
+  const { doc } = c;
   let y = yStart;
   projects.forEach((project, index) => {
     doc.font(FONT_BOLD).fontSize(SIZE_BODY);
@@ -339,60 +357,34 @@ function renderProjects(
     const techX = MARGIN + nameWidth + separatorWidth;
     const techWidth = Math.max(1, leftWidth - nameWidth - separatorWidth);
     doc.font(FONT_ITALIC).fontSize(SIZE_BODY);
-    const techHeight = textHeight(
-      doc,
-      project.tech,
-      techWidth,
-      SIZE_BODY,
-      { italic: true },
-    );
+    const techHeight = textHeight(doc, project.tech, techWidth, SIZE_BODY, { italic: true });
     const headingHeight = lineHeight(SIZE_BODY);
     const dateHeight = textHeight(doc, project.date, dateWidth, SIZE_BODY);
     const rowHeight = Math.max(headingHeight, techHeight, dateHeight);
-    if (mode === "draw") {
+    const top = place(c, y, rowHeight + (project.bullets.length ? lineHeight(SIZE_BODY) : 0));
+    if (c.mode === "draw") {
       // Draw the name and separator without a width constraint. PDFKit only
       // line-wraps constrained text, so the separator cannot become its own
       // line. Only the technology run is allowed to wrap.
-      doc.font(FONT_BOLD).fontSize(SIZE_BODY).fillColor("#111111").text(project.name, MARGIN, y, {
+      doc.font(FONT_BOLD).fontSize(SIZE_BODY).fillColor("#111111").text(project.name, MARGIN, top, {
         lineBreak: false,
       });
-      doc.font(FONT_REGULAR).fontSize(SIZE_BODY).text(separator, MARGIN + nameWidth, y, {
+      doc.font(FONT_REGULAR).fontSize(SIZE_BODY).text(separator, MARGIN + nameWidth, top, {
         lineBreak: false,
       });
-      renderText(
-        doc,
-        mode,
-        project.tech,
-        techX,
-        y,
-        techWidth,
-        SIZE_BODY,
-        { italic: true },
-      );
-      renderText(
-        doc,
-        mode,
-        project.date,
-        PAGE_WIDTH - MARGIN - dateWidth,
-        y,
-        dateWidth,
-        SIZE_BODY,
-        { align: "right" },
-      );
+      drawText(c, project.tech, techX, top, techWidth, SIZE_BODY, { italic: true });
+      drawText(c, project.date, PAGE_WIDTH - MARGIN - dateWidth, top, dateWidth, SIZE_BODY, {
+        align: "right",
+      });
     }
-    y += rowHeight;
-    for (const text of project.bullets) y += bullet(doc, mode, text, y);
+    y = top + rowHeight;
+    for (const text of project.bullets) y = bullet(c, text, y);
     if (index < projects.length - 1) y += lineHeight(SIZE_BODY);
   });
-  return y - yStart;
+  return y;
 }
 
-function renderSkills(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
-  profile: ProfileV2,
-  yStart: number,
-): number {
+function renderSkills(c: Canvas, profile: ProfileV2, yStart: number): number {
   let y = yStart;
   const rows: [string, string][] = [
     ["Languages", (profile.skills.languages ?? []).map(skillName).join(", ")],
@@ -401,23 +393,16 @@ function renderSkills(
   ];
   for (const [label, value] of rows) {
     if (!value) continue;
-    y += renderText(
-      doc,
-      mode,
-      `${label}: ${value}`,
-      MARGIN,
-      y,
-      CONTENT_WIDTH,
-      SIZE_EDUCATION,
-    );
+    y = renderText(c, `${label}: ${value}`, MARGIN, y, CONTENT_WIDTH, SIZE_EDUCATION);
   }
-  return y - yStart;
+  return y;
 }
 
 function sectionHasContent(
   profile: ProfileV2,
   section: Section,
   content: TailoredContent,
+  variant: string,
 ): boolean {
   if (section.kind === "projects") return content.projects.length > 0;
   if (section.kind === "skills") {
@@ -427,41 +412,43 @@ function sectionHasContent(
         profile.skills.certifications?.length,
     );
   }
-  return visibleEntries(section, "base").length > 0;
+  return visibleEntries(section, variant).length > 0;
 }
 
+/**
+ * Lay the whole resume out from the top margin down and return the y below
+ * the last block. Without pagination that is MARGIN + the content height
+ * (what the fitter measures); with it, a y on whichever page the layout
+ * ended on.
+ *
+ * `variant` picks the bullets and hidden entries for every non-project
+ * section; projects arrive pre-selected in `content` (the tailored build
+ * chooses per project, the full export via fullResumeContent).
+ */
 function layout(
-  doc: PDFKit.PDFDocument,
-  mode: LayoutMode,
+  c: Canvas,
   profileArg: ProfileV2,
   content: TailoredContent,
+  variant: string,
 ): number {
   const profile = toV2(profileArg);
+  const { doc } = c;
   let y = MARGIN;
-  y += renderText(doc, mode, profile.header.name, MARGIN, y, CONTENT_WIDTH, SIZE_NAME, {
+  y = renderText(c, profile.header.name, MARGIN, y, CONTENT_WIDTH, SIZE_NAME, {
     bold: true,
     align: "center",
   });
-  y += renderText(
-    doc,
-    mode,
-    profile.header.contact_line,
-    MARGIN,
-    y,
-    CONTENT_WIDTH,
-    SIZE_CONTACT,
-    { align: "center" },
-  );
+  y = renderText(c, profile.header.contact_line, MARGIN, y, CONTENT_WIDTH, SIZE_CONTACT, {
+    align: "center",
+  });
   const links = [
     (profile.header.citizen_prefix ?? "").replace(/[|\s]+$/, ""),
     ...(profile.header.links ?? []).map((link) => link.text),
   ]
     .filter(Boolean)
     .join(" | ");
-  y += renderText(doc, mode, links, MARGIN, y, CONTENT_WIDTH, SIZE_CONTACT, {
-    align: "center",
-  });
-  if (mode === "draw" && profile.header.links?.length) {
+  y = renderText(c, links, MARGIN, y, CONTENT_WIDTH, SIZE_CONTACT, { align: "center" });
+  if (c.mode === "draw" && profile.header.links?.length) {
     const headerLink = profile.header.links[0];
     const linkWidth = doc.font(FONT_REGULAR).fontSize(SIZE_CONTACT).widthOfString(headerLink.text);
     doc.link((PAGE_WIDTH - linkWidth) / 2, y - lineHeight(SIZE_CONTACT), linkWidth, lineHeight(SIZE_CONTACT), headerLink.url);
@@ -469,30 +456,30 @@ function layout(
 
   let renderedSections = 0;
   for (const section of profile.sections) {
-    if (!sectionHasContent(profile, section, content)) continue;
+    if (!sectionHasContent(profile, section, content, variant)) continue;
     if (renderedSections > 0) y += SECTION_GAP;
-    y += sectionHeader(doc, mode, section.title, y);
+    y = sectionHeader(c, section.title, y);
     if (section.kind === "education") {
-      y += renderEducation(doc, mode, profile, section, y);
+      y = renderEducation(c, profile, section, variant, y);
     } else if (section.kind === "projects") {
-      y += renderProjects(doc, mode, content.projects, y);
+      y = renderProjects(c, content.projects, y);
     } else if (section.kind === "skills") {
-      y += renderSkills(doc, mode, profile, y);
+      y = renderSkills(c, profile, y);
     } else {
-      y += renderEntries(doc, mode, section, y);
+      y = renderEntries(c, section, variant, y);
     }
     renderedSections += 1;
   }
-  return y - MARGIN;
+  return y;
 }
 
-function createPdfDocument(): PDFKit.PDFDocument {
+function createPdfDocument(title: string): PDFKit.PDFDocument {
   return new PDFDocument({
     autoFirstPage: false,
     bufferPages: true,
     compress: true,
     info: {
-      Title: "Tailored Resume",
+      Title: title,
       Creator: "intern-watch",
       Producer: "PDFKit",
     },
@@ -500,11 +487,11 @@ function createPdfDocument(): PDFKit.PDFDocument {
 }
 
 export function measureResumePdf(profile: ProfileV2, content: TailoredContent): number {
-  const doc = createPdfDocument();
-  doc.addPage({ size: [PAGE_WIDTH, PAGE_HEIGHT], margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN } });
-  const height = layout(doc, "measure", profile, content);
+  const doc = createPdfDocument("Tailored Resume");
+  addPage(doc);
+  const end = layout({ doc, mode: "measure", paginate: false }, profile, content, "base");
   doc.end();
-  return height;
+  return end - MARGIN;
 }
 
 function shortestBullets(entry: Entry): { variant: string; bullets: string[] } {
@@ -584,19 +571,20 @@ export function fitResumePdf(
   return { profile, content, heightPt: measured, notes };
 }
 
-async function renderBytes(profile: ProfileV2, content: TailoredContent): Promise<Uint8Array> {
-  const doc = createPdfDocument();
+async function renderBytes(
+  profile: ProfileV2,
+  content: TailoredContent,
+  opts: { title: string; variant: string; paginate: boolean },
+): Promise<Uint8Array> {
+  const doc = createPdfDocument(opts.title);
   const chunks: Uint8Array[] = [];
   doc.on("data", (chunk: Uint8Array) => chunks.push(chunk));
   const finished = new Promise<Uint8Array>((resolve, reject) => {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
   });
-  doc.addPage({
-    size: [PAGE_WIDTH, PAGE_HEIGHT],
-    margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
-  });
-  layout(doc, "draw", profile, content);
+  addPage(doc);
+  layout({ doc, mode: "draw", paginate: opts.paginate }, profile, content, opts.variant);
   doc.end();
   return await finished;
 }
@@ -624,7 +612,11 @@ export async function buildResumePdf(
       `Resume cannot fit one page without removing required content (${fitted.heightPt.toFixed(1)}pt > ${SAFE_HEIGHT.toFixed(1)}pt)`,
     );
   }
-  const bytes = await renderBytes(fitted.profile, fitted.content);
+  const bytes = await renderBytes(fitted.profile, fitted.content, {
+    title: "Tailored Resume",
+    variant: "base",
+    paginate: false,
+  });
   const validation = await validateResumePdf(bytes);
   return {
     bytes,
@@ -637,9 +629,25 @@ export async function buildResumePdf(
   };
 }
 
-export function pdfFilename(profileArg: ProfileV2, company: string): string {
+/**
+ * The whole bank for one variant, as-is: every entry the variant shows, every
+ * project, every bullet, on as many US Letter pages as that takes. No JD, no
+ * LLM, no fitting - this is the "download my full resume" of the profile
+ * editor, not a tailored build.
+ */
+export async function renderFullResumePdf(
+  profileArg: ProfileV2,
+  variant: string,
+): Promise<Uint8Array> {
   const profile = toV2(profileArg);
-  const names = profile.header.name.trim().split(/\s+/);
+  return await renderBytes(profile, fullResumeContent(profile, variant), {
+    title: "Resume",
+    variant,
+    paginate: true,
+  });
+}
+
+export function pdfFilename(profileArg: ProfileV2, company: string): string {
   const companySlug = company.replace(/[^A-Za-z0-9]+/g, "") || "Tailored";
-  return `${names[0] ?? ""}_${names[names.length - 1] ?? ""}_${companySlug}.pdf`;
+  return `${filenameStem(profileArg)}_${companySlug}.pdf`;
 }

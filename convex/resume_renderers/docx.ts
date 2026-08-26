@@ -389,14 +389,17 @@ function buildRenderNodes(
 
 // --- public pure functions --------------------------------------------------
 
+/** `First_Last` from the header name - the stem every resume filename starts
+ *  with (mirrors src/resume/build.py out_name()). */
+export function filenameStem(profileArg: ProfileV2): string {
+  const tokens = toV2(profileArg).header.name.trim().split(/\s+/);
+  return `${tokens[0] ?? ""}_${tokens[tokens.length - 1] ?? ""}`;
+}
+
 /** `First_Last_Company.docx` - mirrors src/resume/build.py out_name(). */
 export function resumeFilename(profileArg: ProfileV2, company: string): string {
-  const profile = toV2(profileArg);
-  const tokens = profile.header.name.trim().split(/\s+/);
-  const first = tokens[0] ?? "";
-  const surname = tokens[tokens.length - 1] ?? "";
   const slug = company.replace(/[^A-Za-z0-9]+/g, "") || "Tailored";
-  return `${first}_${surname}_${slug}.docx`;
+  return `${filenameStem(profileArg)}_${slug}.docx`;
 }
 
 /**
@@ -419,6 +422,37 @@ export function resumeOutline(
 export function projectEntries(p: ProfileV2): Entry[] {
   const section = p.sections.find((s) => s.kind === "projects");
   return section ? section.entries : [];
+}
+
+/**
+ * The untailored project content for one variant: every project the variant
+ * shows, in bank order, with that variant's bullets (falling back to base).
+ * This is what the full-resume export renders in place of a JD selection.
+ */
+export function fullResumeContent(profileArg: ProfileV2, variant: string): TailoredContent {
+  const p = toV2(profileArg);
+  const section = p.sections.find((s) => s.kind === "projects");
+  const entries = section ? visibleEntries(section, variant) : [];
+  return {
+    projects: entries.map((e) => ({
+      name: e.heading,
+      tech: (e.tech ?? []).join(", "),
+      date: e.date,
+      bullets: bulletsFor(e, variant),
+    })),
+  };
+}
+
+/** `First_Last_Resume.<ext>`, or `First_Last_Resume_<variant>.<ext>` for a
+ *  non-base variant - the full-bank export's filename. */
+export function fullResumeFilename(
+  profileArg: ProfileV2,
+  variant: string,
+  ext: "pdf" | "docx",
+): string {
+  const variantSlug = variant === "base" ? "" : variant.replace(/[^A-Za-z0-9]+/g, "");
+  const suffix = variantSlug ? `Resume_${variantSlug}` : "Resume";
+  return `${filenameStem(profileArg)}_${suffix}.${ext}`;
 }
 
 /**
@@ -511,10 +545,13 @@ function toParagraph(node: ParaSpec): Paragraph {
  * Section order follows profile.sections (Education, Work Experience,
  * Programming Projects, Community, Skills for a migrated v1 profile) mirroring
  * src/resume/render.py.render. Accepts a v1 shape too (migrated via toV2).
+ * `variant` picks the bullets and hidden entries of every non-project section
+ * (the tailored build renders base; the full export renders the chosen one).
  */
 export function composeResumeDoc(
   profileArg: ProfileV2,
   content: TailoredContent,
+  variant: string = "base",
 ): Document {
   const p = toV2(profileArg);
   return new Document({
@@ -526,7 +563,7 @@ export function composeResumeDoc(
             margin: { top: 720, bottom: 720, left: 720, right: 720 },
           },
         },
-        children: buildRenderNodes(p, content).map(toParagraph),
+        children: buildRenderNodes(p, content, variant).map(toParagraph),
       },
     ],
   });

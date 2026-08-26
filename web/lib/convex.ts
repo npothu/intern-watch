@@ -481,6 +481,43 @@ export async function getProfile(user: string): Promise<ProfileData> {
   return (value as ProfileData | null) ?? { data: null };
 }
 
+export type ResumeExportFormat = "pdf" | "docx";
+
+export type ResumeExportFile = {
+  filename: string;
+  contentType: string;
+  /** The file bytes, base64 - the action hands them back inline, nothing is stored. */
+  base64: string;
+};
+
+/** Render one variant of a profile JSON whole (no fitting) as a PDF or DOCX.
+ *  Runs resume_node.exportProfile, a Node action, so it takes as long as the
+ *  render does - no polling, the bytes come back in the response. */
+export async function exportProfileFile(
+  data: string,
+  variant: string,
+  format: ResumeExportFormat
+): Promise<ResumeExportFile> {
+  const value = await post(
+    "action",
+    "exportProfile",
+    { data, variant, format },
+    "resume_node"
+  );
+  const row = (value ?? {}) as Partial<ResumeExportFile>;
+  if (typeof row.base64 !== "string" || typeof row.filename !== "string") {
+    throw new ConvexError("convex action exportProfile returned no file");
+  }
+  return {
+    filename: row.filename,
+    contentType:
+      typeof row.contentType === "string"
+        ? row.contentType
+        : "application/octet-stream",
+    base64: row.base64,
+  };
+}
+
 /** Persist the user's resume profile JSON (a serialized string, validated
  * server-side by the mutation). */
 export async function putProfile(user: string, data: string): Promise<void> {

@@ -59,6 +59,7 @@ import { HeaderEditor } from "@/components/profile/header-editor";
 import { EntryCard } from "@/components/profile/entry-card";
 import { SkillsEditor } from "@/components/profile/skills-editor";
 import { ResumePreview } from "@/components/profile/resume-preview";
+import { DownloadMenu } from "@/components/profile/download-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +83,10 @@ const CHIP =
 const VAR_PILL =
   "max-w-[110px] min-w-0 truncate border-r border-line px-2.5 py-1 text-[11.5px] font-medium text-ink-2 transition-colors last:border-r-0 hover:text-ink";
 const VAR_PILL_ACTIVE = "bg-accent text-accent-ink font-semibold";
+// Same height and border as the pill group it sits beside; the icon is the
+// only content, so it reads as "this variant, downloaded".
+const ICON_BUTTON =
+  "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2 transition-colors hover:text-ink disabled:opacity-60";
 
 const BUILD_BUTTON_TITLE =
   "Start a build from a specific match instead - a resume is built per job, not from this page";
@@ -900,6 +905,10 @@ export function ProfileEditor(props: {
             </button>
           )}
         </div>
+
+        {/* Downloads the selected variant whole - it sits right after the
+            pills so the two read as one control. */}
+        <DownloadMenu profile={profile} variant={variant} className={ICON_BUTTON} />
 
         <span
           className={cn(
