@@ -9,6 +9,7 @@ import type {
   SectionKind,
   SkillItem,
 } from "./profile_schema";
+import { normalizeProfile } from "./profile_schema";
 
 export const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 export const MAX_DOCUMENT_XML_BYTES = 2 * 1024 * 1024;
@@ -1424,20 +1425,21 @@ export function validateModelOutput(
     }
   }
 
+  const profile = normalizeProfile(profileResult.profile);
   return {
     ok: true,
     value: {
-      profile: profileResult.profile,
+      profile,
       mappings: resolvedMappings,
-      semanticWarnings: semanticWarnings(profileResult.profile),
+      semanticWarnings: semanticWarnings(profile),
       fullyMappedLines,
       partialMappedLines,
       unmappedLines,
-      sections: profileResult.profile.sections.map((section) => ({
+      sections: profile.sections.map((section) => ({
         id: section.id,
         title: section.title,
         kind: section.kind,
-        count: sectionCount(profileResult.profile, section),
+        count: sectionCount(profile, section),
       })),
     },
   };

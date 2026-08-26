@@ -365,14 +365,17 @@ function buildRenderNodes(
   nodes.push(paraSpec([run(profile.header.name, SZ_NAME, { bold: true })], { align: "center" }));
   nodes.push(paraSpec([run(profile.header.contact_line, SZ_CONTACT)], { align: "center" }));
 
+  // Work authorisation, then the links, " | " between every pair - the same
+  // join the PDF renderer uses. The prefix is plain text (toV2 strips any
+  // separator a legacy value carried), so the separator is added here.
   const linkRuns: RunSpec[] = [];
   if (profile.header.citizen_prefix) {
     linkRuns.push(run(profile.header.citizen_prefix, SZ_CONTACT));
   }
-  (profile.header.links ?? []).forEach((l, i) => {
-    if (i > 0) linkRuns.push(run(" | ", SZ_CONTACT));
+  for (const l of profile.header.links ?? []) {
+    if (linkRuns.length) linkRuns.push(run(" | ", SZ_CONTACT));
     linkRuns.push(run(l.text, SZ_CONTACT, { color: LINK_COLOR, link: l.url }));
-  });
+  }
   nodes.push(paraSpec(linkRuns, { align: "center" }));
 
   let renderedCount = 0;

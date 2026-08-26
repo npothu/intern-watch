@@ -37,6 +37,7 @@ import {
   newId,
   profileCounts,
   SECTION_KINDS,
+  normalizeProfile,
   variantsOf,
   type Entry,
   type ProfileCounts,
@@ -144,7 +145,7 @@ function parseV2(data: string | null): ParseOutcome {
       parsed !== null &&
       (parsed as { version?: unknown }).version === 2
     ) {
-      return { status: "ok", profile: parsed as ProfileV2 };
+      return { status: "ok", profile: normalizeProfile(parsed as ProfileV2) };
     }
     return { status: "upgrade" };
   } catch {
