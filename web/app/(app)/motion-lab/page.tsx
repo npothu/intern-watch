@@ -42,9 +42,6 @@ const row = (
 });
 
 const ROWS: TriageRow[] = [
-  // Priority employers land in the pinned group above the term groups.
-  row("msft-az1", "Microsoft", "Software Engineering Intern - Azure Core", "Redmond, WA", "Summer 2027", "2026-08-05", "[PRIORITY]", "$56/hr", { priority: true }),
-  row("meta-rl2", "Meta", "Software Engineer Intern - Reality Labs", "Menlo Park, CA", "Spring 2027", "2026-08-03", "[PRIORITY]", "$62/hr", { priority: true, saved: true }),
   row("nvda-gpu1", "NVIDIA", "Software Engineering Intern, GPU Systems", "Santa Clara, CA", "Summer 2027", "2026-08-04", "[top]", "$52/hr", { applied: true }),
   row("snow-db2", "Snowflake", "Software Engineer Intern - Database Engine", "Bellevue, WA", "Summer 2027", "2026-08-03", "[top]", "$55/hr", { saved: true }),
   row("cap1-be4", "Capital One", "Technology Intern - Backend Platforms", "Atlanta, GA", "Summer 2027", "2026-08-02", "[atl]", ""),

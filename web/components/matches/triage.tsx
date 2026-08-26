@@ -112,7 +112,6 @@ type InFlight = "building" | { failed: string };
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "matches" },
-  { key: "priority", label: "priority" },
   { key: "applied", label: "applied" },
   { key: "saved", label: "saved" },
   { key: "resumes", label: "resumes" },
@@ -153,7 +152,6 @@ function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRo
     }
     // "To apply" is the working queue: still open, not yet ticked.
     if (filter === "todo" && r.applied) return false;
-    if (filter === "priority" && !r.priority) return false;
     if (filter === "applied" && !r.applied) return false;
     if (filter === "saved" && !r.saved) return false;
     if (filter === "resumes" && !r.resumeUrl) return false;
@@ -167,7 +165,6 @@ function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRo
 
 const STATUS_KEYS: readonly Filter[] = [
   "all",
-  "priority",
   "todo",
   "applied",
   "saved",
@@ -184,33 +181,16 @@ const isFilter = (v: string | undefined): v is Filter =>
 const termLabel = (term: string) =>
   term === UNKNOWN_TERM ? "Unknown" : term;
 
-/** The pinned group's key; never a real term, so it can't collide. */
-const PRIORITY_GROUP = "__priority__";
-
-type Group = { term: string; kind: "priority" | "term"; rows: TriageRow[] };
-
-/**
- * The pinned Priority group first (every priority row, across terms), then
- * one group per term for everything else, chronological, unknown last. A
- * priority row lives only in the pinned group, so nothing renders twice;
- * inside a term group the digest's tiers still apply (top before the rest).
- */
-function groupRows(rows: TriageRow[]): Group[] {
-  const priority = rows
-    .filter((r) => r.priority)
-    .sort(
-      (a, b) =>
-        (b.added || "").localeCompare(a.added || "") ||
-        a.company.localeCompare(b.company)
-    );
+function groupByTerm(rows: TriageRow[]): { term: string; rows: TriageRow[] }[] {
   const groups = new Map<string, TriageRow[]>();
   for (const r of rows) {
-    if (r.priority) continue;
     const t = r.term || UNKNOWN_TERM;
     if (!groups.has(t)) groups.set(t, []);
     groups.get(t)!.push(r);
   }
   for (const arr of groups.values()) {
+    // Same tiers as the email digest (priority, then top, then the rest);
+    // within a tier newest-first, then by company.
     arr.sort(
       (a, b) =>
         tierOf(a) - tierOf(b) ||
@@ -222,15 +202,12 @@ function groupRows(rows: TriageRow[]): Group[] {
     ...sortTerms([...groups.keys()].filter((t) => t !== UNKNOWN_TERM)),
     ...(groups.has(UNKNOWN_TERM) ? [UNKNOWN_TERM] : []),
   ];
-  return [
-    ...(priority.length ? [{ term: PRIORITY_GROUP, kind: "priority" as const, rows: priority }] : []),
-    ...order.map((t) => ({ term: t, kind: "term" as const, rows: groups.get(t)! })),
-  ];
+  return order.map((t) => ({ term: t, rows: groups.get(t)! }));
 }
 
-/** 1 top company, 2 everything else - the digest's tiers below priority
- *  (priority rows sit in their own pinned group here). */
+/** 0 priority, 1 top company, 2 everything else - mirrors notify._rank_tag. */
 function tierOf(row: TriageRow): number {
+  if (row.priority) return 0;
   return /^\[TOP/.test(row.tag) ? 1 : 2;
 }
 
@@ -295,19 +272,7 @@ function CollapseShell({
   );
 }
 
-/**
- * The row's badge. Inside the pinned Priority group the priority badge is
- * implied by the box, so `pinnedTerm` swaps it for the row's term - the one
- * fact that group's rows no longer get from their heading.
- */
-function Tags({ tag, pinnedTerm }: { tag: string; pinnedTerm?: string }) {
-  if (pinnedTerm !== undefined) {
-    return (
-      <span className="ml-1.5 inline-block rounded-full bg-chip px-1.5 py-[1px] align-[2px] text-[10.5px] font-medium leading-none text-ink-2">
-        {termLabel(pinnedTerm || UNKNOWN_TERM)}
-      </span>
-    );
-  }
+function Tags({ tag }: { tag: string }) {
   if (!tag) return null;
   const raw = tag.replace(/[\[\]*]/g, "").toLowerCase();
   // Priority is the one filled badge on the row: it is the reason the row
@@ -606,28 +571,22 @@ export function Triage({
   );
   // Grouped before the term pill is applied, so each pill can carry the count
   // it would show and the pill row itself never changes shape as you click it.
-  const allGroups = useMemo(() => groupRows(visible), [visible]);
+  const allGroups = useMemo(() => groupByTerm(visible), [visible]);
 
-  /* Term pills: one per term the data carries, chronological (the unknown
-     bucket last). Counted over every visible row, including the ones the
-     pinned Priority group holds, so a pill says how many of that term exist
-     rather than how many sit in its box. The wanted set rolls with the
-     calendar, so pills come from the rows rather than a configured list. */
+  /* Term pills: one per term the data carries, in the groups' chronological
+     order (the unknown bucket last). The wanted set rolls with the calendar,
+     so pills come from the rows rather than a configured list. */
   const termPills = useMemo<PillOption[]>(() => {
-    const counts = new Map<string, number>();
-    for (const r of visible) {
-      const t = r.term || UNKNOWN_TERM;
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-    const terms = [
-      ...sortTerms([...counts.keys()].filter((t) => t !== UNKNOWN_TERM)),
-      ...(counts.has(UNKNOWN_TERM) ? [UNKNOWN_TERM] : []),
-    ];
+    const counts = new Map(allGroups.map((g) => [g.term, g.rows.length]));
     return [
       { key: ALL_TERMS, label: "All", count: visible.length },
-      ...terms.map((t) => ({ key: t, label: termLabel(t), count: counts.get(t) ?? 0 })),
+      ...allGroups.map((g) => g.term).map((t) => ({
+        key: t,
+        label: termLabel(t),
+        count: counts.get(t) ?? 0,
+      })),
     ];
-  }, [visible]);
+  }, [allGroups, visible.length]);
 
   /* A pill for a stray term stops being offered once the search or filter
      narrows its group away. Rather than writing the selection back to "all"
@@ -637,25 +596,19 @@ export function Triage({
     ? termFilter
     : ALL_TERMS;
 
-  /* A term pill narrows the pinned group to that term's priority rows and
-     keeps it pinned; the term groups reduce to the one picked. */
-  const groups = useMemo(() => {
-    if (activeTerm === ALL_TERMS) return allGroups;
-    return allGroups
-      .map((g) =>
-        g.kind === "priority"
-          ? { ...g, rows: g.rows.filter((r) => (r.term || UNKNOWN_TERM) === activeTerm) }
-          : g
-      )
-      .filter((g) => (g.kind === "priority" ? g.rows.length > 0 : g.term === activeTerm));
-  }, [allGroups, activeTerm]);
+  const groups = useMemo(
+    () =>
+      activeTerm === ALL_TERMS
+        ? allGroups
+        : allGroups.filter((g) => g.term === activeTerm),
+    [allGroups, activeTerm]
+  );
   const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
 
   const stats = useMemo(() => {
     const active = rows.filter((r) => !r.dismissed);
     return {
       matches: active.length,
-      priority: active.filter((r) => r.priority).length,
       applied: active.filter((r) => r.applied).length,
       saved: active.filter((r) => r.saved).length,
       resumes: active.filter((r) => r.resumeUrl).length,
@@ -1131,15 +1084,6 @@ export function Triage({
       run: () => router.push("/profile"),
     },
     {
-      id: "priority",
-      label: "Show priority",
-      icon: <Star className="size-4" />,
-      run: () => {
-        setTermFilter(ALL_TERMS);
-        setFilter("priority");
-      },
-    },
-    {
       id: "hidden",
       label: "Show hidden",
       icon: <Ghost className="size-4" />,
@@ -1186,8 +1130,6 @@ export function Triage({
           const n =
             s.key === "all"
               ? stats.matches
-              : s.key === "priority"
-                ? stats.priority
               : s.key === "applied"
                 ? stats.applied
                 : s.key === "saved"
@@ -1279,29 +1221,14 @@ export function Triage({
             return (
               <section key={g.term} className="mb-5 last:mb-0">
                 <h2
-                  className={cn(
-                    "mb-1.5 flex items-baseline gap-1.5 text-[11.5px] font-semibold tracking-[0.09em] uppercase",
-                    g.kind === "priority" ? "text-accent" : "text-ink-2"
-                  )}
+                  className="mb-1.5 flex items-baseline gap-1.5 text-[11.5px] font-semibold tracking-[0.09em] text-ink-2 uppercase"
                   style={{
                     ...cascadeStyle(headerIndex),
                     animationDelay: `${Math.max(0, Math.min(headerIndex, CASCADE_CAP) * 70 - 40)}ms`,
                   }}
                 >
-                  {g.kind === "priority" ? (
-                    <>
-                      <Star className="size-3 self-center" strokeWidth={2.5} fill="currentColor" />
-                      Priority
-                    </>
-                  ) : (
-                    g.term
-                  )}
-                  <span
-                    className={cn(
-                      "font-normal not-italic tracking-normal normal-case",
-                      g.kind === "priority" ? "text-accent/80" : "text-ink-2/80"
-                    )}
-                  >
+                  {g.term}
+                  <span className="font-normal not-italic tracking-normal normal-case text-ink-2/80">
                     · {g.rows.length}
                   </span>
                 </h2>
@@ -1318,7 +1245,6 @@ export function Triage({
                           <div data-card-pad className="pt-2">
                             <MobileCard
                               row={r}
-                              pinned={g.kind === "priority"}
                               cascade={cascadeStyle(i)}
                               isCursor={r.short === cursor}
                               onSelect={() => setCursor(r.short)}
@@ -1349,7 +1275,6 @@ export function Triage({
                         >
                           <RowView
                             row={r}
-                            pinned={g.kind === "priority"}
                             cascade={cascadeStyle(i)}
                             isCursor={r.short === cursor}
                             appliedFlash={tokenFor(tickFlash, `${r.short}:a`)}
@@ -1677,7 +1602,6 @@ function ResumeButton({
 
 function RowView({
   row,
-  pinned = false,
   cascade,
   isCursor,
   appliedFlash,
@@ -1694,8 +1618,6 @@ function RowView({
   reportPulse,
 }: {
   row: TriageRow;
-  /** Rendered inside the pinned Priority group (shows the term, not the badge). */
-  pinned?: boolean;
   cascade: CSSProperties;
   isCursor: boolean;
   appliedFlash: number | null;
@@ -1820,7 +1742,7 @@ function RowView({
         >
           {company}
         </span>
-        <Tags tag={row.tag} pinnedTerm={pinned ? row.term : undefined} />
+        <Tags tag={row.tag} />
         {row.url ? (
           <a
             data-open
@@ -1934,7 +1856,6 @@ function RowView({
 
 function MobileCard({
   row,
-  pinned = false,
   cascade,
   isCursor,
   onSelect,
@@ -1949,7 +1870,6 @@ function MobileCard({
   onOpenReport,
 }: {
   row: TriageRow;
-  pinned?: boolean;
   cascade: CSSProperties;
   isCursor: boolean;
   onSelect: () => void;
@@ -2067,7 +1987,7 @@ function MobileCard({
               >
                 {row.company}
               </span>
-              <Tags tag={row.tag} pinnedTerm={pinned ? row.term : undefined} />
+              <Tags tag={row.tag} />
             </div>
             {row.url ? (
               <a
