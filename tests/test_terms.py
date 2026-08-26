@@ -76,3 +76,17 @@ def test_term_rows_explain_each_term():
     assert rows["Summer 2028"].status == "included" and rows["Summer 2028"].wanted
     assert list(rows) == ["Fall 2026", "Spring 2027", "Summer 2027",
                           "Fall 2027", "Summer 2028"]
+
+
+def test_pins_and_legacy_lists_are_canonicalized():
+    cfg = {"terms": {"rolling": True, "lead_weeks": 3, "horizon_months": 14,
+                     "include": [" summer 2028 ", "SUMMER 2028", "Fall"],
+                     "exclude": ["summer 2027"]}}
+    assert terms.wanted_terms(cfg, AUG_26) == [
+        "Spring 2027", "Fall 2027", "Summer 2028"]
+    rows = {r.term: r for r in terms.term_rows(cfg["terms"], AUG_26)}
+    assert rows["Summer 2027"].status == "excluded"
+    assert rows["Summer 2028"].status == "included"
+    assert terms.wanted_terms({"terms_wanted": ["fall 2026", "Fall 2026",
+                                                "Co-op 2027"]}, AUG_26) == [
+        "Fall 2026", "Co-op 2027"]

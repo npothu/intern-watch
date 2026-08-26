@@ -25,7 +25,7 @@ import httpx
 from . import content_dedup
 from . import state as st
 from .normalize import canonical_url
-from .notify import _group_items
+from .notify import _group_items, _rank_tag
 from .paths import DATA_ROOT as DATA_ROOT
 
 if TYPE_CHECKING:  # annotation-only; .store imports this module at runtime
@@ -238,12 +238,12 @@ def build_body(matches: list[dict], terms_order: list[str],
         ]
         for term, group in _group_items(shown, terms_order):
             parts.append(f"\n### {term}\n")
-            # Priority rows pin to the top of their term; the rest stay
-            # newest-first as before.
-            group = sorted(group, key=lambda i: (bool(i.get("priority")),
-                                                 i.get("added", ""),
-                                                 i["company"].casefold()),
-                           reverse=True)
+            # Same tiers as the email digest (priority, top, the rest);
+            # within a tier newest-first, then by company. Three stable
+            # sorts, least significant first.
+            group = sorted(group, key=lambda i: i["company"].casefold())
+            group.sort(key=lambda i: i.get("added", ""), reverse=True)
+            group.sort(key=lambda i: _rank_tag(i.get("tag") or ""))
             parts.extend(_row(item, repo, branch, interactive, resume_urls)
                          for item in group)
         if overflow:

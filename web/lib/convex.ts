@@ -1,6 +1,9 @@
 import "server-only";
 import type { ProfileV2, SectionKind } from "../../convex/profile_schema";
-import type { Preset, WatchPrefs } from "../../convex/watch_schema";
+// watch_types has no imports, so the web build can type-check it without the
+// root `convex` package (see CLAUDE.md "The web build only ever installs
+// web/package.json"). Never import watch_schema here: it pulls convex/values.
+import type { Preset, WatchPrefs } from "../../convex/watch_types";
 
 export type { Preset, WatchPrefs };
 

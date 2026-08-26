@@ -94,6 +94,7 @@ unknown_term_policy: llm        # llm | drop | keep
 #                   or (with location.remote_counts) a remote role
 #   priority_only   only the priority companies below
 #   anything        everything that passed the role filter
+# A season with no preset (Winter, if you pin one) gets priority_only.
 term_rules:
   Spring: top_atl_remote
   Summer: anything

@@ -26,6 +26,7 @@ import datetime as dt
 from pathlib import Path
 
 from . import ledger, terms
+from .filters import DEFAULT_PRESET
 from .normalize import norm_company
 
 METRO_NAME = "Atlanta, GA"     # the only metro the rule engine knows today
@@ -144,7 +145,13 @@ def watch_report(cfg: dict, today: dt.date, now: dt.datetime,
             "exclude": list((cfg_terms or {}).get("exclude") or []),
             "rows": rows,
         },
-        "rules": {"legacy": legacy_rules, **(cfg.get("term_rules") or {})},
+        # Every season the presets cover, resolved the way the rule engine
+        # resolves them, so the page shows what actually ran (a season the
+        # yaml left out falls back to filters.DEFAULT_PRESET).
+        "rules": {"legacy": legacy_rules,
+                  **({} if legacy_rules else
+                     {s: (cfg.get("term_rules") or {}).get(s, DEFAULT_PRESET)
+                      for s in terms.SEASONS})},
         "priority": {
             "companies": list(pri.get("companies") or []),
             "from_tracker": bool(pri.get("from_tracker", False)),

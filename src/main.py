@@ -583,7 +583,8 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     if not accepted and not notify_cfg.get("email"):
         log.info("user %s: no new matches", name)
     if user_cfg.get("dashboard"):
-        _sync_dashboard(name, state, dry_run, now, terms_order, user_cfg)
+        _sync_dashboard(name, state, dry_run, now, terms_order, user_cfg,
+                        store=store)
     if store is not None and not dry_run:
         # What this run resolved (yaml + prefs), for the settings page.
         store.put_watch_report(name, prefs_mod.watch_report(
@@ -592,7 +593,8 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
 
 def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                     terms_order: list[str],
-                    user_cfg: dict | None = None) -> None:
+                    user_cfg: dict | None = None,
+                    store: TrackerStore | None = None) -> None:
     """Update the user's dashboard issue (needs the Actions-provided repo +
     token; quietly skipped on plain local runs).
 
@@ -611,7 +613,8 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                  "skipping dashboard update", name)
         return
     try:
-        store = make_store(DATA_ROOT, user_cfg or {"name": name})
+        if store is None:
+            store = make_store(DATA_ROOT, user_cfg or {"name": name})
         ticks = store.get_ticks(name)
         # interactive only when the store has a GitHub-issue dashboard (then
         # its repo/token match the Actions env); otherwise -- e.g. a convex
@@ -702,11 +705,15 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         st.outbox_add(state, name, item)
         st.clear_pending(state, job.dedup_key, name)  # outbox now owns delivery
 
-    # Priority matches go out on the run that found them; a failed send
-    # leaves them in the outbox, so the worst case is the normal digest.
+    # Priority matches found THIS run go out now. Only this run's: a failed
+    # send leaves them queued for the digest rather than re-alerting every
+    # two hours, and turning the option on doesn't fire for matches already
+    # waiting in the outbox from earlier runs.
     pri_cfg = user_cfg.get("priority") or {}
     if pri_cfg.get("email_immediately"):
-        alerts = [it for it in st.outbox_items(state, name) if it.get("priority")]
+        found_now = {job.dedup_key for job, _ in accepted}
+        alerts = [it for it in st.outbox_items(state, name)
+                  if it.get("priority") and it["key"] in found_now]
         if alerts:
             _send_priority_alert(name, email_cfg, alerts, state, dry_run, now,
                                  terms_order)
@@ -741,19 +748,13 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         print(f"\n===== email for {name} (dry run) =====")
         print(f"Subject: {subject}\n\n{text_body}")
         return
-    smtp_user_env = email_cfg.get("smtp_user_env", "")
-    smtp_pass_env = email_cfg.get("smtp_pass_env", "")
-    smtp_user = os.environ.get(smtp_user_env, "")
-    smtp_pass = os.environ.get(smtp_pass_env, "")
-    to_addr = email_cfg.get("to") or smtp_user
-    if not smtp_user or not smtp_pass:
-        missing = [n for n, v in ((smtp_user_env, smtp_user),
-                                  (smtp_pass_env, smtp_pass)) if not v]
-        log.error("user %s: email channel OFF -- %s not set; keeping %d "
-                  "item(s) in the outbox (set them as Actions secrets wired "
-                  "into watch.yml, or export locally)", name,
-                  ", ".join(missing), len(items))
+    creds = _smtp_creds(name, email_cfg,
+                        f"the digest; keeping {len(items)} item(s) in the "
+                        "outbox (set them as Actions secrets wired into "
+                        "watch.yml, or export locally)")
+    if creds is None:
         return
+    smtp_user, smtp_pass, to_addr = creds
     attachments = []
     for item in items:
         rel = item.get("resume")
@@ -829,17 +830,10 @@ def _send_health_alert(name: str, email_cfg: dict, health: list[str],
         print(f"\n===== health alert for {name} (dry run) =====")
         print(f"Subject: {subject}\n\n{text_body}")
         return
-    smtp_user_env = email_cfg.get("smtp_user_env", "")
-    smtp_pass_env = email_cfg.get("smtp_pass_env", "")
-    smtp_user = os.environ.get(smtp_user_env, "")
-    smtp_pass = os.environ.get(smtp_pass_env, "")
-    to_addr = email_cfg.get("to") or smtp_user
-    if not smtp_user or not smtp_pass:
-        missing = [n for n, v in ((smtp_user_env, smtp_user),
-                                  (smtp_pass_env, smtp_pass)) if not v]
-        log.error("user %s: email channel OFF -- %s not set; cannot send "
-                  "the health alert", name, ", ".join(missing))
+    creds = _smtp_creds(name, email_cfg, "the health alert")
+    if creds is None:
         return
+    smtp_user, smtp_pass, to_addr = creds
     if send_email(smtp_user, smtp_pass, to_addr, subject, html_body, text_body,
                   user=name):
         st.mark_health_alerted(state, name)

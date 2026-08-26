@@ -260,7 +260,13 @@ class CompanyList:
 #   priority_only   only the user's priority companies
 #   anything        every job that passed the role filter and eliminations
 PRESETS = ("top_atl_remote", "priority_only", "anything")
-DEFAULT_PRESET = "anything"
+# A wanted term whose season has no preset (only Winter, pinned via
+# `include`, can get here) falls back to the SAFE side: rejected jobs are
+# final, so an accidental "anything" would be the costlier mistake.
+DEFAULT_PRESET = "priority_only"
+# The one condition every rule carries first: priority companies are wanted
+# for any term whatever else the rule says (see UserFilter.priority_names).
+_PRIORITY_COND: dict = {"priority": True}
 _METRO_MATCHES = ["atlanta", "alpharetta", "sandy springs", "marietta"]
 TOP_COMPANIES = "data/top_companies.txt"
 ATLANTA_COMPANIES = "data/atlanta_companies.txt"
@@ -271,12 +277,12 @@ def preset_conds(preset: str, location_cfg: dict | None = None) -> list[dict]:
         raise ValueError(f"unknown term rule preset {preset!r} "
                          f"(have: {', '.join(PRESETS)})")
     if preset == "anything":
-        return [{"always": True}]
+        return [dict(_PRIORITY_COND), {"always": True}]
     if preset == "priority_only":
-        return [{"priority": True}]
+        return [dict(_PRIORITY_COND)]
     remote = bool((location_cfg or {}).get("remote_counts", True))
     return [
-        {"priority": True},
+        dict(_PRIORITY_COND),
         {"company_in_file": TOP_COMPANIES},
         {"company_in_file": ATLANTA_COMPANIES},
         {"location_within": {"center": "Atlanta, GA", "radius_miles": 35}},
@@ -343,8 +349,15 @@ class UserFilter:
             self.rules: list[dict] = rules_from_presets(
                 term_rules, self.terms_order, cfg.get("location"))
         else:
+            # Legacy hand-written rules predate priority companies: give
+            # each rule the same leading priority condition the presets
+            # carry, so both forms accept them through one mechanism (and
+            # the reasons trail reads "company:priority" either way).
             self.legacy_rules = True
-            self.rules = cfg.get("rules", [])
+            self.rules = [
+                {**rule, "accept_if_any": [dict(_PRIORITY_COND),
+                                           *rule.get("accept_if_any", [])]}
+                for rule in cfg.get("rules", []) if isinstance(rule, dict)]
         # Priority companies: accepted for any wanted term regardless of the
         # term's rule, tagged and delivered ahead of everything else. The
         # yaml/prefs list plus whatever main.py adds from the tracker, each
@@ -541,10 +554,6 @@ class UserFilter:
 
     def _rules_verdict(self, job: Job, matched_terms: set[str],
                        llm_facts: dict | None) -> Verdict:
-        # A priority company is wanted whatever the term's rule says (this
-        # also covers a legacy `rules:` block that predates the concept).
-        if self.is_priority(job.company):
-            return _accept("company:priority")
         applicable_conds: list[dict] = []
         for rule in self.rules:
             when_terms = set(rule.get("when", {}).get("term", []))

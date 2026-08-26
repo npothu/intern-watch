@@ -23,9 +23,12 @@ import { saveWatchSettings } from "@/app/(app)/settings/watch/watch-actions";
 import {
   SEASONS,
   dayFromIso,
+  isoOf,
+  rollingTerms,
   shortDate,
   termRows,
   termSeason,
+  type Day,
   type Season,
   type TermRow,
 } from "@/lib/terms";
@@ -119,15 +122,16 @@ function initialForm(saved: WatchPrefs | null, report: WatchReport | null): Form
   return { ...DEFAULTS, ...fromReport(report), ...fromSaved(saved) };
 }
 
-/** What Save sends. Email is omitted while there are no recipients so the
- *  yaml's list stays in force rather than failing validation. */
+/** What Save sends: every block, always. An empty recipients list is a
+ *  valid value meaning "keep the yaml's recipients", so hour and timezone
+ *  edits are never silently dropped with it. */
 function toPayload(form: Form): WatchPrefs {
   return {
     terms: form.terms,
     rules: form.rules,
     priority: form.priority,
     location: form.location,
-    ...(form.email.to.length ? { email: form.email } : {}),
+    email: form.email,
   };
 }
 
@@ -317,17 +321,27 @@ export function WatchSettings({
   }, [rows]);
 
   const toggleTerm = (row: TermRow) => {
-    const { include, exclude } = form.terms;
+    const { include, exclude, leadWeeks, horizonMonths } = form.terms;
     const without = (list: string[]) => list.filter((t) => t !== row.term);
+    // Whether the window would want the term on its own once the pin is
+    // gone: decides if "turn off" means unpin or exclude, and "turn on"
+    // means unexclude or include.
+    const inWindow = rollingTerms(today, leadWeeks, horizonMonths).includes(row.term);
     switch (row.status) {
       case "auto":
         patch("terms", { exclude: [...exclude, row.term] });
         break;
       case "excluded":
-        patch("terms", { exclude: without(exclude) });
+        patch("terms", {
+          exclude: without(exclude),
+          include: inWindow ? include : [...include, row.term],
+        });
         break;
       case "included":
-        patch("terms", { include: without(include) });
+        patch("terms", {
+          include: without(include),
+          exclude: inWindow ? [...exclude, row.term] : exclude,
+        });
         break;
       default: // past | beyond
         patch("terms", { include: [...include, row.term] });
@@ -341,7 +355,11 @@ export function WatchSettings({
         toast.error(res.error);
         return;
       }
-      setBaseline(form);
+      // Adopt what the store actually kept (trimmed, de-duplicated, hours
+      // sorted) so the form and its baseline never disagree with it.
+      const stored = { ...DEFAULTS, ...fromReport(report), ...fromSaved(res.watch) };
+      setBaseline(stored);
+      setForm(stored);
       toast.success("Saved. The watcher picks it up on its next run.");
       router.refresh();
     });
@@ -634,7 +652,8 @@ export function WatchSettings({
           />
           {form.email.to.length === 0 && (
             <Hint>
-              No recipients on record yet: the yaml&apos;s list stays in force until you add one here.
+              No recipients here, so the yaml&apos;s list stays in force. The digest time and timezone
+              above still apply.
             </Hint>
           )}
         </SettingsRow>
@@ -729,8 +748,8 @@ function SeasonRule({
   );
 }
 
-function termMeta(row: TermRow, today: ReturnType<typeof dayFromIso>): string {
-  const started = row.start <= isoToday(today);
+function termMeta(row: TermRow, today: Day): string {
+  const started = row.start <= isoOf(today);
   const start = `${started ? "started" : "starts"} ${shortDate(row.start, today)}`;
   switch (row.status) {
     case "past":
@@ -744,10 +763,6 @@ function termMeta(row: TermRow, today: ReturnType<typeof dayFromIso>): string {
     case "excluded":
       return `${start} · excluded`;
   }
-}
-
-function isoToday(t: ReturnType<typeof dayFromIso>): string {
-  return `${t.y}-${String(t.m).padStart(2, "0")}-${String(t.d).padStart(2, "0")}`;
 }
 
 function hourLabel(h: number): string {

@@ -10,6 +10,15 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { isProvider, OPERATOR_MODEL, OPERATOR_PROVIDER } from "./llm_providers";
 import { normalizeWatch, watchValidator } from "./watch_schema";
+import type { QueryCtx } from "./_generated/server";
+
+/** The user's settings row, or null. Every function here starts with it. */
+async function rowFor(ctx: QueryCtx, user: string) {
+  return ctx.db
+    .query("settings")
+    .withIndex("by_user", (q) => q.eq("user", user))
+    .first();
+}
 
 /**
  * Operator-key resume builds allowed per user per day.
@@ -95,10 +104,7 @@ export const getWatch = query({
   args: { user: v.string(), secret: v.string() },
   handler: async (ctx, { user, secret }) => {
     assertSecret(secret);
-    const row = await ctx.db
-      .query("settings")
-      .withIndex("by_user", (q) => q.eq("user", user))
-      .first();
+    const row = await rowFor(ctx, user);
     return {
       watch: row?.watch ?? null,
       updatedAt: row?.watchUpdatedAt ?? null,
@@ -167,10 +173,7 @@ export const setWatch = mutation({
     assertSecret(secret);
     const clean = normalizeWatch(watch);
     const now = Date.now();
-    const row = await ctx.db
-      .query("settings")
-      .withIndex("by_user", (q) => q.eq("user", user))
-      .first();
+    const row = await rowFor(ctx, user);
     if (row) {
       await ctx.db.patch(row._id, { watch: clean, watchUpdatedAt: now, updatedAt: now });
     } else {
@@ -189,10 +192,7 @@ export const putWatchReport = mutation({
   args: { user: v.string(), report: v.any(), secret: v.string() },
   handler: async (ctx, { user, report, secret }) => {
     assertSecret(secret);
-    const row = await ctx.db
-      .query("settings")
-      .withIndex("by_user", (q) => q.eq("user", user))
-      .first();
+    const row = await rowFor(ctx, user);
     if (row) {
       await ctx.db.patch(row._id, { watchReport: report });
     } else {

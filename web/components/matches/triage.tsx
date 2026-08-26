@@ -79,12 +79,14 @@ import { useRouter } from "next/navigation";
 import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import type { TriageRow } from "@/app/(app)/page";
+import { sortTerms } from "@/lib/terms";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
 
 /** The status filter, shared with the toolbar's select. */
 type Filter = StatusFilter;
 
-const TERM_ORDER = ["Fall 2026", "Spring 2027", "Summer 2027"];
+// Terms order chronologically (lib/terms sortTerms); the watcher's wanted set
+// is rolling now, so nothing here names a year.
 const UNKNOWN_TERM = "Unknown term";
 
 /** The term-pill value meaning "no term filter". */
@@ -187,22 +189,26 @@ function groupByTerm(rows: TriageRow[]): { term: string; rows: TriageRow[] }[] {
     groups.get(t)!.push(r);
   }
   for (const arr of groups.values()) {
-    // Priority rows pin to the top of their term; the rest stay newest-first.
+    // Same tiers as the email digest (priority, then top, then the rest);
+    // within a tier newest-first, then by company.
     arr.sort(
       (a, b) =>
-        Number(Boolean(b.priority)) - Number(Boolean(a.priority)) ||
+        tierOf(a) - tierOf(b) ||
         (b.added || "").localeCompare(a.added || "") ||
         a.company.localeCompare(b.company)
     );
   }
   const order = [
-    ...TERM_ORDER.filter((t) => groups.has(t)),
-    ...[...groups.keys()]
-      .filter((t) => !TERM_ORDER.includes(t) && t !== UNKNOWN_TERM)
-      .sort(),
+    ...sortTerms([...groups.keys()].filter((t) => t !== UNKNOWN_TERM)),
     ...(groups.has(UNKNOWN_TERM) ? [UNKNOWN_TERM] : []),
   ];
   return order.map((t) => ({ term: t, rows: groups.get(t)! }));
+}
+
+/** 0 priority, 1 top company, 2 everything else - mirrors notify._rank_tag. */
+function tierOf(row: TriageRow): number {
+  if (row.priority) return 0;
+  return /^\[TOP/.test(row.tag) ? 1 : 2;
 }
 
 function useIsMobile(): boolean {
@@ -567,18 +573,14 @@ export function Triage({
   // it would show and the pill row itself never changes shape as you click it.
   const allGroups = useMemo(() => groupByTerm(visible), [visible]);
 
-  /* Term pills. The known terms are always offered (they are the terms the
-     watcher is configured to want, so an empty one is information); anything
-     else the data happens to carry - a stray term, or the unknown bucket -
-     only earns a pill when rows actually sit in it. */
+  /* Term pills: one per term the data carries, in the groups' chronological
+     order (the unknown bucket last). The wanted set rolls with the calendar,
+     so pills come from the rows rather than a configured list. */
   const termPills = useMemo<PillOption[]>(() => {
     const counts = new Map(allGroups.map((g) => [g.term, g.rows.length]));
-    const extras = allGroups
-      .map((g) => g.term)
-      .filter((t) => !TERM_ORDER.includes(t));
     return [
       { key: ALL_TERMS, label: "All", count: visible.length },
-      ...[...TERM_ORDER, ...extras].map((t) => ({
+      ...allGroups.map((g) => g.term).map((t) => ({
         key: t,
         label: termLabel(t),
         count: counts.get(t) ?? 0,

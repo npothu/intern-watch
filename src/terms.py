@@ -111,13 +111,29 @@ class TermRow:
     drops_on: str              # ISO date the window stops wanting it
 
 
+def canonical(term: str) -> str | None:
+    """'  summer 2027 ' -> 'Summer 2027', the spelling generated terms and
+    job.terms use; None when it isn't a term."""
+    parsed = parse_term(term)
+    return f"{parsed[0]} {parsed[1]}" if parsed else None
+
+
+def canonical_list(terms: list[str] | None) -> list[str]:
+    """Canonical spellings, unparseable entries dropped, order kept, no dups."""
+    out: list[str] = []
+    for raw in terms or []:
+        c = canonical(str(raw))
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
 def _config(cfg_terms: dict | None) -> tuple[int, int, list[str], list[str]]:
     cfg_terms = cfg_terms or {}
     lead = int(cfg_terms.get("lead_weeks", DEFAULT_LEAD_WEEKS))
     horizon = int(cfg_terms.get("horizon_months", DEFAULT_HORIZON_MONTHS))
-    include = [t for t in cfg_terms.get("include") or [] if parse_term(t)]
-    exclude = [t for t in cfg_terms.get("exclude") or [] if parse_term(t)]
-    return lead, horizon, include, exclude
+    return (lead, horizon, canonical_list(cfg_terms.get("include")),
+            canonical_list(cfg_terms.get("exclude")))
 
 
 def term_rows(cfg_terms: dict | None, today: dt.date) -> list[TermRow]:
@@ -165,7 +181,12 @@ def wanted_terms(cfg: dict, today: dt.date) -> list[str]:
     cfg_terms = cfg.get("terms")
     if isinstance(cfg_terms, dict) and cfg_terms.get("rolling", True):
         return [r.term for r in term_rows(cfg_terms, today) if r.wanted]
-    return sort_terms([t for t in cfg.get("terms_wanted") or [] if t])
+    # Legacy list: canonical spellings where they parse, so "fall 2026"
+    # still meets a job tagged "Fall 2026"; anything else passes through
+    # untouched (a user may list a term shape this module doesn't know).
+    legacy = [canonical(str(t)) or str(t)
+              for t in cfg.get("terms_wanted") or [] if t]
+    return sort_terms(list(dict.fromkeys(legacy)))
 
 
 def rows_as_dicts(rows: list[TermRow]) -> list[dict]:

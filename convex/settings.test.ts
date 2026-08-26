@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import * as settings from "./settings";
-import { normalizeWatch, type WatchPrefs } from "./watch_schema";
+import { normalizeWatch, type WatchPrefs } from "./watch_types";
 
 // Settings > Watch: the object the page saves, the report the watcher
 // pushes back, and the normalization between them. The resume-LLM half of
@@ -58,9 +58,12 @@ describe("normalizeWatch", () => {
     expect(() => normalizeWatch({ email: { sendAtLocal: [8], timezone: "UTC", to: ["nope"] } })).toThrow(
       /not an email address/,
     );
-    expect(() => normalizeWatch({ email: { sendAtLocal: [8], timezone: "UTC", to: [] } })).toThrow(
-      /at least one recipient/,
-    );
+  });
+
+  test("no recipients is allowed: it means keep the yaml's list", () => {
+    expect(normalizeWatch({ email: { sendAtLocal: [8], timezone: "UTC", to: [] } })).toEqual({
+      email: { sendAtLocal: [8], timezone: "UTC", to: [] },
+    });
   });
 
   test("an absent block stays absent", () => {

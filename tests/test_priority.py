@@ -56,7 +56,7 @@ def _j(**kw):
 # ------------------------------------------------------------ rule engine
 
 def test_presets_expand_to_conditions():
-    assert preset_conds("anything") == [{"always": True}]
+    assert preset_conds("anything") == [{"priority": True}, {"always": True}]
     assert preset_conds("priority_only") == [{"priority": True}]
     full = preset_conds("top_atl_remote", {"remote_counts": True})
     assert full[0] == {"priority": True}
@@ -70,8 +70,9 @@ def test_presets_expand_to_conditions():
 def test_rules_from_presets_one_rule_per_wanted_term():
     rules = rules_from_presets({"Summer": "anything"}, TERMS)
     assert [r["when"]["term"] for r in rules] == [[t] for t in TERMS]
-    # a season without a preset falls back to the default
-    assert rules[0]["accept_if_any"] == [{"always": True}]
+    # a season without a preset falls back to the safe side: priority only
+    assert rules[0]["accept_if_any"] == [{"priority": True}]
+    assert rules[1]["accept_if_any"] == [{"priority": True}, {"always": True}]
 
 
 def test_rolling_terms_and_presets_drive_the_verdict():
@@ -121,6 +122,7 @@ def test_priority_applies_to_legacy_rules_too():
            "priority": {"companies": ["Amazon"]}}
     uf = UserFilter(cfg, ROOT, today=TODAY)
     assert uf.legacy_rules
+    assert uf.rules[0]["accept_if_any"][0] == {"priority": True}
     assert uf.evaluate(_j(company="AWS", terms=["Spring 2027"]),
                        today=TODAY).reasons == ["company:priority"]
     assert uf.evaluate(_j(company="Zillow", terms=["Spring 2027"]),
@@ -296,7 +298,8 @@ def test_store_prefs_overlay_and_report(monkeypatch, tmp_path):
     assert not st.was_notified(state, "url:https://x.com/1", "example")
     user, report = store.watch_reports[-1]
     assert user == "example"
-    assert report["rules"] == {"legacy": False, "Summer": "priority_only"}
+    assert report["rules"] == {"legacy": False, "Spring": "priority_only",
+                               "Summer": "priority_only", "Fall": "priority_only"}
     assert [r["term"] for r in report["terms"]["rows"] if r["wanted"]] == TERMS
     assert report["priority"]["companies"] == ["Company2"]
 
@@ -344,3 +347,86 @@ def test_config_check_warns_when_both_forms_present():
     assert rep.ok
     assert "terms_wanted is ignored" in rep.render()
     assert "rules is ignored" in rep.render()
+
+
+# ------------------------------------------- alerts are for this run only
+
+def test_failed_alert_is_not_retried_on_the_next_run(monkeypatch, tmp_path):
+    sources, adapters = _sources(_job(1))
+    _wire(monkeypatch, sources, adapters, [_priority_user()])
+    sent = _recorder(monkeypatch, fail_subject_prefix="intern-watch: Company1")
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    pre_now = dt.datetime(2026, 6, 12, 1, 5, tzinfo=dt.UTC)
+    st.touch(pre, "jr:preexisting", ["ok-src"], pre_now.date())
+    st.set_last_email(pre, "example", pre_now)  # 00:00 slot already served
+    st.save_state(pre, state_file)
+
+    _freeze_clock(monkeypatch, now=dt.datetime(2026, 6, 12, 3, 5, tzinfo=dt.UTC))
+    assert main.main(["--state-file", str(state_file)]) == 0
+    assert len(sent) == 1                      # the alert, which failed
+    state = st.load_state(state_file)
+    assert [i["key"] for i in st.outbox_items(state, "example")] == [_key(1)]
+
+    # Two hours later the job is not new any more: no second alert, the
+    # match simply waits for the digest.
+    _freeze_clock(monkeypatch, now=dt.datetime(2026, 6, 12, 5, 5, tzinfo=dt.UTC))
+    assert main.main(["--state-file", str(state_file)]) == 0
+    assert len(sent) == 1
+    assert [i["key"] for i in st.outbox_items(state, "example")] == [_key(1)]
+
+
+def test_turning_alerts_on_does_not_fire_for_queued_matches(monkeypatch, tmp_path):
+    sources, adapters = _sources(_job(1))
+    cfg = _priority_user()
+    _wire(monkeypatch, sources, adapters, [cfg])
+    sent = _recorder(monkeypatch)
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    pre_now = dt.datetime(2026, 6, 12, 1, 5, tzinfo=dt.UTC)
+    st.touch(pre, "jr:preexisting", ["ok-src"], pre_now.date())
+    st.touch(pre, _key(1), ["ok-src"], pre_now.date())  # seen earlier...
+    st.outbox_add(pre, "example", {"key": _key(1), "company": "Company1",
+                                   "title": "t", "location": "l", "url": "u",
+                                   "tag": "[PRIORITY]", "term": "Summer 2027",
+                                   "priority": True})  # ...and queued
+    st.set_last_email(pre, "example", pre_now)
+    st.save_state(pre, state_file)
+    _freeze_clock(monkeypatch, now=dt.datetime(2026, 6, 12, 3, 5, tzinfo=dt.UTC))
+    assert main.main(["--state-file", str(state_file)]) == 0
+    assert sent == []
+
+
+# ------------------------------------------------------------- dashboard
+
+def test_dashboard_orders_priority_then_top_then_rest():
+    from src.dashboard import build_body
+    items = [
+        {"key": "k1", "company": "Zed", "title": "t", "location": "l",
+         "url": "https://x/1", "tag": "", "term": "Spring 2027", "added": "2026-08-26"},
+        {"key": "k2", "company": "Yak", "title": "t", "location": "l",
+         "url": "https://x/2", "tag": "[TOP]", "term": "Spring 2027", "added": "2026-08-20"},
+        {"key": "k3", "company": "Xor", "title": "t", "location": "l",
+         "url": "https://x/3", "tag": "[PRIORITY]", "term": "Spring 2027",
+         "added": "2026-08-01", "priority": True},
+        {"key": "k4", "company": "Aardvark", "title": "t", "location": "l",
+         "url": "https://x/4", "tag": "", "term": "Spring 2027", "added": "2026-08-26"},
+    ]
+    body = build_body(items, TERMS, NOW)
+    assert body.index("Xor") < body.index("Yak") < body.index("Aardvark") \
+        < body.index("Zed")
+
+
+def test_report_resolves_every_season():
+    from src import prefs
+    rep = prefs.watch_report(_cfg(term_rules={"Summer": "anything"}), TODAY, NOW,
+                             {}, legacy_rules=False)
+    assert rep["rules"] == {"legacy": False, "Spring": "priority_only",
+                            "Summer": "anything", "Fall": "priority_only"}
+
+
+def test_elimination_still_beats_priority():
+    uf = UserFilter(_cfg(eliminate={"grad_only": True}), ROOT, today=TODAY)
+    v = uf.evaluate(_j(company="Microsoft", title="Software Intern (PhD)",
+                       terms=["Summer 2027"]), today=TODAY)
+    assert v.status == "reject" and v.reasons == ["eliminated:grad-only-title"]

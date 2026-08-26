@@ -219,7 +219,7 @@ def _validate_watch_blocks(user: dict, rep: Report) -> None:
     writes, so a malformed value here is the same mistake the overlay in
     src/prefs.py ignores silently."""
     from . import terms as terms_mod
-    from .filters import PRESETS
+    from .filters import DEFAULT_PRESET, PRESETS
 
     t = user.get("terms")
     if t is not None:
@@ -256,6 +256,10 @@ def _validate_watch_blocks(user: dict, rep: Report) -> None:
                 if preset not in PRESETS:
                     rep.error(f"term_rules.{season} = {preset!r} not in "
                               f"{list(PRESETS)}")
+            missing = [s for s in terms_mod.SEASONS if s not in tr]
+            if missing:
+                rep.warn(f"term_rules has no preset for {', '.join(missing)} "
+                         f"-- those seasons fall back to {DEFAULT_PRESET!r}")
             if user.get("rules"):
                 rep.warn("both term_rules: and rules: set -- term_rules "
                          "wins, rules is ignored")
