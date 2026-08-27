@@ -95,7 +95,7 @@ export const operatorCapReached = internalQuery({
 });
 
 /**
- * The Settings > Watch page's read: what the user saved (`watch`, null until
+ * The Settings > Preferences page's read: what the user saved (`watch`, null until
  * the first save) and what the watcher last resolved (`report`, null until
  * its first run against this deployment). The Python watcher calls the same
  * query at the start of every run and keeps only `watch`.
@@ -162,7 +162,7 @@ export const setResumeLlm = mutation({
 });
 
 /**
- * Save the whole Settings > Watch object. The page always submits every
+ * Save the whole Settings > Preferences object. The page always submits every
  * block it renders, so this is a replace, not a patch: a block the page
  * chose not to send (none today) would fall back to the yaml. Throws with a
  * human-readable message on a value the page should have refused.

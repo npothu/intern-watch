@@ -37,7 +37,7 @@ one YAML (see the README's fork checklist).
    sorted first everywhere, and with `email_immediately` emailed on the run
    that found it (`main._send_priority_alert`; a failed send leaves it in
    the outbox for the digest).
-   The hosted app's Settings > Watch page stores these knobs in the Convex
+   The hosted app's Settings > Preferences page stores these knobs in the Convex
    `settings` row; `src/prefs.py` overlays that object on the yaml at the
    start of `process_user` (store wins) and pushes the resolved config back
    (`put_watch_report`). With STORE=github the yaml is the whole config.

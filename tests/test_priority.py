@@ -430,3 +430,38 @@ def test_elimination_still_beats_priority():
     v = uf.evaluate(_j(company="Microsoft", title="Software Intern (PhD)",
                        terms=["Summer 2027"]), today=TODAY)
     assert v.status == "reject" and v.reasons == ["eliminated:grad-only-title"]
+
+
+def test_report_lists_resolved_priority_names():
+    from src import prefs
+    rep = prefs.watch_report(_cfg(), TODAY, NOW, {}, legacy_rules=False,
+                             resolved={"meta", "facebook", "microsoft"})
+    assert rep["priority"]["resolved"] == ["facebook", "meta", "microsoft"]
+
+
+def test_earlier_matches_are_restamped_when_a_company_becomes_priority(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "send_email", lambda *a, **k: True)
+    monkeypatch.setenv("SMTP_U", "u@example.com")
+    monkeypatch.setenv("SMTP_P", "pass")
+    monkeypatch.setattr(main, "DATA_ROOT", tmp_path)
+    cfg = _user_cfg(terms=["Summer 2027"])
+    cfg["dashboard"] = False
+    state = st.empty_state()
+    # Delivered last week, before Company1 was on anyone's list.
+    st.matches_add(state, "example", {"key": "url:https://x.com/1",
+                                      "company": "Company1, Inc.", "title": "t",
+                                      "location": "l", "url": "u", "tag": "",
+                                      "term": "Summer 2027", "added": "2026-08-19"})
+    st.matches_add(state, "example", {"key": "url:https://x.com/9",
+                                      "company": "Other", "title": "t",
+                                      "location": "l", "url": "u", "tag": "[TOP]",
+                                      "term": "Summer 2027", "added": "2026-08-19"})
+    store = FakeStore()
+    store.watch_prefs["example"] = {"priority": {"companies": ["Company1"]}}
+    main.process_user(cfg, [], state, dry_run=False, now=NOW, store=store)
+    items = {i["company"]: i for i in st.matches_items(state, "example")}
+    assert items["Company1, Inc."]["priority"] is True
+    assert items["Company1, Inc."]["tag"] == "[PRIORITY]"
+    assert "priority" not in items["Other"]
+    assert store.watch_reports[-1][1]["priority"]["resolved"] == ["company1"]

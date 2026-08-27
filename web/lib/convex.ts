@@ -819,6 +819,9 @@ export type WatchReport = {
     companies: string[];
     from_tracker: boolean;
     tracker_companies: string[];
+    /** Every normalized name the watcher treated as priority last run:
+     *  the list, its alias groups, and tracker employers. */
+    resolved?: string[];
     email_immediately: boolean;
     subject_names: boolean;
   };

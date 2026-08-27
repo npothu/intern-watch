@@ -5,7 +5,7 @@ import { resolveTrackerUser } from "@/lib/user";
 import { setWatchSettings, type WatchPrefs } from "@/lib/convex";
 
 /**
- * Settings > Watch server action. The tracker user is re-resolved
+ * Settings > Preferences server action. The tracker user is re-resolved
  * server-side on every call so a signed-in user can only ever write their
  * own preferences. Validation proper lives in the Convex mutation
  * (convex/watch_schema.ts normalizeWatch); this only makes sure a
@@ -16,7 +16,7 @@ export type SaveWatchResult =
   | { ok: true; watch: WatchPrefs }
   | { ok: false; error: string };
 
-export async function saveWatchSettings(watch: WatchPrefs): Promise<SaveWatchResult> {
+export async function savePreferences(watch: WatchPrefs): Promise<SaveWatchResult> {
   const user = await resolveTrackerUser();
   if (!user) {
     return { ok: false, error: "Not signed in, or this account isn't provisioned." };
@@ -26,7 +26,7 @@ export async function saveWatchSettings(watch: WatchPrefs): Promise<SaveWatchRes
   }
   try {
     const saved = await setWatchSettings(user, watch);
-    revalidatePath("/settings/watch");
+    revalidatePath("/settings/preferences");
     return { ok: true, watch: saved };
   } catch (err) {
     // Convex wraps thrown Errors as "Uncaught Error: <message>" inside the

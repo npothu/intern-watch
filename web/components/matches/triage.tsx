@@ -80,6 +80,7 @@ import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import type { TriageRow } from "@/app/(app)/page";
 import { sortTerms } from "@/lib/terms";
+import { isKnownTerm } from "@/lib/preferences";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
 
 /** The status filter, shared with the toolbar's select. */
@@ -383,8 +384,16 @@ export function Triage({
   rows: initialRows,
   demo = false,
   initialFilter,
+  wantedTerms = null,
 }: {
   rows: TriageRow[];
+  /**
+   * Terms Settings > Preferences wants today. Rows in a known term outside
+   * this set (Fall 2026 after it started, a term switched off) stay out of
+   * the list, the pills and the counts, behind one "show" link. Null means
+   * the preferences are unknown and nothing is hidden.
+   */
+  wantedTerms?: string[] | null;
   /**
    * Motion lab mode: keep every interaction local instead of persisting it, so
    * the animations can be exercised over and over against fixtures without
@@ -417,6 +426,24 @@ export function Triage({
 
   const [filter, setFilter] = useState<Filter>(() =>
     isFilter(initialFilter) ? initialFilter : "all"
+  );
+  const [showUnwatched, setShowUnwatched] = useState(false);
+  /* Rows in terms the preferences don't want, and the rows the surface
+     works from. Unwatched rows are set aside before every count and filter,
+     so "11 matches" and the pills describe what is actually on screen. */
+  const { scoped, unwatched } = useMemo(() => {
+    if (!wantedTerms || showUnwatched) return { scoped: rows, unwatched: [] as TriageRow[] };
+    const wanted = new Set(wantedTerms);
+    const out: TriageRow[] = [];
+    const aside: TriageRow[] = [];
+    for (const r of rows) {
+      (r.term && isKnownTerm(r.term) && !wanted.has(r.term) ? aside : out).push(r);
+    }
+    return { scoped: out, unwatched: aside };
+  }, [rows, wantedTerms, showUnwatched]);
+  const unwatchedTerms = useMemo(
+    () => sortTerms([...new Set(unwatched.filter((r) => !r.dismissed).map((r) => r.term))]),
+    [unwatched]
   );
   const [termFilter, setTermFilter] = useState<string>(ALL_TERMS);
   const [query, setQuery] = useState("");
@@ -601,8 +628,8 @@ export function Triage({
   );
 
   const visible = useMemo(
-    () => visibleRows(rows, filter, query),
-    [rows, filter, query]
+    () => visibleRows(scoped, filter, query),
+    [scoped, filter, query]
   );
   // Grouped before the term pill is applied, so each pill can carry the count
   // it would show and the pill row itself never changes shape as you click it.
@@ -652,16 +679,17 @@ export function Triage({
   const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
 
   const stats = useMemo(() => {
-    const active = rows.filter((r) => !r.dismissed);
+    const active = scoped.filter((r) => !r.dismissed);
     return {
       matches: active.length,
       priority: active.filter((r) => r.priority).length,
       applied: active.filter((r) => r.applied).length,
       saved: active.filter((r) => r.saved).length,
       resumes: active.filter((r) => r.resumeUrl).length,
-      hidden: rows.length - active.length,
+      hidden: scoped.length - active.length,
+      unwatched: unwatched.filter((r) => !r.dismissed).length,
     };
-  }, [rows]);
+  }, [scoped, unwatched]);
 
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
@@ -1099,10 +1127,10 @@ export function Triage({
      it - jumping to a row the current filters hide clears them first. */
   const paletteJumps = useMemo(
     () =>
-      rows
+      scoped
         .filter((r) => !r.dismissed)
         .map((r) => ({ id: r.short, title: r.company, subtitle: r.title })),
-    [rows]
+    [scoped]
   );
 
   const paletteActions: PaletteAction[] = [
@@ -1374,6 +1402,39 @@ export function Triage({
             );
           })}
         </div>
+      )}
+
+      {/* Terms the preferences no longer want (a season that started, or one
+          switched off) keep their rows out of the way, behind one link, so
+          the list and its counts describe only what is being watched. */}
+      {(stats.unwatched > 0 || showUnwatched) && wantedTerms && (
+        <p className="mt-4 text-[12px] text-ink-2">
+          {showUnwatched ? (
+            <>
+              Showing matches from terms you are not watching.{" "}
+              <button
+                type="button"
+                onClick={() => setShowUnwatched(false)}
+                className="font-medium text-accent underline decoration-dashed underline-offset-2"
+              >
+                hide them
+              </button>
+            </>
+          ) : (
+            <>
+              {stats.unwatched} match{stats.unwatched === 1 ? "" : "es"} in{" "}
+              {unwatchedTerms.length === 1 ? "a term" : "terms"} you are not watching (
+              {unwatchedTerms.map(termLabel).join(", ")}).{" "}
+              <button
+                type="button"
+                onClick={() => setShowUnwatched(true)}
+                className="font-medium text-accent underline decoration-dashed underline-offset-2"
+              >
+                show
+              </button>
+            </>
+          )}
+        </p>
       )}
 
       <CommandPalette

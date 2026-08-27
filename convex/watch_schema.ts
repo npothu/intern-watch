@@ -1,7 +1,7 @@
 import { v, type Infer } from "convex/values";
 import type { WatchPrefs } from "./watch_types";
 
-// The Convex validator for the Settings > Watch object. The TYPE lives in
+// The Convex validator for the Settings > Preferences object. The TYPE lives in
 // watch_types.ts (no imports, so the web build can type-check it without
 // `convex` installed); this file must describe exactly the same shape, and
 // the two assignments at the bottom make tsc fail when they drift.

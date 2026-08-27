@@ -1,10 +1,14 @@
 import { resolveTrackerUser } from "@/lib/user";
 import {
   getTrackerUserData,
+  getWatchSettings,
   type MatchItem,
   type ResumeMeta,
 } from "@/lib/convex";
 import { shortKey } from "@/lib/shortkey";
+import { normCompany } from "@/lib/company";
+import { resolvePreferences } from "@/lib/preferences";
+import { dayFromIso } from "@/lib/terms";
 import { buildTrackerRows } from "@/components/tracker/build-rows";
 import { AppViews } from "@/components/app-views";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
@@ -53,7 +57,15 @@ export default async function AppPage() {
   const user = await resolveTrackerUser();
   if (!user) return null;
 
-  const data = await getTrackerUserData(user);
+  // Preferences ride along so the surface reflects them on this render:
+  // priority employers pin their rows now, and terms switched off stay out
+  // of the way. A failed read degrades to "no preferences known".
+  const [data, settings] = await Promise.all([
+    getTrackerUserData(user),
+    getWatchSettings(user).catch(() => null),
+  ]);
+  const todayIso = new Date().toISOString().slice(0, 10); // request time; force-dynamic
+  const prefs = resolvePreferences(settings, dayFromIso(todayIso));
 
   const ticksByShort = new Map(data.ticks.map((t) => [t.short, t]));
 
@@ -70,7 +82,8 @@ export default async function AppPage() {
       term: str(m.term),
       added: str(m.added),
       tag: str(m.tag),
-      priority: m.priority === true,
+      // Stamped by the watcher at match time, or on the current list now.
+      priority: m.priority === true || prefs.priorityNames.has(normCompany(str(m.company))),
       salary: str(m.salary),
       url: str(m.url),
       // Only an actually-resolved external URL counts as "built"; a
@@ -91,5 +104,11 @@ export default async function AppPage() {
     data.resumes
   );
 
-  return <AppViews matches={matches} applications={applications} />;
+  return (
+    <AppViews
+      matches={matches}
+      applications={applications}
+      wantedTerms={prefs.wantedTerms}
+    />
+  );
 }
