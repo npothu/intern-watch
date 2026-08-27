@@ -1,4 +1,4 @@
-// The Settings > Watch object: the handful of watcher preferences a person
+// The Settings > Preferences object: the handful of watcher preferences a person
 // changes a few times a year. Stored on the per-user `settings` row and
 // overlaid on the user yaml by the Python watcher at the start of every run
 // (src/prefs.py, which documents the same shape in snake_case). Every block

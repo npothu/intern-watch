@@ -2,14 +2,16 @@ import { resolveTrackerUser } from "@/lib/user";
 import { getHealth, getWatchSettings } from "@/lib/convex";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
-import { WatchSettings } from "@/components/settings/watch-settings";
+import { Preferences } from "@/components/settings/preferences";
 
-export const metadata = { title: "Watch - intern-watch" };
+export const metadata = { title: "Preferences - intern-watch" };
 
 export const dynamic = "force-dynamic";
 
 /**
- * Settings -> Watch: what the watcher looks for and how it tells you.
+ * Settings -> Preferences: what the watcher looks for, how it tells you,
+ * and how the app shows it (the Matches surface hides terms switched off
+ * here and pins the priority companies).
  *
  * Two inputs, both tolerant of failure. The saved preferences and the
  * watcher's last resolved-config report come from one Convex query; the
@@ -17,7 +19,7 @@ export const dynamic = "force-dynamic";
  * failed settings read degrades to an explicit "couldn't load" state rather
  * than a page of defaults that would look like the truth.
  */
-export default async function WatchSettingsPage() {
+export default async function PreferencesPage() {
   const user = await resolveTrackerUser();
   if (!user) return null; // layout already rendered NotProvisioned
   const [settings, health] = await Promise.all([
@@ -38,9 +40,9 @@ export default async function WatchSettingsPage() {
         <h1 className="text-[15px] font-semibold text-ink">Settings</h1>
         <ViewSwitch active={null} />
       </div>
-      <SettingsTabs active="watch" />
+      <SettingsTabs active="preferences" />
       {settings.ok ? (
-        <WatchSettings
+        <Preferences
           savedWatch={settings.watch}
           savedAt={settings.updatedAt}
           report={settings.report}

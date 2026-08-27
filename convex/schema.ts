@@ -311,7 +311,7 @@ export default defineSchema({
   // mirroring the LLM_DAILY_CAP counter on mailAccounts. A user running their
   // own key is never counted here - it is their quota to spend.
   //
-  // `watch` is the Settings > Watch object (convex/watch_schema.ts): the
+  // `watch` is the Settings > Preferences object (convex/watch_schema.ts): the
   // watcher preferences a person edits in the app. The Python watcher
   // overlays it on the user yaml every run and writes `watchReport`, the
   // resolved configuration it actually used (snake_case, Python-owned shape,

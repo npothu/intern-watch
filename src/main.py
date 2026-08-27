@@ -443,6 +443,22 @@ def _prefs_store(user_cfg: dict) -> TrackerStore | None:
         return None
 
 
+def _restamp_priority(state: dict, name: str, uf: UserFilter) -> int:
+    """Mark already-delivered matches whose employer is priority NOW. A
+    company added to the list after a match landed should pin that match
+    too, on the dashboard issue and in the pushed snapshot, not only its
+    future postings. Forward-only: a company removed from the list keeps
+    the stamp it earned when it was on it. Never touches rejections."""
+    n = 0
+    for item in state.get("matches", {}).get(name, []):
+        if item.get("priority") or not uf.is_priority(item.get("company", "")):
+            continue
+        item["priority"] = True
+        item["tag"] = "[PRIORITY]"
+        n += 1
+    return n
+
+
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
                  enricher: _JobrightEnricher | None = None,
@@ -465,6 +481,10 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         log.info("user %s: %d priority compan%s (%d from the tracker)", name,
                  len(uf.priority_names),
                  "y" if len(uf.priority_names) == 1 else "ies", len(tracker))
+        restamped = _restamp_priority(state, name, uf)
+        if restamped:
+            log.info("user %s: %d earlier match(es) now count as priority",
+                     name, restamped)
     llm_cfg = user_cfg.get("llm", {})
     llm_key_env = api_key_env_for(llm_cfg)
     llm_available = uf.llm_enabled and bool(os.environ.get(llm_key_env))
@@ -588,7 +608,8 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     if store is not None and not dry_run:
         # What this run resolved (yaml + prefs), for the settings page.
         store.put_watch_report(name, prefs_mod.watch_report(
-            user_cfg, today, now, tracker, uf.legacy_rules))
+            user_cfg, today, now, tracker, uf.legacy_rules,
+            resolved=uf.priority_names))
 
 
 def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,

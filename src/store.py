@@ -714,7 +714,7 @@ class ConvexStore:
     # -- watch prefs ---------------------------------------------------------
 
     def get_watch_prefs(self, user: str) -> dict | None:
-        """The Settings > Watch object, or None (no row yet, or the read
+        """The Settings > Preferences object, or None (no row yet, or the read
         failed -- logged, since a silent fallback to the yaml would make the
         page's saved values look ignored)."""
         try:

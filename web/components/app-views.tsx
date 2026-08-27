@@ -22,9 +22,12 @@ import type { TrackerRow } from "@/components/tracker/tracker-lib";
 export function AppViews({
   matches,
   applications,
+  wantedTerms,
 }: {
   matches: TriageRow[];
   applications: TrackerRow[];
+  /** Terms the preferences want today; null when unknown (nothing hidden). */
+  wantedTerms: string[] | null;
 }) {
   const { view, filter } = useAppView();
 
@@ -39,5 +42,5 @@ export function AppViews({
     );
   }
 
-  return <Triage rows={matches} initialFilter={filter} />;
+  return <Triage rows={matches} initialFilter={filter} wantedTerms={wantedTerms} />;
 }

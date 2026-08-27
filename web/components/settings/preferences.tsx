@@ -1,7 +1,7 @@
 "use client";
 
-// Settings > Watch: the watcher preferences a person changes a few times a
-// year. One form object mirrors the Convex `watch` shape block for block;
+// Settings > Preferences: what the watcher looks for and how the app shows
+// it, the handful of knobs a person changes a few times a year. One form object mirrors the Convex `watch` shape block for block;
 // Save replaces the whole object (never a field-level patch), and nothing
 // takes effect until the watcher's next run overlays it on the yaml. The
 // sticky bar says exactly that, with the run's ETA, so a save never reads
@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { SettingsRow, SettingsSection } from "@/components/settings/settings-section";
 import type { Preset, WatchPrefs, WatchReport } from "@/lib/convex";
-import { saveWatchSettings } from "@/app/(app)/settings/watch/watch-actions";
+import { savePreferences } from "@/app/(app)/settings/preferences/preferences-actions";
 import {
   SEASONS,
   dayFromIso,
@@ -277,7 +277,7 @@ function Hint({ children }: { children: React.ReactNode }) {
 
 // -- the page body --------------------------------------------------------------
 
-export function WatchSettings({
+export function Preferences({
   savedWatch,
   savedAt,
   report,
@@ -350,7 +350,7 @@ export function WatchSettings({
 
   const save = () => {
     start(async () => {
-      const res = await saveWatchSettings(toPayload(form));
+      const res = await savePreferences(toPayload(form));
       if (!res.ok) {
         toast.error(res.error);
         return;

@@ -4,7 +4,7 @@ The user yaml is operator config (sources, keywords, credentials, the LLM
 block). The handful of preferences a person changes a few times a year -
 which terms, how picky per season, the priority companies, remote, digest
 time and recipients - live in the TrackerStore as one `watch` object the
-Settings > Watch page writes. Each run overlays that object on the yaml
+Settings > Preferences page writes. Each run overlays that object on the yaml
 (store wins) and reports the resolved result back, so the page can show
 what the watcher actually used.
 
@@ -118,8 +118,12 @@ def tracker_companies(user: str, data_root: Path) -> dict[str, str]:
 
 
 def watch_report(cfg: dict, today: dt.date, now: dt.datetime,
-                 tracker: dict[str, str], legacy_rules: bool) -> dict:
-    """The resolved preferences this run used, for the settings page."""
+                 tracker: dict[str, str], legacy_rules: bool,
+                 resolved: set[str] | frozenset[str] = frozenset()) -> dict:
+    """The resolved preferences this run used, for the settings page.
+    `resolved` is every normalized employer name the rule engine treated as
+    priority (the list, its alias groups, the tracker), so the web app can
+    match rows against it without re-deriving aliases."""
     cfg_terms = cfg.get("terms") if isinstance(cfg.get("terms"), dict) else None
     lead = int((cfg_terms or {}).get("lead_weeks", terms.DEFAULT_LEAD_WEEKS))
     horizon = int((cfg_terms or {}).get("horizon_months",
@@ -156,6 +160,7 @@ def watch_report(cfg: dict, today: dt.date, now: dt.datetime,
             "companies": list(pri.get("companies") or []),
             "from_tracker": bool(pri.get("from_tracker", False)),
             "tracker_companies": sorted(tracker.values(), key=str.casefold),
+            "resolved": sorted(resolved),
             "email_immediately": bool(pri.get("email_immediately", False)),
             "subject_names": bool(pri.get("subject_names", True)),
         },

@@ -353,7 +353,7 @@ term filter → company/location rules → LLM for the still-ambiguous survivors
   subject, and with `email_immediately` emailed on the run that found them
   instead of at the next digest slot. Rejected jobs stay final: adding a
   company delivers new postings only.
-- **Settings > Watch** in the hosted web app edits the same knobs (terms
+- **Settings > Preferences** in the hosted web app edits the same knobs (terms
   window, presets, priority list, remote, digest time and recipients) and
   stores them in the Convex `settings` row; each run overlays that object on
   the yaml (store wins) and reports the resolved config back for the page.
