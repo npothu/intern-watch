@@ -22,19 +22,32 @@ export const JD_MAX_CHARS = 20_000; // full JD; tailor excerpts separately
 
 // -- text helpers -----------------------------------------------------------
 
-export function stripJdHtml(s: string): string {
+function decodeEntities(s: string): string {
   return s
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<(br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)>/gi, "\n")
-    .replace(/<li[^>]*>/gi, "\n- ")
-    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&#39;|&apos;/gi, "'")
     .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&"); // last: unlocks double-escaped payloads
+}
+
+export function stripJdHtml(s: string): string {
+  // Entities decode BEFORE tag stripping: Greenhouse's content API returns
+  // entity-ESCAPED HTML, so stripping first would leave literal <p> tags in
+  // the "plain" text (normalize.py strip_html order - keep in lockstep).
+  let t = decodeEntities(s);
+  if (/&(?:#\d+|#x[0-9a-f]+|[a-z]+);/i.test(t)) t = decodeEntities(t);
+  return t
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    // SVG path data reads as coordinate soup once tags are stripped - drop
+    // the whole element (seen on careers.roblox.com).
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<(br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "\n- ")
+    .replace(/<[^>]+>/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
