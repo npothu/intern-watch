@@ -164,3 +164,33 @@ describe("select_projects ordering / cap / pad", () => {
     expect(b.selected).toEqual(a.selected);
   });
 });
+
+describe("generic-skill downweight and priority prior", () => {
+  test("a GENERIC_SKILLS tag hit contributes half of a role-defining hit", () => {
+    const jd = analyze(
+      "Requirements:\nRESTful service experience.\n\nRequirements:\nkernel development experience.",
+    );
+    // identical weights for both skills, one generic and one not
+    expect(jd.weights["rest apis"]).toBe(jd.weights["kernel"]);
+    const generic = proj({ tags: ["rest apis"] });
+    const defining = proj({ tags: ["kernel"] });
+    expect(scoreProject(generic, jd)).toBe(scoreProject(defining, jd) / 2);
+  });
+
+  test("priority scales the score and re-ranks selection", () => {
+    const jd = analyze("Requirements:\nmachine learning, pytorch");
+    const strongTags = { tags: ["machine learning", "pytorch"] };
+    const a = proj({ ...strongTags });
+    const b = proj({ ...strongTags, priority: 0.5 });
+    expect(scoreProject(b, jd)).toBe(scoreProject(a, jd) * 0.5);
+    expect(scoreProject(proj({ ...strongTags, priority: 1 }), jd)).toBe(
+      scoreProject(a, jd),
+    );
+  });
+
+  test("absent priority means 1.0 (backward compatible)", () => {
+    const jd = analyze("python");
+    const e = proj({ tags: ["python"] });
+    expect(scoreProject(e, jd)).toBe(scoreProject({ ...e, priority: 1 }, jd));
+  });
+});

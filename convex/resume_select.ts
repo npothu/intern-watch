@@ -31,6 +31,19 @@ export const W_TEXT = 1; // bullet prose
 export const MAX_PROJECTS = 6;
 export const MIN_PROJECTS = 4;
 
+// High-frequency, low-signal JD skills: nearly every posting mentions them,
+// so a tag hit on one says little about fit. Their contribution is halved so
+// a single generic tag can't buy a slot from a role-defining match.
+export const GENERIC_SKILLS = new Set([
+  "rest apis",
+  "cloud",
+  "automation",
+  "git",
+  "agile",
+  "testing",
+]);
+export const W_GENERIC = 0.5;
+
 // --- JD analysis (port of jd.py) -----------------------------------------
 
 // canonical skill -> alias regexes (matched case-insensitively, on raw text).
@@ -287,7 +300,9 @@ export function searchable(entry: Entry): Searchable {
 /**
  * Weighted overlap score of a project against the JD (select.py.score_project).
  * For each JD skill: W_TAG if it appears in tags, else W_TECH in tech, else
- * W_TEXT in bullet prose; contributes weight * strength.
+ * W_TEXT in bullet prose; contributes weight * strength, halved for
+ * GENERIC_SKILLS. The total is then scaled by the entry's `priority` prior
+ * (default 1.0).
  */
 export function scoreProject(entry: Entry, jd: JDProfile): number {
   const { tags, tech, text } = searchable(entry);
@@ -298,9 +313,9 @@ export function scoreProject(entry: Entry, jd: JDProfile): number {
     else if (matches(skill, tech)) strength = W_TECH;
     else if (matches(skill, text)) strength = W_TEXT;
     else continue;
-    total += weight * strength;
+    total += weight * strength * (GENERIC_SKILLS.has(skill) ? W_GENERIC : 1);
   }
-  return total;
+  return total * (entry.priority ?? 1);
 }
 
 /**

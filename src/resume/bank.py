@@ -81,6 +81,9 @@ class Project(BaseModel):
     date: str
     tags: list[str] = Field(default_factory=list)   # JD concepts this maps to
     bullets: dict[str, list[str]]                   # variant name -> bullets
+    # Quality prior multiplied into the JD-match score (select.score_project).
+    # <1 keeps a weak entry from out-ranking flagships on tag overlap alone.
+    priority: float = 1.0
 
     @model_validator(mode="after")
     def _has_base(self):

@@ -79,6 +79,13 @@ export type Entry = {
   tech?: string[];
   /** Projects: selection hints consumed by resume_select.ts. */
   tags?: string[];
+  /**
+   * Projects: quality prior applied multiplicatively to the JD-match score
+   * (resume_select.ts). Absent means 1.0. Use <1 to keep a weak entry from
+   * out-ranking flagships on tag overlap alone; it still pads when little
+   * else matches.
+   */
+  priority?: number;
   /** Education only. */
   degrees?: Degree[];
   /** Extra dated lines (study abroad, honors). */
