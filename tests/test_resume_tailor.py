@@ -106,3 +106,26 @@ def test_prompt_carries_caps_and_jd(fixtures, monkeypatch):
     assert "UNIQUE_JD_MARKER" in seen["msg"]
     assert "max_chars" in seen["msg"]
     assert any("no rewrite returned" in n for n in plan.notes)
+
+
+def test_widow_check_rejects_widow_introducing_rewrite():
+    from src.resume.select import PlannedEntry
+    from src.resume.tailor import _apply
+    entry = PlannedEntry(name="P", heading_runs=[], date="2026",
+                         bullets=["clean original"], variant="base")
+    notes: list[str] = []
+    _apply(entry, ["rewrite that widows ~w"], notes,
+           widow_check=lambda t: t.endswith("~w"))
+    assert entry.bullets == ["clean original"]
+    assert any("widow-introducing" in n for n in notes)
+
+
+def test_widow_check_allows_rewrite_when_original_widowed():
+    from src.resume.select import PlannedEntry
+    from src.resume.tailor import _apply
+    entry = PlannedEntry(name="P", heading_runs=[], date="2026",
+                         bullets=["original widows ~w"], variant="base")
+    notes: list[str] = []
+    _apply(entry, ["rewrite still widows ~w"], notes,
+           widow_check=lambda t: t.endswith("~w"))
+    assert entry.bullets == ["rewrite still widows ~w"]
