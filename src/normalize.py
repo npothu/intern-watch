@@ -12,7 +12,7 @@ from .models import TermConfidence
 # ------------------------------------------------------------------- html
 
 _SCRIPT_STYLE_RE = re.compile(
-    r"<(script|style|noscript)\b[^>]*>.*?</\1>", re.S | re.I)
+    r"<(script|style|noscript|svg)\b[^>]*>.*?</\1>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 

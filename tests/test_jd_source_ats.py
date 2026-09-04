@@ -69,3 +69,12 @@ def test_llm_extract_gated_and_validated(monkeypatch):
     monkeypatch.setitem(llm._PROVIDERS, "gemini", fake_none)
     assert jd_source._llm_extract(f"<html>{FILLER}</html>",
                                   {"provider": "gemini"}, job) is None
+
+
+def test_strip_html_drops_svg_content():
+    from src.normalize import strip_html
+    html = ('<p>Real JD text here.</p>'
+            '<svg viewBox="0 0 32 32"><path d="M2 21.3 5.1 21.4"/></svg>')
+    got = strip_html(html)
+    assert "Real JD text" in got
+    assert "21.3" not in got

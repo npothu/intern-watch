@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   atsApiUrl,
+  stripJdHtml,
   jdFromAtsPayload,
   embeddedDescription,
   looksLikeJd,
@@ -120,5 +121,23 @@ describe("looksLikeJd guard", () => {
   test("JD markers pass, JS debris fails", () => {
     expect(looksLikeJd("Minimum qualifications: a degree in CS")).toBe(true);
     expect(looksLikeJd('var a = {"b":1}; function (x) => window.self const '.repeat(20))).toBe(false);
+  });
+});
+
+describe("stripJdHtml fidelity", () => {
+  test("entity-escaped Greenhouse content decodes before tag stripping", () => {
+    const escaped = "&lt;p&gt;Minimum qualifications: a degree in CS and Go experience.&lt;/p&gt;";
+    const got = stripJdHtml(escaped);
+    expect(got).not.toContain("<p>");
+    expect(got).toContain("Minimum qualifications");
+  });
+  test("double-escaped payloads decode fully", () => {
+    expect(stripJdHtml("&amp;lt;li&amp;gt;Python&amp;lt;/li&amp;gt;")).toBe("- Python");
+  });
+  test("svg content is dropped, not stripped into coordinate soup", () => {
+    const html = "<p>Real JD text here.</p><svg viewBox=\"0 0 32 32\"><path d=\"M2 21.3 5.1 21.4 9.46 21.78\"/></svg>";
+    const got = stripJdHtml(html);
+    expect(got).toContain("Real JD text");
+    expect(got).not.toContain("21.78");
   });
 });
