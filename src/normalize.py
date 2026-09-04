@@ -26,10 +26,12 @@ def strip_html(text: str) -> str:
     if re.search(r"&(?:#\d+|#x[0-9a-f]+|[a-z]+);", text, re.I):
         text = html_mod.unescape(text)      # double-escaped payloads
     text = _SCRIPT_STYLE_RE.sub(" ", text)
-    # A truncated fetch can cut the page mid-element: an unclosed <svg> (or a
-    # tag cut mid-attribute) never matches the paired/tag regexes, so its
-    # attribute soup would leak into the text (jd_acquire.ts twin).
-    text = re.sub(r"<svg.*$", " ", text, flags=re.I | re.S)
+    # A truncated fetch can cut the page mid-element: an unclosed script/
+    # style/noscript/svg (or a tag cut mid-attribute) never matches the
+    # paired/tag regexes, so its payload leaks into the text
+    # (jd_acquire.ts twin). Unclosed means truncated: drop to end-of-text.
+    text = re.sub(r"<(?:script|style|noscript|svg)\b.*$", " ", text,
+                  flags=re.I | re.S)
     text = _TAG_RE.sub(" ", text)
     text = re.sub(r"<[^>]*$", " ", text)
     return _WS_RE.sub(" ", text).strip()
