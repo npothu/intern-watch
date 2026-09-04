@@ -278,13 +278,20 @@ export const upsertMatchInternal = internalMutation({
     user: v.string(),
     short: v.string(),
     item: v.any(),
+    jobDescription: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, item }) => {
+  handler: async (ctx, { user, short, item, jobDescription }) => {
     const existing = await ctx.db
       .query("matches")
       .withIndex("by_user_short", (q: any) => q.eq("user", user).eq("short", short))
       .first();
-    const row = { user, short, item, pushedAt: Date.now() };
+    const row: Record<string, unknown> = { user, short, item, pushedAt: Date.now() };
+    // A freshly acquired JD wins over an older auto-acquired one, but a
+    // user-pasted override (which also stamps jobDescriptionUpdatedAt via
+    // requestBuild) is never silently replaced by re-ingesting the URL.
+    if (jobDescription && !(existing?.jobDescriptionUpdatedAt && existing?.jobDescription)) {
+      row.jobDescription = jobDescription;
+    }
     if (existing) {
       await ctx.db.patch(existing._id, row);
     } else {

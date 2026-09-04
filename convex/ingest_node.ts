@@ -5,6 +5,7 @@ import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { canonicalUrl, detectAts, extractForAts, inferTerm } from "./ingest_extract";
+import { acquireJdFromUrl, llmExtractJd } from "./jd_acquire";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const FETCH_MAX_BYTES = 200 * 1024; // 200KB cap
@@ -41,12 +42,23 @@ async function fetchWithLimits(url: string): Promise<string> {
   }
 }
 
-// LLM fallback: if GEMINI_API_KEY present, try to enrich via Gemini.
-// For Phase 1 we keep this as a stub that returns null (skip).
-async function llmEnrich(_html: string, _url: string): Promise<null> {
-  if (!process.env.GEMINI_API_KEY) return null;
-  // Placeholder: future phase could call Gemini to extract structured data.
-  return null;
+// Acquire the full JD for an ingested URL so the match row carries its
+// jobDescription from the moment it exists. Tier order (jd_acquire): ATS
+// public APIs by URL shape, then the already-fetched page's embedded
+// structured data, then the plausibility-gated page body, and finally the
+// LLM extraction last resort. Never throws; null means every tier missed.
+async function acquireJdForIngest(
+  canonical: string,
+  pageHtml: string,
+): Promise<string | null> {
+  const { text, html } = await acquireJdFromUrl(canonical, async (u) => {
+    // The posting page itself was already fetched; only ATS API calls hit
+    // the network again.
+    if (u === canonical) return pageHtml;
+    return await fetchWithLimits(u);
+  });
+  if (text) return text;
+  return await llmExtractJd(html ?? pageHtml);
 }
 
 export const runIngest = internalAction({
@@ -72,14 +84,13 @@ export const runIngest = internalAction({
       const ats = detectAts(host);
       let extracted = extractForAts(html, canonical, ats);
 
-      // LLM enrichment if needed and key present (best-effort, never throws outer)
+      // Full-JD acquisition (ATS APIs -> embedded -> body -> LLM last
+      // resort), so the build never has to fetch anything later.
+      let jobDescription: string | null = null;
       try {
-        const llmData = await llmEnrich(html, canonical);
-        if (llmData) {
-          // Future: merge llmData into extracted
-        }
+        jobDescription = await acquireJdForIngest(canonical, html);
       } catch (e) {
-        console.warn("llm enrich failed", e);
+        console.warn("jd acquisition failed", e);
       }
 
       // A row whose title is a placeholder is worse than no row: it looks like
@@ -109,11 +120,13 @@ export const runIngest = internalAction({
         source: "manual",
       };
 
-      // Upsert into matches
+      // Upsert into matches, jobDescription riding along when acquired.
+      // (Built conditionally: an explicit `undefined` is not a Convex value.)
       await ctx.runMutation(internal.ingest.upsertMatchInternal, {
         user,
         short,
         item,
+        ...(jobDescription ? { jobDescription } : {}),
       });
 
       // Patch ingest to done

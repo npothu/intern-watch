@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 INTERN_RE = re.compile(r"\bintern(ship)?s?\b|\bco-?op\b", re.I)
 
-JD_MAX_CHARS = 6000  # requirements sections usually live mid-document
+JD_MAX_CHARS = 20000  # full JD; late qualification sections score double
 
 _API = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",

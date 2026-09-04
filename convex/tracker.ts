@@ -202,13 +202,23 @@ export const pushMatches = mutation({
     // pruneMatches, called once after the chunks with the whole kept set.
     for (const item of items) {
       const short = item.short;
+      // The watcher attaches acquired JD text as a transient `jd` field so
+      // the snapshot item itself stays lean; it lands in the row's
+      // jobDescription column (where requestBuild/getJobDescription read),
+      // and never overwrites a JD that is already on the row - the row's
+      // copy may be a user paste.
+      const jd = typeof item.jd === "string" ? item.jd : null;
+      if ("jd" in item) delete item.jd;
       const existing = await ctx.db
         .query("matches")
         .withIndex("by_user_short", (q) =>
           q.eq("user", user).eq("short", short),
         )
         .first();
-      const row = { user, short, item, pushedAt: Date.now() };
+      const row: Record<string, unknown> = { user, short, item, pushedAt: Date.now() };
+      if (jd && !existing?.jobDescription) {
+        row.jobDescription = jd;
+      }
       if (existing) {
         await ctx.db.patch(existing._id, row);
       } else {
