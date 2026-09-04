@@ -101,3 +101,30 @@ def test_bank_validation_rejects_missing_base():
     from src.resume.bank import Project
     with pytest.raises(ValueError, match="base"):
         Project(tech=["X"], date="now", bullets={"extended": ["only"]})
+
+
+def test_generic_skill_tag_contributes_half():
+    profile = jd.analyze(
+        "Requirements:\nRESTful service experience.\n\n"
+        "Requirements:\nkernel development experience."
+    )
+    assert profile.weights["rest apis"] == profile.weights["kernel"]
+    from src.resume.bank import Project
+    generic = Project(tech=[], date="2026", tags=["rest apis"],
+                      bullets={"base": ["x"]})
+    defining = Project(tech=[], date="2026", tags=["kernel"],
+                       bullets={"base": ["x"]})
+    assert select.score_project(generic, profile) == \
+        select.score_project(defining, profile) / 2
+
+
+def test_priority_scales_score_and_defaults_to_one():
+    from src.resume.bank import Project
+    profile = jd.analyze("Requirements:\nmachine learning, pytorch")
+    kw = {"tech": [], "date": "2026",
+          "tags": ["machine learning", "pytorch"], "bullets": {"base": ["x"]}}
+    full = Project(**kw)
+    half = Project(**kw, priority=0.5)
+    assert select.score_project(half, profile) == \
+        select.score_project(full, profile) * 0.5
+    assert full.priority == 1.0

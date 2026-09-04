@@ -19,6 +19,13 @@ W_TEXT = 1.0     # bullet prose
 
 MAX_PROJECTS = 6
 MIN_PROJECTS = 4
+
+# High-frequency, low-signal JD skills: nearly every posting mentions them, so
+# a tag hit on one says little about fit. Contribution is halved so a single
+# generic tag can't buy a slot from a role-defining match. Mirror of
+# resume_select.ts GENERIC_SKILLS / W_GENERIC.
+GENERIC_SKILLS = {"rest apis", "cloud", "automation", "git", "agile", "testing"}
+W_GENERIC = 0.5
 MAX_TECH_ITEMS = 6
 MAX_LINE_ITEMS = 12      # skills-line cap; JD-matched entries always survive
 
@@ -94,8 +101,8 @@ def score_project(project: Project, profile: jdmod.JDProfile) -> float:
             strength = W_TEXT
         else:
             continue
-        total += weight * strength
-    return total
+        total += weight * strength * (W_GENERIC if skill in GENERIC_SKILLS else 1.0)
+    return total * project.priority
 
 
 def pick_variant(project: Project, profile: jdmod.JDProfile) -> str:
