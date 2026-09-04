@@ -78,3 +78,12 @@ def test_strip_html_drops_svg_content():
     got = strip_html(html)
     assert "Real JD text" in got
     assert "21.3" not in got
+
+
+def test_strip_html_truncated_svg_does_not_leak():
+    from src.normalize import strip_html
+    truncated = ('<p>Real JD text here.</p>'
+                 '<svg viewBox="0 0 32 32"><path d="M2 21.3056C5.24 21.41')
+    got = strip_html(truncated)
+    assert "Real JD text" in got
+    assert "21.3056" not in got

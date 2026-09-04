@@ -141,3 +141,13 @@ describe("stripJdHtml fidelity", () => {
     expect(got).not.toContain("21.78");
   });
 });
+
+describe("stripJdHtml on truncated pages", () => {
+  test("unclosed svg and dangling tags do not leak attribute soup", () => {
+    const truncated =
+      '<p>Real JD text here.</p><svg viewBox="0 0 32 32"><path d="M2 21.3056C5.24982 21.4185 7.138';
+    const got = stripJdHtml(truncated);
+    expect(got).toContain("Real JD text");
+    expect(got).not.toContain("21.3056");
+  });
+});
