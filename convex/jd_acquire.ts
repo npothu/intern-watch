@@ -45,6 +45,12 @@ export function stripJdHtml(s: string): string {
     // SVG path data reads as coordinate soup once tags are stripped - drop
     // the whole element (seen on careers.roblox.com).
     .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    // A fetch cap can truncate the page mid-element: an unclosed <svg> (or a
+    // tag cut mid-attribute) never matches the paired/tag regexes, so its
+    // attribute soup would leak into the text. Drop from any unclosed <svg>
+    // to the end, and any dangling unterminated tag at the tail.
+    .replace(/<svg[\s\S]*$/gi, " ")
+    .replace(/<[^>]*$/, " ")
     .replace(/<(br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)>/gi, "\n")
     .replace(/<li[^>]*>/gi, "\n- ")
     .replace(/<[^>]+>/g, " ")
