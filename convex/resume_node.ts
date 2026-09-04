@@ -27,6 +27,7 @@ import {
   parseRewrites,
   type ProjectPayload,
 } from "./resume_prompt";
+import { acquireJdFromUrl, llmExtractJd } from "./jd_acquire";
 import {
   composeResumeDoc,
   projectEntries,
@@ -66,7 +67,7 @@ const EXPORT_MAX_BYTES = 256 * 1024;
 const EXPORT_VARIANT_MAX = 40;
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
-const JD_MAX_CHARS = 6000; // generous cap for the tailor prompt excerpt
+const JD_MAX_CHARS = 20_000; // full JD (jd_acquire.JD_MAX_CHARS); the tailor excerpts separately
 
 // ---------------------------------------------------------------------------
 // JD acquisition + LLM tailor (mirrors src/resume/build.py + tailor.py).
@@ -94,18 +95,23 @@ function stripHtml(html: string): string {
 // degrade to the title/company/location fallback.
 async function fetchJdText(url: string): Promise<string> {
   if (!url) return "";
-  try {
-    const resp = await fetch(url, {
+  // Full acquisition chain (ATS APIs, embedded data, plausibility-gated
+  // scrape), then the LLM extraction last resort on the fetched page. This
+  // is the build-time FALLBACK only: ingestion (watch push, manual ingest)
+  // runs the same chain up front so the match row usually already carries
+  // its jobDescription before anyone clicks build.
+  const { text, html } = await acquireJdFromUrl(url, async (u) => {
+    const resp = await fetch(u, {
       signal: AbortSignal.timeout(10_000),
       headers: { "User-Agent": "Mozilla/5.0 (compatible; intern-watch/1.0)" },
       redirect: "follow",
     });
-    if (!resp.ok) return "";
-    const text = stripHtml(await resp.text());
-    return text.length >= JD_MIN_CHARS ? text.slice(0, JD_MAX_CHARS) : "";
-  } catch {
-    return "";
-  }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.text();
+  });
+  if (text) return text.slice(0, JD_MAX_CHARS);
+  if (html) return (await llmExtractJd(html)) ?? "";
+  return "";
 }
 
 // The provider-specific calls now live in ./llm_providers (the twin of

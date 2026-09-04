@@ -87,6 +87,104 @@ def _ok(text: str | None) -> str | None:
     return text if len(text) >= MIN_JD_CHARS else None
 
 
+# -- ATS public-API tier (mirror of convex/jd_acquire.ts; keep in lockstep) --
+
+_WORKDAY_HOST_RE = re.compile(r"\.wd\d+\.myworkdayjobs\.com$")
+
+
+def _ats_api_for(url: str) -> tuple[str, str] | None:
+    """(kind, api_url) for a supported ATS posting URL, else None. Pure
+    string work; the full-fidelity JD then comes from the ATS's own JSON."""
+    try:
+        parsed = httpx.URL(url)
+    except Exception:  # noqa: BLE001 - malformed URL is just a miss
+        return None
+    host = parsed.host.lower().removeprefix("www.") if parsed.host else ""
+    path = parsed.path.rstrip("/")
+    if host.endswith("greenhouse.io"):
+        m = re.match(r"^/([^/]+)/jobs/(\d+)", path)
+        if m:
+            return ("greenhouse",
+                    f"https://boards-api.greenhouse.io/v1/boards/{m[1]}/jobs/{m[2]}")
+    if host.endswith("lever.co"):
+        m = re.match(r"^/([^/]+)/([0-9a-f-]{36})", path, re.I)
+        if m:
+            return ("lever", f"https://api.lever.co/v0/postings/{m[1]}/{m[2]}")
+    if host.endswith("ashbyhq.com"):
+        m = re.match(r"^/([^/]+)/([0-9a-f-]{36})", path, re.I)
+        if m:
+            return (f"ashby:{m[2].lower()}",
+                    "https://api.ashbyhq.com/posting-api/job-board/"
+                    f"{m[1]}?includeCompensation=false")
+    if host.endswith("smartrecruiters.com"):
+        m = re.match(r"^/([^/]+)/(\d+)", path)
+        if m:
+            return ("smartrecruiters",
+                    f"https://api.smartrecruiters.com/v1/companies/{m[1]}/postings/{m[2]}")
+    if _WORKDAY_HOST_RE.search(host):
+        tenant = host.split(".")[0]
+        m = re.match(r"^(?:/[a-z]{2}(?:-[A-Za-z]{2})?)?/([^/]+)/job/(.+)$", path)
+        if m:
+            return ("workday", f"https://{host}/wday/cxs/{tenant}/{m[1]}/job/{m[2]}")
+    if host.endswith("workable.com"):
+        m = re.match(r"^/([^/]+)/j/([A-Za-z0-9]+)", path)
+        if m:
+            return ("workable",
+                    f"https://apply.workable.com/api/v1/accounts/{m[1]}/jobs/{m[2].upper()}")
+    return None
+
+
+def _jd_from_ats_payload(kind: str, payload) -> str | None:
+    """Full JD text out of an ATS API's JSON payload (jd_acquire.ts twin)."""
+    if not isinstance(payload, dict):
+        return None
+    if kind == "greenhouse":
+        return _ok(strip_html(payload.get("content") or ""))
+    if kind == "lever":
+        parts = [payload.get("descriptionPlain")
+                 or strip_html(payload.get("description") or "")]
+        for lst in payload.get("lists") or []:
+            parts.extend([lst.get("text") or "",
+                          strip_html(lst.get("content") or "")])
+        parts.append(payload.get("additionalPlain") or "")
+        return _ok("\n".join(p for p in parts if p))
+    if kind.startswith("ashby:"):
+        want = kind.removeprefix("ashby:")
+        for j in payload.get("jobs") or []:
+            if str(j.get("id", "")).lower() == want:
+                return _ok(j.get("descriptionPlain")
+                           or strip_html(j.get("descriptionHtml") or ""))
+        return None
+    if kind == "smartrecruiters":
+        sections = (payload.get("jobAd") or {}).get("sections") or {}
+        parts = [f"{sec.get('title') or ''}\n{strip_html(sec.get('text') or '')}"
+                 for sec in sections.values() if isinstance(sec, dict)]
+        return _ok("\n\n".join(parts))
+    if kind == "workday":
+        info = payload.get("jobPostingInfo") or {}
+        return _ok(strip_html(info.get("jobDescription") or ""))
+    if kind == "workable":
+        parts = [strip_html(payload.get(k) or "")
+                 for k in ("description", "requirements", "benefits")]
+        return _ok("\n\n".join(p for p in parts if p))
+    return None
+
+
+def _try_ats_api(client: httpx.Client, url: str, job) -> str | None:
+    resolved = _ats_api_for(url)
+    if not resolved:
+        return None
+    kind, api = resolved
+    try:
+        resp = client.get(api, follow_redirects=True)
+        resp.raise_for_status()
+        return _jd_from_ats_payload(kind, resp.json())
+    except Exception as exc:  # noqa: BLE001 - fall through to next tier
+        log.debug("jd_source ats-api miss (%s) for %s: %s",
+                  kind, job.dedup_key, exc)
+        return None
+
+
 def _from_greenhouse(client: httpx.Client, jd_url: str) -> str | None:
     """Same call main.enrich_jds makes: Greenhouse content API -> stripped HTML."""
     resp = client.get(jd_url)
@@ -127,13 +225,19 @@ def _embedded_description(html: str) -> str | None:
     return None
 
 
-def _generic_scrape(client: httpx.Client, url: str) -> str | None:
+def _generic_scrape(client: httpx.Client, url: str,
+                    html_out: list[str] | None = None) -> str | None:
     """Browser-UA GET of an arbitrary apply page. Prefer an embedded
-    structured description; else fall back to the full stripped body."""
+    structured description; else fall back to the full stripped body.
+    When `html_out` is given, the fetched page is appended to it even on a
+    miss, so the caller's LLM last-resort tier has something to extract
+    from."""
     resp = client.get(url, headers={"User-Agent": _PAGE_UA},
                       follow_redirects=True)
     resp.raise_for_status()
     html = resp.text
+    if html_out is not None:
+        html_out.append(html)
     if _BLOCKED_RE.search(html[:2000]):  # a challenge/denial page, not a JD
         log.debug("jd_source scrape blocked (anti-bot/JS shell): %s", url)
         return None
@@ -148,12 +252,50 @@ def _generic_scrape(client: httpx.Client, url: str) -> str | None:
     return fallback
 
 
-def _try_scrape(client: httpx.Client, url: str, job) -> str | None:
+def _try_scrape(client: httpx.Client, url: str, job,
+                html_out: list[str] | None = None) -> str | None:
     try:
-        return _generic_scrape(client, url)
+        return _generic_scrape(client, url, html_out)
     except Exception as exc:  # noqa: BLE001 — fall through to next tier
         log.debug("jd_source scrape miss for %s: %s", job.dedup_key, exc)
         return None
+
+
+_LLM_EXTRACT_SYSTEM = (
+    "You extract job descriptions from raw webpage text. Reply with the "
+    "complete job description verbatim - responsibilities, qualifications, "
+    "preferred skills, everything - as plain text. No commentary, no "
+    "summarizing, no rewording. If the text contains no job description, "
+    "reply with exactly NONE.")
+
+
+def _llm_extract(html: str, llm_cfg: dict | None, job) -> str | None:
+    """Last-resort tier: ask the configured LLM to extract the JD from the
+    fetched page. Same fail-open contract as every other tier; gated on the
+    provider key being present, so a keyless run just skips it."""
+    if not html or not llm_cfg:
+        return None
+    import os as _os
+
+    from ..llm import _PROVIDERS, DEFAULT_MODEL, api_key_env_for, provider_of
+    provider = provider_of(llm_cfg)
+    call = _PROVIDERS.get(provider)
+    api_key = _os.environ.get(api_key_env_for(llm_cfg))
+    if call is None or not api_key:
+        return None
+    page_text = strip_html(html)[:28000]
+    if len(page_text) < MIN_JD_CHARS:
+        return None
+    try:
+        model = llm_cfg.get("model") or DEFAULT_MODEL[provider]
+        out = (call(model, _LLM_EXTRACT_SYSTEM, page_text, api_key) or "").strip()
+    except Exception as exc:  # noqa: BLE001 - extraction is best-effort
+        log.debug("jd_source llm-extract miss for %s: %s", job.dedup_key, exc)
+        return None
+    if out == "NONE":
+        return None
+    got = _ok(out)
+    return got if got and _looks_like_jd(got) else None
 
 
 def _try_jobright(client: httpx.Client, jobright_id: str, job) -> str | None:
@@ -165,12 +307,18 @@ def _try_jobright(client: httpx.Client, jobright_id: str, job) -> str | None:
 
 
 def acquire_jd(job, *, client: httpx.Client | None = None,
-               allow_scrape: bool = True) -> str | None:
+               allow_scrape: bool = True,
+               llm_cfg: dict | None = None) -> str | None:
     """JD text for a Job, trying (first hit wins): in-memory description,
-    Greenhouse content API, then jobright info page and generic scrape of the
-    apply URL -- scrape first when `url` is a real employer link, jobright
-    page first when `url` is itself a jobright link. Returns None if every
-    source misses. Uses `client` if given, else makes (and closes) its own."""
+    the per-job content API named by `jd_url`, the ATS public API resolved
+    from the apply URL's shape (Greenhouse/Lever/Ashby/SmartRecruiters/
+    Workday CXS/Workable -- full-fidelity, no scraping), then jobright info
+    page and generic scrape of the apply URL -- scrape first when `url` is a
+    real employer link, jobright page first when `url` is itself a jobright
+    link -- and, when `llm_cfg` carries a keyed provider, LLM extraction from
+    the fetched page as the last resort. Returns None if every source
+    misses. Uses `client` if given, else makes (and closes) its own.
+    Mirror of convex/jd_acquire.ts; keep the tier order in lockstep."""
     # Tier 1: already in memory — free, no network.
     got = _ok(job.description)
     if got:
@@ -193,14 +341,23 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
 
         url = getattr(job, "url", None)
         jobright_id = getattr(job, "jobright_id", None)
+
+        # ATS public API resolved from the URL itself: the strongest source
+        # after an explicit jd_url, and immune to JS shells and bot walls.
+        if url:
+            got = _try_ats_api(http, url, job)
+            if got:
+                return got
+
         # An employer url (not itself a jobright link) is the stronger
         # source: try scraping it before the jobright page, which is then
         # only a fallback for employer sites that block bots.
         scrape_first = bool(allow_scrape and url
                              and extract_jobright_id(url) is None)
+        page_html: list[str] = []
 
         if scrape_first and url:
-            got = _try_scrape(http, url, job)
+            got = _try_scrape(http, url, job, page_html)
             if got:
                 return got
 
@@ -212,7 +369,13 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
 
         # generic scrape of the apply URL, if not already tried above.
         if not scrape_first and allow_scrape and url:
-            got = _try_scrape(http, url, job)
+            got = _try_scrape(http, url, job, page_html)
+            if got:
+                return got
+
+        # Last resort: LLM extraction from whatever page we did fetch.
+        if page_html:
+            got = _llm_extract(page_html[-1], llm_cfg, job)
             if got:
                 return got
     finally:

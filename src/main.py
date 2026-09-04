@@ -612,6 +612,61 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             resolved=uf.priority_names))
 
 
+MATCH_JD_CAP = 12    # watch-time JD acquisitions per run; backlog drains on cron
+MATCH_JD_TRIES = 3   # attempts per match before giving up for good
+
+
+def _matches_with_jds(store, state: dict, name: str,
+                      user_cfg: dict | None) -> list[dict]:
+    """The match snapshot to push, with full JD text attached (transient
+    `jd` field, consumed by the store's pushMatches) for matches that don't
+    have one yet -- so the jobDescription is in the database when the user
+    first sees the row, not acquired lazily at build time.
+
+    Acquisition state lives as a tiny flag on the match item in seen.json
+    (`jd_state`: "ok"/"miss", `jd_tries`) -- never the text itself, which
+    would balloon the state file. Only the Convex store consumes pushed
+    matches, so the GitHub driver skips acquisition entirely."""
+    items = st.matches_items(state, name)
+    if isinstance(store, GitHubStore):
+        return items
+    from types import SimpleNamespace
+
+    from .normalize import extract_jobright_id
+    from .resume.jd_source import acquire_jd
+
+    llm_cfg = (user_cfg or {}).get("llm")
+    budget = MATCH_JD_CAP
+    out: list[dict] = []
+    for item in items:
+        needs = (item.get("jd_state") != "ok"
+                 and int(item.get("jd_tries", 0)) < MATCH_JD_TRIES)
+        if not needs or budget <= 0:
+            out.append(item)
+            continue
+        budget -= 1
+        shim = SimpleNamespace(
+            description=None, jd_url=None,
+            url=item.get("url"), dedup_key=item.get("key", "?"),
+            jobright_id=extract_jobright_id(item.get("url") or ""))
+        try:
+            text = acquire_jd(shim, llm_cfg=llm_cfg)
+        except Exception:  # noqa: BLE001 - acquisition never blocks the push
+            text = None
+        if text:
+            item["jd_state"] = "ok"
+            item.pop("jd_tries", None)
+            pushed = dict(item)
+            pushed["jd"] = text        # transient: pushMatches strips it
+            out.append(pushed)
+        else:
+            item["jd_tries"] = int(item.get("jd_tries", 0)) + 1
+            if item["jd_tries"] >= MATCH_JD_TRIES:
+                item["jd_state"] = "miss"
+            out.append(item)
+    return out
+
+
 def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                     terms_order: list[str],
                     user_cfg: dict | None = None,
@@ -659,7 +714,8 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                 saved = ledger.load_ledger(lpath)
                 saved[name] = book
                 ledger.save_ledger(saved, lpath)
-        store.push_matches(name, st.matches_items(state, name))
+        store.push_matches(name, _matches_with_jds(store, state, name,
+                                                    user_cfg))
     except Exception:  # noqa: BLE001 - dashboard trouble never blocks delivery
         log.exception("user %s: dashboard update failed", name)
 
