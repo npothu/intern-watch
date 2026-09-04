@@ -151,3 +151,13 @@ describe("stripJdHtml on truncated pages", () => {
     expect(got).not.toContain("21.3056");
   });
 });
+
+describe("stripJdHtml on script-truncated pages", () => {
+  test("an unclosed script's payload does not leak", () => {
+    const truncated =
+      '<p>Real JD text here.</p><script>self.__next_f.push([1,"M28 4C29.1046 4 30 4.89542 30 5.99999V21.3056C30 22.28';
+    const got = stripJdHtml(truncated);
+    expect(got).toContain("Real JD text");
+    expect(got).not.toContain("21.3056");
+  });
+});
