@@ -270,3 +270,37 @@ def test_job_result_extracts_from_both_payload_shapes():
 
     assert desc_from_html_shape == desc_from_json_shape
     assert PHD_LINE in desc_from_html_shape
+
+
+def test_compose_description_folds_extended_fields():
+    """The enriched compose pulls in jobright's responsibility summary, why-
+    join, and the skill/education/benefit summary lists, defensively guarded."""
+    jr = {
+        "jobSummary": "Backend intern on the payments team.",
+        "jdResponsibilitySummary": "Own a service end to end.",
+        "whyJoinUs": "We ship fast and mentor deeply.",
+        "skillSummaries": ["Proficiency in Go or Python", ""],
+        "educationSummaries": ["Pursuing a BS in Computer Science"],
+        "benefitsSummaries": ["Annual performance bonus"],
+        "qualifications": {"mustHave": ["Must be a rising senior"]},
+        "coreResponsibilities": ["Build low-latency APIs"],
+    }
+    desc = compose_description(jr)
+    for needle in ("Own a service end to end", "mentor deeply",
+                   "Proficiency in Go or Python", "Pursuing a BS",
+                   "performance bonus", "rising senior", "low-latency APIs"):
+        assert needle in desc, needle
+
+
+def test_compose_description_tolerates_missing_and_wrong_shapes():
+    """A payload missing the new fields, or carrying a wrong shape (a dict
+    where a list is expected, e.g. detailQualifications), still composes from
+    whatever clean fields exist rather than raising."""
+    jr = {
+        "jobSummary": "Only a summary here.",
+        "whyJoinUs": None,
+        "skillSummaries": {"nested": "dict not list"},
+        "detailQualifications": {"mustHave": {"yoe": []}},
+    }
+    desc = compose_description(jr)
+    assert desc == "Only a summary here."

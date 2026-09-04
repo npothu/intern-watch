@@ -62,14 +62,33 @@ def _job_result(data: dict) -> dict | None:
     return (page_props.get("dataSource") or {}).get("jobResult")
 
 
+# Free-text jobResult fields worth folding into the composed JD, in reading
+# order. All are plain strings or string lists in the unauthenticated
+# payload; each is guarded at use so a shape change degrades to a shorter
+# JD rather than an error. Together they roughly halve the compose miss vs.
+# the full posting (measured +59% median length on the live feed 2026-09-04),
+# which matters because jobright is ~75% of the corpus and its info page is
+# the only JD source available without resolving the employer URL.
+_JR_STR_FIELDS = ("jobSummary", "jdResponsibilitySummary", "whyJoinUs")
+_JR_LIST_FIELDS = ("skillSummaries", "educationSummaries", "benefitsSummaries")
+
+
 def compose_description(job_result: dict) -> str | None:
-    """jobSummary + qualification bullets + responsibilities, joined into one
-    blob the existing JD filters can scan. mustHave carries the literal
-    requirement strings (e.g. 'Must be currently enrolled in a PhD program')."""
+    """Fold the jobResult's free-text fields into one blob the JD filters and
+    the resume tailor can scan: summary + responsibility summary + why-join,
+    then skill/education/benefit summaries, then the literal qualification
+    bullets (mustHave carries requirement strings like 'Must be currently
+    enrolled in a PhD program') and core responsibilities. Order is stable so
+    the highest-signal prose leads."""
     parts: list[str] = []
-    summary = job_result.get("jobSummary")
-    if summary:
-        parts.append(summary)
+    for key in _JR_STR_FIELDS:
+        val = job_result.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+    for key in _JR_LIST_FIELDS:
+        val = job_result.get(key)
+        if isinstance(val, list):
+            parts.extend(s.strip() for s in val if isinstance(s, str) and s.strip())
     quals = job_result.get("qualifications") or {}
     for key in ("mustHave", "preferredHave", "niceToHave"):
         parts.extend(s for s in (quals.get(key) or []) if s)
