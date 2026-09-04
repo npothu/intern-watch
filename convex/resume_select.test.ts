@@ -140,7 +140,9 @@ describe("select_projects ordering / cap / pad", () => {
       P5: proj({ tags: ["gcp"] }),
     };
     const r = selectProjects(profile(projects), "Redis");
-    expect(r.selected.map(([n]) => n)).toEqual(["P2", "P1", "P3", "P4", "P5"]);
+    expect(r.selected.map(([n]) => n)).toEqual(
+      ["P2", "P1", "P3", "P4", "P5"].slice(0, MAX_PROJECTS),
+    );
   });
 
   test("empty JD falls back to bank order, first MAX_PROJECTS", () => {

@@ -28,7 +28,7 @@ export const W_TAG = 3; // explicit tags are the strongest signal
 export const W_TECH = 2; // listed tech stack
 export const W_TEXT = 1; // bullet prose
 
-export const MAX_PROJECTS = 6;
+export const MAX_PROJECTS = 4;
 export const MIN_PROJECTS = 4;
 
 // High-frequency, low-signal JD skills: nearly every posting mentions them,

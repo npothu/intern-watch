@@ -17,7 +17,7 @@ W_TAG = 3.0      # explicit tags (maps-to) are the strongest signal
 W_TECH = 2.0     # listed tech stack
 W_TEXT = 1.0     # bullet prose
 
-MAX_PROJECTS = 6
+MAX_PROJECTS = 4
 MIN_PROJECTS = 4
 
 # High-frequency, low-signal JD skills: nearly every posting mentions them, so

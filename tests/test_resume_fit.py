@@ -6,9 +6,9 @@ from src.resume.bank import load_bank
 BANK = load_bank("tests/fixtures/resume_bank.json")
 
 
-def _plan(fixtures, name="jd_ml_intern.txt"):
+def _plan(fixtures, name="jd_ml_intern.txt", **kw):
     profile = jd.analyze((fixtures / name).read_text(encoding="utf-8"))
-    return select.build_plan(BANK, profile)
+    return select.build_plan(BANK, profile, **kw)
 
 
 # ---- text metrics ----
@@ -70,7 +70,9 @@ def test_condense_prefers_shortest_variant(fixtures):
 
 
 def test_overfull_plan_gets_condensed_or_dropped(fixtures, monkeypatch):
-    plan = _plan(fixtures)
+    # Build past the default cap so fit has projects to condense or drop
+    # regardless of select.MAX_PROJECTS.
+    plan = _plan(fixtures, max_projects=6)
     before = [(p.name, p.variant) for p in plan.projects]
     # shrink the page so the default plan can't possibly fit
     monkeypatch.setattr(fit, "BUDGET_PT", 300.0)
@@ -82,7 +84,7 @@ def test_overfull_plan_gets_condensed_or_dropped(fixtures, monkeypatch):
 
 
 def test_impossible_budget_warns_not_loops(fixtures, monkeypatch):
-    plan = _plan(fixtures)
+    plan = _plan(fixtures, max_projects=6)
     monkeypatch.setattr(fit, "BUDGET_PT", 10.0)
     fit.fit_plan(plan)   # must terminate
     assert any(n.startswith("WARNING") for n in plan.notes)
