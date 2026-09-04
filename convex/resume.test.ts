@@ -578,3 +578,58 @@ describe("resume artifact persistence", () => {
     expect(JSON.parse(restored[0].report as string)).toEqual(firstReport);
   });
 });
+
+describe("widow guard in applyRewrites", () => {
+  // fake metric: any text ending in "~w" is a widow
+  const widow = (t: string) => t.endsWith("~w");
+
+  test("rejects a rewrite that introduces a widow the original lacked", () => {
+    const projects = [{ name: "P", bullets: ["clean original bullet"] }];
+    const applied = applyRewrites(
+      projects,
+      [{ name: "P", bullets: ["rewritten but now ends badly ~w"] }],
+      widow,
+    );
+    expect(applied.projects[0].bullets[0]).toBe("clean original bullet");
+    expect(applied.projects[0].llmRewritten).toBe(false);
+    expect(applied.notes.join(" ")).toContain("widow-introducing rewrite in 'P'");
+  });
+
+  test("allows a rewrite when the original already widowed", () => {
+    const projects = [{ name: "P", bullets: ["original also ends badly ~w"] }];
+    const applied = applyRewrites(
+      projects,
+      [{ name: "P", bullets: ["rewrite that still ends badly ~w"] }],
+      widow,
+    );
+    expect(applied.projects[0].bullets[0]).toBe("rewrite that still ends badly ~w");
+  });
+
+  test("no metric supplied means no widow filtering", () => {
+    const projects = [{ name: "P", bullets: ["clean original bullet"] }];
+    const applied = applyRewrites(projects, [
+      { name: "P", bullets: ["rewrite that would widow ~w"] },
+    ]);
+    expect(applied.projects[0].bullets[0]).toBe("rewrite that would widow ~w");
+  });
+});
+
+describe("endsInWidow metric", () => {
+  test("single-line text is never a widow; a stranded short word is", async () => {
+    const { endsInWidow } = await import("./resume_renderers/pdf");
+    expect(endsInWidow("short bullet")).toBe(false);
+    // Verified against the rendered page 2026-09-04: this bank bullet wrapped
+    // with "teaching kernel." stranded on its own line; the trimmed variant
+    // fits cleanly.
+    expect(
+      endsInWidow(
+        "Reduced context-switch overhead 25% by implementing Round-Robin and FIFO schedulers in a Unix-based teaching kernel.",
+      ),
+    ).toBe(true);
+    expect(
+      endsInWidow(
+        "Reduced context-switch overhead 25% by implementing Round-Robin and FIFO schedulers in a Unix kernel.",
+      ),
+    ).toBe(false);
+  });
+});

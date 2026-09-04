@@ -33,7 +33,7 @@ import {
   resumeFilename,
   resumeOutline,
 } from "./resume_renderers/docx";
-import { buildResumePdf, pdfFilename } from "./resume_renderers/pdf";
+import { buildResumePdf, pdfFilename, endsInWidow } from "./resume_renderers/pdf";
 import {
   callModel,
   chooseLlm,
@@ -319,6 +319,7 @@ async function performBuild(
       const applied = applyRewrites(
         selected.map((p) => ({ name: p.name, bullets: p.bullets.map((b) => b.text) })),
         rewrites,
+        endsInWidow,
       );
       notes.push(...applied.notes);
       for (const p of applied.projects) {

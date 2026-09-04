@@ -473,6 +473,39 @@ function layout(
   return y;
 }
 
+let widowDoc: PDFKit.PDFDocument | null = null;
+
+/**
+ * Does this bullet text end in a "widow" line at body size in the bullet
+ * column: two or more wrapped lines whose last line carries at most three
+ * words or fills at most a quarter of the width? Uses the same font metrics
+ * the renderer draws with, so the answer matches the printed page. Consumed
+ * by the tailor pass (resume_node) to reject rewrites that waste a line.
+ */
+export function endsInWidow(text: string): boolean {
+  if (!widowDoc) {
+    widowDoc = new PDFDocument({ autoFirstPage: false });
+    widowDoc.font(FONT_REGULAR).fontSize(SIZE_BODY);
+  }
+  const doc = widowDoc;
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const cand = line ? `${line} ${word}` : word;
+    if (doc.widthOfString(cand) <= BULLET_WIDTH) line = cand;
+    else {
+      if (line) lines.push(line);
+      line = word;
+    }
+  }
+  if (line) lines.push(line);
+  if (lines.length < 2) return false;
+  const last = lines[lines.length - 1];
+  const fill = doc.widthOfString(last) / BULLET_WIDTH;
+  return last.split(" ").length <= 3 || fill <= 0.25;
+}
+
 function createPdfDocument(title: string): PDFKit.PDFDocument {
   return new PDFDocument({
     autoFirstPage: false,

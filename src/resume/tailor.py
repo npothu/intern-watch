@@ -44,6 +44,12 @@ reorder, rephrase, and swap synonyms toward the JD's wording (e.g. say \
 "REST API" if the JD does, where the original already describes one).
 - Never add a skill, tool, or claim that is not already in the original \
 bullet or that project's tech list.
+- Never displace the lead: when the original opens with an outcome verb and \
+a number, the rewrite keeps that number in the first clause.
+- When shortening, cut adjectives and filler first; never drop a number, \
+proper noun, product or domain name, or URL.
+- A JD keyword may replace a synonym, never a concrete fact: a frequency, \
+count, or named tool always survives the rewrite.
 - Each rewrite must be at most its "max_chars" (hard limit, resume must \
 stay one page). If the original is already on target, return it unchanged.
 - Strong action verbs, no first person, no trailing periods... match the \
@@ -75,9 +81,15 @@ def _cap(bullet: str) -> int:
     return max(len(bullet) + CAP_SLACK, CAP_FLOOR)
 
 
-def _apply(entry: PlannedEntry, rewrites: object, notes: list[str]) -> None:
+def _apply(entry: PlannedEntry, rewrites: object, notes: list[str],
+           widow_check=None) -> None:
     """`rewrites` is raw LLM output, so it is typed as `object`: the shape
-    check below is the contract, not the annotation."""
+    check below is the contract, not the annotation.
+
+    `widow_check` mirrors resume_prompt.ts applyRewrites: an optional
+    text -> bool metric flagging bullets whose last printed line would carry
+    only a word or two. The Python docx path has no point-accurate metric,
+    so callers here pass None; the Convex PDF builder wires the real one."""
     if (not isinstance(rewrites, list)
             or len(rewrites) != len(entry.bullets)
             or not all(isinstance(b, str) and b.strip() for b in rewrites)):
@@ -89,6 +101,11 @@ def _apply(entry: PlannedEntry, rewrites: object, notes: list[str]) -> None:
         rw = rw.strip()
         if len(rw) > _cap(orig):
             notes.append(f"llm: over-length rewrite in '{entry.name}', "
+                         f"kept original bullet")
+            new.append(orig)
+        elif (widow_check is not None and rw != orig
+                and widow_check(rw) and not widow_check(orig)):
+            notes.append(f"llm: widow-introducing rewrite in '{entry.name}', "
                          f"kept original bullet")
             new.append(orig)
         else:

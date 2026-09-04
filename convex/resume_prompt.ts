@@ -22,6 +22,9 @@ const INSTRUCTIONS = `Rewrite the resume bullets below so they emphasize this jo
 
 - Keep every fact, metric, and tool from the original bullet. You may reorder, rephrase, and swap synonyms toward the JD's wording (e.g. say "REST API" if the JD does, where the original already describes one).
 - Never add a skill, tool, or claim that is not already in the original bullet or that project's tech list.
+- Never displace the lead: when the original opens with an outcome verb and a number, the rewrite keeps that number in the first clause.
+- When shortening, cut adjectives and filler first; never drop a number, proper noun, product or domain name, or URL.
+- A JD keyword may replace a synonym, never a concrete fact: a frequency, count, or named tool always survives the rewrite.
 - Each rewrite must be at most its "max_chars" (hard limit, resume must stay one page). If the original is already on target, return it unchanged.
 - Strong action verbs, no first person, no trailing periods... match the original style.
 
@@ -98,6 +101,10 @@ export type RewriteResult = {
 export function applyRewrites(
   projects: { name: string; bullets: string[] }[],
   rewrites: unknown[],
+  // Optional metric hook (resume_renderers/pdf.endsInWidow): a rewrite that
+  // introduces a widow line the original didn't have wastes a printed line,
+  // so it falls back to the original bullet like an over-length one.
+  widowCheck?: (text: string) => boolean,
 ): RewriteResult {
   const notes: string[] = [];
   const byName = new Map(projects.map((p, i) => [p.name, i]));
@@ -127,6 +134,10 @@ export function applyRewrites(
       const s = (rw as string).trim();
       if (s.length > capFor(orig)) {
         notes.push(`llm: over-length rewrite in '${name}', kept original bullet`);
+        return orig;
+      }
+      if (widowCheck && s !== orig && widowCheck(s) && !widowCheck(orig)) {
+        notes.push(`llm: widow-introducing rewrite in '${name}', kept original bullet`);
         return orig;
       }
       return s;
