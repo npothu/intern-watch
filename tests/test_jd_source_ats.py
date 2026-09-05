@@ -96,3 +96,89 @@ def test_strip_html_truncated_script_does_not_leak():
     got = strip_html(truncated)
     assert "Real JD text" in got
     assert "21.3056" not in got
+
+
+# ---- employer-URL tier (jobright full posting) -------------------------------
+
+def _shim(jid="6a0000000000000000000001"):
+    return SimpleNamespace(description=None, jd_url=None,
+                           url=f"https://jobright.ai/jobs/info/{jid}",
+                           dedup_key=f"jr:{jid}", jobright_id=jid)
+
+
+def test_employer_url_ats_api_beats_jobright_summary(monkeypatch):
+    """A jobright job whose employer URL is a supported ATS gets the full
+    posting from the ATS API, before the summary tier is even consulted."""
+    import httpx
+
+    def handler(request):
+        if request.url.host == "api.lever.co":
+            return httpx.Response(200, json={
+                "descriptionPlain": FILLER,
+                "lists": [{"text": "Requirements", "content": "<li>Rust</li>"}]})
+        return httpx.Response(404)
+
+    called = {"summary": False}
+    monkeypatch.setattr(jd_source, "_try_jobright",
+                        lambda *a, **k: called.__setitem__("summary", True) or "SUMMARY " * 40)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    got = jd_source.acquire_jd(
+        _shim(), client=client,
+        employer_url="https://jobs.lever.co/acme/11111111-2222-3333-4444-555555555555")
+    assert got and "Requirements" in got and "Rust" in got
+    assert called["summary"] is False
+
+
+def test_employer_scrape_beats_summary_only_when_at_least_as_long(monkeypatch):
+    """A non-ATS employer page wins over the jobright summary only when it is
+    a real posting (at least as long); a short nav shell loses to the summary."""
+    summary = "Summary bullet about the role. " * 12          # ~370 chars
+    monkeypatch.setattr(jd_source, "_try_ats_api", lambda *a, **k: None)
+    monkeypatch.setattr(jd_source, "_try_jobright", lambda *a, **k: summary)
+
+    shell = "Careers Home Login Apply Now " * 9                 # ~260 chars, > MIN
+    monkeypatch.setattr(jd_source, "_try_scrape", lambda *a, **k: shell)
+    got = jd_source.acquire_jd(_shim(), client=object(),
+                               employer_url="https://careers.example.com/j/1")
+    assert got == summary
+
+    posting = ("Responsibilities: own services. Qualifications: Go, SQL. " * 40)
+    monkeypatch.setattr(jd_source, "_try_scrape", lambda *a, **k: posting)
+    got = jd_source.acquire_jd(_shim(), client=object(),
+                               employer_url="https://careers.example.com/j/1")
+    assert got == posting
+
+
+def test_matches_with_jds_threads_cached_and_resolved_employer_urls(monkeypatch):
+    """The watch push passes the employer URL into acquisition: from the
+    state cache when delivery already resolved it, else via the session
+    (which then caches it and feeds the url index, like the backfill)."""
+    from src import main
+    from src import state as st
+
+    state = st.empty_state()
+    state["matches"]["u"] = [
+        {"key": "jr:aaa", "short": "s1", "url": "https://jobright.ai/jobs/info/aaa"},
+        {"key": "jr:bbb", "short": "s2", "url": "https://jobright.ai/jobs/info/bbb"},
+    ]
+    st.apply_url_put(state, "jr:aaa", "https://boards.greenhouse.io/acme/jobs/1")
+
+    seen = {}
+    monkeypatch.setattr(jd_source, "acquire_jd",
+                        lambda shim, **kw: seen.__setitem__(shim.dedup_key, kw.get("employer_url"))
+                        or FILLER)
+
+    class Resolver:
+        def resolve_apply_url(self, jid):
+            return "https://jobs.lever.co/acme/11111111-2222-3333-4444-555555555555" \
+                if jid == "bbb" else None
+
+    class NotGitHubStore:  # anything that isn't the GitHub driver pushes
+        pass
+
+    out = main._matches_with_jds(NotGitHubStore(), state, "u", {}, Resolver())
+    assert seen["jr:aaa"] == "https://boards.greenhouse.io/acme/jobs/1"
+    assert seen["jr:bbb"].startswith("https://jobs.lever.co/acme/")
+    assert st.apply_url_get(state, "jr:bbb").startswith("https://jobs.lever.co/")
+    assert all(item.get("jd") == FILLER for item in out)
+    assert all(item.get("jd_state") == "ok" for item in state["matches"]["u"])
