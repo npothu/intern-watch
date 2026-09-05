@@ -308,7 +308,8 @@ def _try_jobright(client: httpx.Client, jobright_id: str, job) -> str | None:
 
 def acquire_jd(job, *, client: httpx.Client | None = None,
                allow_scrape: bool = True,
-               llm_cfg: dict | None = None) -> str | None:
+               llm_cfg: dict | None = None,
+               employer_url: str | None = None) -> str | None:
     """JD text for a Job, trying (first hit wins): in-memory description,
     the per-job content API named by `jd_url`, the ATS public API resolved
     from the apply URL's shape (Greenhouse/Lever/Ashby/SmartRecruiters/
@@ -318,6 +319,13 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
     link -- and, when `llm_cfg` carries a keyed provider, LLM extraction from
     the fetched page as the last resort. Returns None if every source
     misses. Uses `client` if given, else makes (and closes) its own.
+
+    `employer_url` is the job's resolved apply/original URL for aggregator
+    jobs (jobright: cached in state by delivery, or resolved via the
+    authenticated session). When given, it is tried FIRST through the ATS
+    API, and its scraped page beats the jobright summary only when it is at
+    least as long - short employer pages are nav shells (observed 350-750
+    chars from applicantpro/hrmdirect), not postings.
     Mirror of convex/jd_acquire.ts; keep the tier order in lockstep."""
     # Tier 1: already in memory — free, no network.
     got = _ok(job.description)
@@ -344,10 +352,13 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
 
         # ATS public API resolved from the URL itself: the strongest source
         # after an explicit jd_url, and immune to JS shells and bot walls.
-        if url:
-            got = _try_ats_api(http, url, job)
-            if got:
-                return got
+        # The resolved employer URL (aggregator jobs) goes first: it is the
+        # real posting, where `url` may be the aggregator's own page.
+        for candidate in (employer_url, url):
+            if candidate:
+                got = _try_ats_api(http, candidate, job)
+                if got:
+                    return got
 
         # An employer url (not itself a jobright link) is the stronger
         # source: try scraping it before the jobright page, which is then
@@ -361,11 +372,18 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
             if got:
                 return got
 
-        # jobright info page (composed __NEXT_DATA__ blob).
+        # jobright info page (composed __NEXT_DATA__ blob) - the summary.
+        # With an employer URL in hand, its scraped page is the fuller source
+        # when it is a real posting (at least as long as the summary); a
+        # short employer page is a JS/nav shell and loses to the summary.
         if jobright_id:
-            got = _try_jobright(http, jobright_id, job)
-            if got:
-                return got
+            summary = _try_jobright(http, jobright_id, job)
+            if employer_url and allow_scrape:
+                scraped = _try_scrape(http, employer_url, job, page_html)
+                if scraped and len(scraped) >= len(summary or ""):
+                    return scraped
+            if summary:
+                return summary
 
         # generic scrape of the apply URL, if not already tried above.
         if not scrape_first and allow_scrape and url:

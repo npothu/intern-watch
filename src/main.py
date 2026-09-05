@@ -604,7 +604,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         log.info("user %s: no new matches", name)
     if user_cfg.get("dashboard"):
         _sync_dashboard(name, state, dry_run, now, terms_order, user_cfg,
-                        store=store)
+                        store=store, resolver=resolver)
     if store is not None and not dry_run:
         # What this run resolved (yaml + prefs), for the settings page.
         store.put_watch_report(name, prefs_mod.watch_report(
@@ -617,7 +617,7 @@ MATCH_JD_TRIES = 3   # attempts per match before giving up for good
 
 
 def _matches_with_jds(store, state: dict, name: str,
-                      user_cfg: dict | None) -> list[dict]:
+                      user_cfg: dict | None, resolver=None) -> list[dict]:
     """The match snapshot to push, with full JD text attached (transient
     `jd` field, consumed by the store's pushMatches) for matches that don't
     have one yet -- so the jobDescription is in the database when the user
@@ -632,8 +632,8 @@ def _matches_with_jds(store, state: dict, name: str,
         return items
     from types import SimpleNamespace
 
-    from .normalize import extract_jobright_id
-    from .resume.jd_source import acquire_jd
+    from .resume import jd_source
+    acquire_jd = jd_source.acquire_jd
 
     llm_cfg = (user_cfg or {}).get("llm")
     budget = MATCH_JD_CAP
@@ -645,12 +645,27 @@ def _matches_with_jds(store, state: dict, name: str,
             out.append(item)
             continue
         budget -= 1
+        key = item.get("key", "?")
         shim = SimpleNamespace(
             description=None, jd_url=None,
-            url=item.get("url"), dedup_key=item.get("key", "?"),
+            url=item.get("url"), dedup_key=key,
             jobright_id=extract_jobright_id(item.get("url") or ""))
+        # jobright matches: the employer's real posting URL. Delivery caches
+        # it in state (apply_url_get); when absent and a session is on hand,
+        # resolve it now (shares the session's per-run cap) and cache it the
+        # same way _backfill_apply_urls does, so the url index converges too.
+        employer_url = None
+        if key.startswith("jr:"):
+            employer_url = st.apply_url_get(state, key)
+            if employer_url is None and resolver is not None:
+                employer_url = resolver.resolve_apply_url(key[3:])
+                if employer_url:
+                    st.apply_url_put(state, key, employer_url)
+                    canon = canonical_url(employer_url)
+                    if canon:
+                        st.url_index_put(state, canon, key)
         try:
-            text = acquire_jd(shim, llm_cfg=llm_cfg)
+            text = acquire_jd(shim, llm_cfg=llm_cfg, employer_url=employer_url)
         except Exception:  # noqa: BLE001 - acquisition never blocks the push
             text = None
         if text:
@@ -670,7 +685,8 @@ def _matches_with_jds(store, state: dict, name: str,
 def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                     terms_order: list[str],
                     user_cfg: dict | None = None,
-                    store: TrackerStore | None = None) -> None:
+                    store: TrackerStore | None = None,
+                    resolver=None) -> None:
     """Update the user's dashboard issue (needs the Actions-provided repo +
     token; quietly skipped on plain local runs).
 
@@ -715,7 +731,7 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                 saved[name] = book
                 ledger.save_ledger(saved, lpath)
         store.push_matches(name, _matches_with_jds(store, state, name,
-                                                    user_cfg))
+                                                    user_cfg, resolver))
     except Exception:  # noqa: BLE001 - dashboard trouble never blocks delivery
         log.exception("user %s: dashboard update failed", name)
 
