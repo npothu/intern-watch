@@ -5,7 +5,7 @@
 - [x] Implement variant copying, project and bullet selection, locks, and base comparison.
 - [x] Implement exact preview, overflow warnings, reviewed cut suggestions, and tailoring from a saved variant.
 - [x] Verify data isolation, PDF/DOCX content, lock invariants, responsive UI, and deployed workflows.
-- [ ] Review, open a ready PR, deploy through the repository workflow, and report remaining limits.
+- [x] Complete both reviews, open a ready PR, and verify the hosted preview before production release.
 
 Scope: implement option 3 of the hosted mock, inside the production Resume area.
 Library keeps all content; Compose manages saved variants.
@@ -48,10 +48,15 @@ When protected content prevents one page, the user can retain a multipage docume
 
 ## Verification
 
-The branch passes 386 TypeScript tests and 993 Python tests, with one Python skip.
+The branch passes 390 TypeScript tests and 993 Python tests, with one Python skip.
 Web lint, web and Convex TypeScript checks, production Next build, Ruff, mypy, and configuration checks pass.
 Both review axes completed, and their concrete findings were fixed and rechecked.
 Signed-in browser verification on the separate Vercel preview database covered copying a saved variant, excluding a project and bullet, locking a remaining bullet, comparison, accepting one cut, actual two-page PDF preview, both download formats, a selected-job build, and reload persistence.
 Downloaded custom and tailored PDF and Word files were parsed to verify the exact excluded project and bullet were absent and the protected bullet remained.
 At a 390px viewport, both PDF pages render without horizontal overflow.
 The preview deployment has no shared AI key, so its build exercised the explicit fallback; an automated action test exercises adversarial AI rewrites, captured-source rebuilds, and manual overrides of duplicate-named projects.
+
+The editor retains pending drafts and a serialized save queue across client navigation.
+A hosted regression check returned to Resume in 1.3 seconds while its save was delayed for 15 seconds and confirmed the exclusion remained visible.
+The queue retries independently of the mounted editor and guards stale route responses and import writes.
+Reviewed whole-entry cut suggestions were accepted in the hosted preview and the actual PDF recalculated from two pages to one.
