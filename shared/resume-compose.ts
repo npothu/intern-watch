@@ -243,17 +243,32 @@ export function compareWithBase(
   const before = resolveResume(snapshotVariant(profile, "base"));
   const after = resolveResume(resume);
   const changes: ResumeDifference[] = [];
+  const describeHeader = (header: ProfileV2["header"]): string[] =>
+    [
+      header.name,
+      header.contact_line,
+      header.citizen_prefix ?? "",
+      ...(header.links ?? []).map((link) => `${link.text} (${link.url})`),
+    ].filter(Boolean);
+  const describeSkills = (skills: ProfileV2["skills"]): string[] =>
+    Object.entries(skills)
+      .filter(([, items]) => items?.length)
+      .map(
+        ([label, items]) =>
+          `${label[0].toUpperCase() + label.slice(1)}: ${items!.map((item) => (typeof item === "string" ? item : [item.name, ...(item.keywords ?? [])].join(": "))).join(", ")}`,
+      );
+
   if (JSON.stringify(before.header) !== JSON.stringify(after.header))
     changes.push({
       heading: "Contact information",
-      before: [JSON.stringify(before.header)],
-      after: [JSON.stringify(after.header)],
+      before: describeHeader(before.header),
+      after: describeHeader(after.header),
     });
   if (JSON.stringify(before.skills) !== JSON.stringify(after.skills))
     changes.push({
       heading: "Skills",
-      before: [JSON.stringify(before.skills)],
-      after: [JSON.stringify(after.skills)],
+      before: describeSkills(before.skills),
+      after: describeSkills(after.skills),
     });
   if (
     JSON.stringify(before.sections.map((s) => [s.id, s.title, s.kind])) !==
