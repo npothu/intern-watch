@@ -50,6 +50,7 @@ import { ResumePreview } from "@/components/profile/resume-preview";
 import { DownloadMenu } from "@/components/profile/download-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { profileSaveSession } from "@/lib/profile-save-session";
 
 const DEBOUNCE_MS = 1200;
 const RETRY_MS = 3000;
@@ -175,12 +176,24 @@ export function ProfileEditor(props: {
   initialData: string | null;
   user: string;
 }) {
+  const saveSession = profileSaveSession(props.user);
+  const [waitingForImport, setWaitingForImport] = useState(
+    () => saveSession.importing !== null,
+  );
+  const [refreshOnMount] = useState(() => saveSession.lastSaved !== null);
   // Parse the incoming JSON once, defensively, into a stable initial outcome.
   // This is a plain state value (not a ref) so it is safe to read while
   // rendering; it never changes after mount.
-  const [outcome] = useState(() => parseV2(props.initialData));
+  const [outcome] = useState<ParseOutcome>(() =>
+    (saveSession.draft ?? saveSession.lastSaved)
+      ? { status: "ok", profile: (saveSession.draft ?? saveSession.lastSaved)! }
+      : parseV2(props.initialData),
+  );
   const [profile, setProfile] = useState<ProfileV2 | null>(
     outcome.status === "ok" ? outcome.profile : null,
+  );
+  const [savedProfile, setSavedProfile] = useState(
+    saveSession.draft ? null : profile,
   );
 
   const [activeId, setActiveId] = useState<string | null>(() => {
@@ -210,7 +223,7 @@ export function ProfileEditor(props: {
   );
 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingSave = useRef<ProfileV2 | null>(null);
   const saveGeneration = useRef(0);
   const hasObservedProfile = useRef(false);
   const skipNextDebouncedSave = useRef(false);
@@ -229,109 +242,195 @@ export function ProfileEditor(props: {
     window.dispatchEvent(new Event(PREVIEW_EVENT));
   };
 
-  // attemptSave: perform one network save. On failure it records the snapshot
-  // in a ref and flips to "retrying"; an effect below schedules exactly one
-  // retry 3s later, and if the retry also fails it shows a toast and falls back
-  // to "Not saved" (no more automatic retries - the next edit will schedule a
-  // fresh save through the debounce path). Using useCallback([]) keeps it
-  // stable for effects and avoids the lint's "self-reference" immutability
-  // error; the retry is scheduled by an effect rather than by attemptSave
-  // calling itself.
+  // The request and its retry outlive the editor. A later mount shares this
+  // queue and starts from its unsaved draft, even on a slow connection.
   const pendingRetry = useRef<ProfileV2 | null>(null);
-  const attemptSave = useCallback((snapshot: ProfileV2, isRetry: boolean) => {
-    const generation = ++saveGeneration.current;
-    setSaveState("saving");
-    const request = saveQueue.current
-      .catch(() => undefined)
-      .then(() => saveProfile(JSON.stringify(snapshot, null, 2)));
-    saveQueue.current = request.then(
-      () => undefined,
-      () => undefined,
-    );
-    request
-      .then((res) => {
-        if (generation !== saveGeneration.current) return;
-        if (res.ok) {
-          pendingRetry.current = null;
-          setLastSavedAt(Date.now());
-          setSaveState("idle");
-          return;
-        }
-        if (!isRetry) {
+  const attemptSave = useCallback(
+    (snapshot: ProfileV2) => {
+      const generation = ++saveGeneration.current;
+      pendingRetry.current = null;
+      setSaveState("saving");
+      const request = saveSession.tail
+        .catch(() => undefined)
+        .then(async () => {
+          const save = () =>
+            saveProfile(JSON.stringify(snapshot, null, 2)).catch(
+              (error: unknown) => ({
+                ok: false as const,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Couldn't save your changes.",
+              }),
+            );
+          let result = await save();
+          if (!result.ok) {
+            setSaveState("retrying");
+            await sleep(RETRY_MS);
+            // A newer draft will be saved by its own queued request.
+            if (saveSession.draft !== snapshot) return null;
+            result = await save();
+          }
+          if (result.ok) saveSession.acknowledge(snapshot);
+          return result;
+        });
+      saveSession.track(request);
+      request
+        .then((res) => {
+          if (!res || generation !== saveGeneration.current) return;
+          if (res.ok) {
+            pendingRetry.current = null;
+            setSavedProfile(snapshot);
+            setLastSavedAt(Date.now());
+            setSaveState("idle");
+            return;
+          }
           pendingRetry.current = snapshot;
-          setSaveState("retrying");
-        } else {
-          pendingRetry.current = null;
           setSaveState("not-saved");
           toast.error(res.error || "Couldn't save your changes.");
-        }
-      })
-      .catch((err: unknown) => {
-        if (generation !== saveGeneration.current) return;
-        if (!isRetry) {
+        })
+        .catch((err: unknown) => {
+          if (generation !== saveGeneration.current) return;
           pendingRetry.current = snapshot;
-          setSaveState("retrying");
-        } else {
-          pendingRetry.current = null;
           setSaveState("not-saved");
           toast.error((err as Error).message || "Couldn't save your changes.");
-        }
-      });
-  }, []);
+        });
+    },
+    [saveSession],
+  );
 
-  // One retry, 3s after a failed first attempt, of the SAME snapshot. When the
-  // user edits while retrying, the saveState flips to "saving" and this timer's
-  // cleanup clears the pending retry.
+  // Keep the latest unsent draft so navigation can flush the debounce window.
   useEffect(() => {
-    if (saveState !== "retrying") return;
-    const timer = setTimeout(() => {
-      const snap = pendingRetry.current;
-      if (snap) attemptSave(snap, true);
-    }, RETRY_MS);
-    return () => clearTimeout(timer);
-  }, [saveState, attemptSave]);
-
-  // Debounced autosave: reset the timer on every edit (a ref-held timeout, not
-  // a naive effect that fires per keystroke). The effect re-runs on each
-  // profile change and clears the prior timer, so the closure always captures
-  // the LATEST profile - no ref-with-latest needed.
-  useEffect(() => {
-    if (!profile) return;
+    if (!profile || waitingForImport) return;
     if (!hasObservedProfile.current) {
       hasObservedProfile.current = true;
-      return;
+      if (!saveSession.draft) return;
     }
     if (skipNextDebouncedSave.current) {
       skipNextDebouncedSave.current = false;
       return;
     }
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    pendingSave.current = profile;
+    saveSession.setDraft(profile);
+    pendingRetry.current = null;
     debounceTimer.current = setTimeout(() => {
-      attemptSave(profile, false);
+      pendingSave.current = null;
+      attemptSave(profile);
     }, DEBOUNCE_MS);
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [profile, attemptSave]);
+  }, [profile, attemptSave, saveSession, waitingForImport]);
 
-  // Leave no dangling timers on unmount.
+  // Client navigation must not discard the final edit. Use the same queue so
+  // this final snapshot lands after any request already in flight.
   useEffect(() => {
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      const snapshot = pendingSave.current ?? pendingRetry.current;
+      pendingSave.current = null;
+      if (snapshot) attemptSave(snapshot);
     };
-  }, []);
+  }, [attemptSave]);
 
-  // beforeunload: fire ONLY while a save is genuinely in flight (saving or
-  // the scheduled retry). Generic unsaved keystrokes never warn.
+  // A full reload/close can terminate requests, unlike client navigation.
+  // Cover the debounce window and failed saves as well as in-flight requests.
   useEffect(() => {
-    if (saveState !== "saving" && saveState !== "retrying") return;
+    if (
+      profile === savedProfile &&
+      !waitingForImport &&
+      importState.status !== "applying"
+    )
+      return;
     const handler = (e: BeforeUnloadEvent) => {
+      const snapshot = pendingSave.current;
+      if (snapshot) {
+        if (debounceTimer.current) clearTimeout(debounceTimer.current);
+        pendingSave.current = null;
+        attemptSave(snapshot);
+      }
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [saveState]);
+  }, [
+    profile,
+    savedProfile,
+    attemptSave,
+    waitingForImport,
+    importState.status,
+  ]);
+
+  // A cached route response can predate the last acknowledgement. Start from
+  // that acknowledgement and refresh only while the user has made no edits.
+  useEffect(() => {
+    if (!refreshOnMount || waitingForImport) return;
+    let active = true;
+    const revision = saveSession.revision;
+    const unchanged = () =>
+      active &&
+      revision === saveSession.revision &&
+      !saveSession.draft &&
+      !saveSession.importing &&
+      !pendingSave.current;
+    void saveSession.tail
+      .then(async () => {
+        if (!unchanged()) return;
+        const result = await fetchProfile();
+        if (!unchanged() || !result.ok) return;
+        const parsed = parseV2(result.data ?? null);
+        if (parsed.status !== "ok") return;
+        saveSession.acknowledge(parsed.profile);
+        skipNextDebouncedSave.current = true;
+        setProfile(parsed.profile);
+        setSavedProfile(parsed.profile);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [refreshOnMount, waitingForImport, saveSession]);
+
+  // If the user returns while an import is committing, keep the editor frozen
+  // until its serialized write settles, then read the committed profile.
+  useEffect(() => {
+    if (!waitingForImport) return;
+    let active = true;
+    void Promise.resolve(saveSession.importing)
+      .catch(() => undefined)
+      .then(async () => {
+        await saveSession.tail;
+        if (!active) return;
+        if (saveSession.draft) {
+          setProfile(saveSession.draft);
+          setSavedProfile(null);
+          setWaitingForImport(false);
+          return;
+        }
+        const result = await fetchProfile();
+        if (!active) return;
+        if (!result.ok) throw new Error("Profile reload failed");
+        const parsed = parseV2(result.data ?? null);
+        if (parsed.status === "upgrade")
+          throw new Error("Profile migration required");
+        const loaded = parsed.status === "ok" ? parsed.profile : null;
+        setProfile(loaded);
+        setSavedProfile(loaded);
+        if (loaded) saveSession.acknowledge(loaded);
+        setWaitingForImport(false);
+      })
+      .catch(() => {
+        if (active)
+          toast.error(
+            "Couldn't reload the imported profile. Refresh this page to try again.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [saveSession, waitingForImport]);
 
   // Ticker re-renders "Saved Ns ago" every 10s while we have a timestamp.
   useEffect(() => {
@@ -354,6 +453,7 @@ export function ProfileEditor(props: {
           const parsed = parseV2(again.data);
           if (parsed.status === "ok") {
             setProfile(parsed.profile);
+            setSavedProfile(parsed.profile);
             setActiveId(
               parsed.profile.sections.find((s) => s.kind !== "skills")?.id ??
                 null,
@@ -477,9 +577,10 @@ export function ProfileEditor(props: {
     // reached Convex, so the backup taken moments later captured the version
     // WITHOUT it - the edit then existed nowhere, live or backed up, which is
     // the exact loss profileBackups was added to prevent.
-    const pending = pendingRetry.current ?? previous;
+    const pending = previous;
+    pendingSave.current = null;
     pendingRetry.current = null;
-    const request = saveQueue.current
+    const request = saveSession.tail
       .catch(() => undefined)
       .then(async () => {
         if (pending) {
@@ -491,10 +592,7 @@ export function ProfileEditor(props: {
         }
         return confirmResumeImport(JSON.stringify(imported, null, 2));
       });
-    saveQueue.current = request.then(
-      () => undefined,
-      () => undefined,
-    );
+    saveSession.beginImport(request);
     let res: Awaited<typeof request>;
     try {
       res = await request;
@@ -507,16 +605,19 @@ export function ProfileEditor(props: {
             : "Couldn't apply the import.",
       };
     }
+    saveSession.finishImport(res.ok ? imported : undefined);
     if (!res.ok) {
       toast.error(res.error);
       // Back to the review card - the preview is still valid, nothing was
       // overwritten, and the user can retry or cancel.
       setImportState(importState);
+      if (previous) attemptSave(previous);
       return;
     }
     hasObservedProfile.current = true;
     skipNextDebouncedSave.current = true;
     setProfile(imported);
+    setSavedProfile(imported);
     setActiveId(
       imported.sections.find((section) => section.kind !== "skills")?.id ??
         imported.sections[0]?.id ??
@@ -535,20 +636,9 @@ export function ProfileEditor(props: {
         action: {
           label: "Undo",
           onClick: () => {
-            // Write it back directly rather than leaning on the debounced
-            // autosave. The toast is mounted at the root layout so it outlives
-            // this component: after navigating away, a setProfile-only undo
-            // updated state on an unmounted editor and never reached Convex,
-            // leaving the user certain they had undone something they had not.
-            // Closing the tab inside the debounce window lost it the same way.
-            const json = JSON.stringify(previous, null, 2);
-            void saveProfile(json).then(
-              (res) =>
-                res.ok
-                  ? toast.success("Profile restored")
-                  : toast.error(`Could not restore: ${res.error}`),
-              () => toast.error("Could not restore the previous profile."),
-            );
+            // The toast outlives this editor; write through the shared queue.
+            saveSession.setDraft(previous);
+            attemptSave(previous);
             setProfile(previous);
             setActiveId(
               previous.sections.find((s) => s.kind !== "skills")?.id ??
@@ -722,9 +812,12 @@ export function ProfileEditor(props: {
 
   // ---- rendering ---------------------------------------------------------
 
-  if (outcome.status === "invalid" && profile === null) {
+  if (outcome.status !== "upgrade" && profile === null) {
     return (
-      <div className="space-y-3">
+      <fieldset
+        disabled={waitingForImport || importState.status === "applying"}
+        className="min-w-0 space-y-3"
+      >
         <EmptyState
           importing={importState.status === "parsing"}
           onImport={handleImportFile}
@@ -733,7 +826,8 @@ export function ProfileEditor(props: {
             hasObservedProfile.current = true;
             skipNextDebouncedSave.current = true;
             setProfile(blank);
-            attemptSave(blank, false);
+            saveSession.setDraft(blank);
+            attemptSave(blank);
             setActiveId(
               blank.sections.find((s) => s.kind !== "skills")?.id ?? null,
             );
@@ -745,7 +839,7 @@ export function ProfileEditor(props: {
           onConfirm={() => void handleConfirmImport()}
           onCancel={handleCancelImport}
         />
-      </div>
+      </fieldset>
     );
   }
 
@@ -762,9 +856,12 @@ export function ProfileEditor(props: {
   }
 
   const savedText = (() => {
+    if (waitingForImport || importState.status === "applying")
+      return "Applying import...";
     if (saveState === "saving") return "Saving...";
     if (saveState === "retrying") return "Not saved - retrying";
     if (saveState === "not-saved") return "Not saved";
+    if (profile !== savedProfile) return "Saving...";
     if (lastSavedAt !== null) {
       const secs = Math.max(0, Math.floor((now - lastSavedAt) / 1000));
       return `Saved ${secs}s ago`;
@@ -774,7 +871,10 @@ export function ProfileEditor(props: {
   const saveErrored = saveState === "retrying" || saveState === "not-saved";
 
   return (
-    <div className="min-w-0">
+    <fieldset
+      disabled={waitingForImport || importState.status === "applying"}
+      className="min-w-0"
+    >
       {/* Top bar: heading, variant switcher, save indicator, spacer, toggle. */}
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <h3 className="text-[15px] font-semibold text-ink">Resume</h3>
@@ -945,7 +1045,7 @@ export function ProfileEditor(props: {
           )}
         </div>
       )}
-    </div>
+    </fieldset>
   );
 }
 
