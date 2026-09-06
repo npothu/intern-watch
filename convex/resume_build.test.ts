@@ -4,9 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
 import { convexTest } from "convex-test";
 import { PDFDocument } from "pdf-lib";
 import schema from "./schema";
-import * as resume from "./resume";
-import * as tracker from "./tracker";
-import { runBuild } from "./resume_node";
+import { api, internal } from "./_generated/api";
 import type { ProfileV2 } from "./profile_schema";
 
 const SECRET = "test-tracker-secret";
@@ -65,41 +63,41 @@ afterEach(() => {
 describe("PDF-first resume build", () => {
   test("a saved job description can be read and overwritten independently of a build", async () => {
     const t = convexTest(schema);
-    await t.mutation(tracker.pushMatches, {
+    await t.mutation(api.tracker.pushMatches, {
       user: "alice",
       items: [{ short: "acme-role", company: "Acme, Inc." }],
       secret: SECRET,
     });
 
-    await t.mutation(resume.saveJobDescription, {
+    await t.mutation(api.resume.saveJobDescription, {
       user: "alice",
       short: "acme-role",
       jdText: "First job description",
       secret: SECRET,
     });
     expect(
-      await t.query(resume.getJobDescription, {
+      await t.query(api.resume.getJobDescription, {
         user: "alice",
         short: "acme-role",
         secret: SECRET,
       }),
     ).toMatchObject({ text: "First job description" });
 
-    await t.mutation(resume.saveJobDescription, {
+    await t.mutation(api.resume.saveJobDescription, {
       user: "alice",
       short: "acme-role",
       jdText: "Updated job description",
       secret: SECRET,
     });
     expect(
-      await t.query(resume.getJobDescription, {
+      await t.query(api.resume.getJobDescription, {
         user: "alice",
         short: "acme-role",
         secret: SECRET,
       }),
     ).toMatchObject({ text: "Updated job description" });
     expect(
-      await t.query(tracker.getMatches, { user: "alice", secret: SECRET }),
+      await t.query(api.tracker.getMatches, { user: "alice", secret: SECRET }),
     ).toEqual([
       expect.objectContaining({
         short: "acme-role",
@@ -110,12 +108,12 @@ describe("PDF-first resume build", () => {
 
   test("request, action, persistence, and download artifacts work together", async () => {
     const t = convexTest(schema);
-    await t.mutation(resume.putProfile, {
+    await t.mutation(api.resume.putProfile, {
       user: "alice",
       data: JSON.stringify(PROFILE),
       secret: SECRET,
     });
-    await t.mutation(tracker.pushMatches, {
+    await t.mutation(api.tracker.pushMatches, {
       user: "alice",
       items: [
         {
@@ -128,7 +126,7 @@ describe("PDF-first resume build", () => {
       secret: SECRET,
     });
 
-    const requested = await t.mutation(resume.requestBuild, {
+    const requested = await t.mutation(api.resume.requestBuild, {
       user: "alice",
       short: "acme-role",
       secret: SECRET,
@@ -147,7 +145,7 @@ describe("PDF-first resume build", () => {
       "Requirements: TypeScript, React, automated testing, and full-stack development.",
     );
     expect(
-      await t.query(resume.getBuildStatus, {
+      await t.query(api.resume.getBuildStatus, {
         user: "alice",
         short: "acme-role",
         secret: SECRET,
@@ -158,21 +156,21 @@ describe("PDF-first resume build", () => {
     // that background copy parked while this test invokes the action itself.
     // PDFKit uses real timers internally, so restore them before rendering.
     vi.useRealTimers();
-    await t.action(runBuild, {
+    await t.action(internal.resume_node.runBuild, {
       user: "alice",
       short: "acme-role",
       variant: "tailored",
     });
 
     expect(
-      await t.query(resume.getBuildStatus, {
+      await t.query(api.resume.getBuildStatus, {
         user: "alice",
         short: "acme-role",
         secret: SECRET,
       }),
     ).toBeNull();
 
-    const [row] = await t.query(tracker.getResumeUrls, {
+    const [row] = await t.query(api.tracker.getResumeUrls, {
       user: "alice",
       secret: SECRET,
     });

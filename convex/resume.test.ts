@@ -2,8 +2,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import { Document } from "docx";
 import schema from "./schema";
-import * as resume from "./resume";
-import * as tracker from "./tracker";
+import { api, internal } from "./_generated/api";
 import {
   applyRewrites,
   assemblePrompt,
@@ -417,7 +416,7 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
   test("putProfile stores data as a string and getProfileInternal round-trips it", async () => {
     const t = convexTest(schema);
     const data = { header: { name: "Alex Example" }, projects: {} };
-    await t.mutation(resume.putProfile, {
+    await t.mutation(api.resume.putProfile, {
       user: "u1",
       data: JSON.stringify(data),
       secret: SECRET,
@@ -431,12 +430,12 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
 
   test("putProfile upserts (replaces, does not duplicate) on a second call", async () => {
     const t = convexTest(schema);
-    await t.mutation(resume.putProfile, {
+    await t.mutation(api.resume.putProfile, {
       user: "u1",
       data: JSON.stringify({ v: 1 }),
       secret: SECRET,
     });
-    await t.mutation(resume.putProfile, {
+    await t.mutation(api.resume.putProfile, {
       user: "u1",
       data: JSON.stringify({ v: 2 }),
       secret: SECRET,
@@ -449,7 +448,7 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
   test("putProfile rejects invalid JSON", async () => {
     const t = convexTest(schema);
     await expect(
-      t.mutation(resume.putProfile, {
+      t.mutation(api.resume.putProfile, {
         user: "u1",
         data: "{not valid json",
         secret: SECRET,
@@ -460,7 +459,7 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
   test("putProfile rejects a bad secret", async () => {
     const t = convexTest(schema);
     await expect(
-      t.mutation(resume.putProfile, {
+      t.mutation(api.resume.putProfile, {
         user: "u1",
         data: JSON.stringify({}),
         secret: "wrong",
@@ -484,12 +483,12 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
     // The bug: inserting `data` as a raw object (with the em-dash key) fails
     // with an opaque Server Error. Sending it as a JSON string sidesteps
     // that field-name constraint entirely.
-    await t.mutation(resume.putProfile, {
+    await t.mutation(api.resume.putProfile, {
       user: "u1",
       data: JSON.stringify(data),
       secret: SECRET,
     });
-    const row = await t.query(resume.getProfileInternal, { user: "u1" });
+    const row = await t.query(internal.resume.getProfileInternal, { user: "u1" });
     // Same normalizer performBuild applies before treating profileRow.data as
     // a Profile.
     const profile =
@@ -508,7 +507,7 @@ describe("resume.ts: putProfile stores an opaque JSON string", () => {
     await t.run(async (ctx) => {
       await ctx.db.insert("profiles", { user: "u1", data, updatedAt: Date.now() });
     });
-    const row = await t.query(resume.getProfileInternal, { user: "u1" });
+    const row = await t.query(internal.resume.getProfileInternal, { user: "u1" });
     expect(typeof row!.data).toBe("object");
     const profile =
       typeof row!.data === "string" ? JSON.parse(row!.data as string) : row!.data;
@@ -531,7 +530,7 @@ describe("resume artifact persistence", () => {
       scores: { [unicodeProject]: 7 },
       projects: [{ name: unicodeProject }],
     };
-    await t.mutation(resume.attachResumeInternal, {
+    await t.mutation(internal.resume.attachResumeInternal, {
       user: "u1",
       short: "ibm-role",
       filename: "first.pdf",
@@ -541,7 +540,7 @@ describe("resume artifact persistence", () => {
       report: JSON.stringify(firstReport),
     });
 
-    const refreshed = await t.query(tracker.getResumeUrls, {
+    const refreshed = await t.query(api.tracker.getResumeUrls, {
       user: "u1",
       secret: SECRET,
     });
@@ -554,7 +553,7 @@ describe("resume artifact persistence", () => {
       docx: await ctx.storage.store(new Blob(["second-docx"])),
     }));
     const secondReport = { scores: { IBM: 3 }, projects: [{ name: "IBM" }] };
-    await t.mutation(resume.attachResumeInternal, {
+    await t.mutation(internal.resume.attachResumeInternal, {
       user: "u1",
       short: "ibm-role",
       filename: "second.pdf",
@@ -563,13 +562,13 @@ describe("resume artifact persistence", () => {
       docxStorageId: second.docx,
       report: JSON.stringify(secondReport),
     });
-    await t.mutation(tracker.restoreResume, {
+    await t.mutation(api.tracker.restoreResume, {
       user: "u1",
       short: "ibm-role",
       secret: SECRET,
     });
 
-    const restored = await t.query(tracker.getResumeUrls, {
+    const restored = await t.query(api.tracker.getResumeUrls, {
       user: "u1",
       secret: SECRET,
     });

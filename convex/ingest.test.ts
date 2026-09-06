@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
+import { api, internal } from "./_generated/api";
 import * as ingest from "./ingest";
 import {
   canonicalUrl,
@@ -79,7 +80,7 @@ describe("ingest: validateUrl", () => {
 describe("ingest: requestIngest", () => {
   test("creates fetching row and returns short", async () => {
     const t = convexTest(schema);
-    const res = await t.mutation(ingest.requestIngest, {
+    const res = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/123",
       secret: SECRET,
@@ -88,7 +89,7 @@ describe("ingest: requestIngest", () => {
     expect(typeof res.ingestId).toBe("string");
     expect(typeof res.short).toBe("string");
     expect(res.short).toHaveLength(12);
-    const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId: res.ingestId as any, secret: SECRET });
+    const row = await t.query(api.ingest.getIngestStatus, { user: "u1", ingestId: res.ingestId as any, secret: SECRET });
     expect(row?.status).toBe("fetching");
     expect(row?.canonicalUrl).toBe(canonicalUrl("https://example.com/jobs/123"));
   });
@@ -96,9 +97,9 @@ describe("ingest: requestIngest", () => {
   test("duplicate via same canonical url returns already_exists with same short", async () => {
     const t = convexTest(schema);
     const url = "https://example.com/jobs/123?utm_source=foo";
-    const first = await t.mutation(ingest.requestIngest, { user: "u1", url, secret: SECRET });
+    const first = await t.mutation(api.ingest.requestIngest, { user: "u1", url, secret: SECRET });
     // second request with normalized same url (tracking params stripped) should dedup
-    const second = await t.mutation(ingest.requestIngest, {
+    const second = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/123?utm_campaign=bar",
       secret: SECRET,
@@ -121,7 +122,7 @@ describe("ingest: requestIngest", () => {
         pushedAt: Date.now(),
       });
     });
-    const res = await t.mutation(ingest.requestIngest, {
+    const res = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/456",
       secret: SECRET,
@@ -141,7 +142,7 @@ describe("ingest: requestIngest", () => {
       });
     });
     // Same canonical (keep param, but with tracking added)
-    const res = await t.mutation(ingest.requestIngest, {
+    const res = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/789?keep=1&utm_source=x",
       secret: SECRET,
@@ -153,8 +154,8 @@ describe("ingest: requestIngest", () => {
   test("different user not considered duplicate", async () => {
     const t = convexTest(schema);
     const url = "https://example.com/jobs/999";
-    const first = await t.mutation(ingest.requestIngest, { user: "u1", url, secret: SECRET });
-    const second = await t.mutation(ingest.requestIngest, { user: "u2", url, secret: SECRET });
+    const first = await t.mutation(api.ingest.requestIngest, { user: "u1", url, secret: SECRET });
+    const second = await t.mutation(api.ingest.requestIngest, { user: "u2", url, secret: SECRET });
     expect(first.status).toBe("fetching");
     expect(second.status).toBe("fetching");
     expect(first.ingestId).not.toBe(second.ingestId);
@@ -163,24 +164,24 @@ describe("ingest: requestIngest", () => {
   test("bad secret throws", async () => {
     const t = convexTest(schema);
     await expect(
-      t.mutation(ingest.requestIngest, { user: "u1", url: "https://example.com/j", secret: "wrong" })
+      t.mutation(api.ingest.requestIngest, { user: "u1", url: "https://example.com/j", secret: "wrong" })
     ).rejects.toThrow("bad secret");
   });
 
   test("invalid url throws", async () => {
     const t = convexTest(schema);
     await expect(
-      t.mutation(ingest.requestIngest, { user: "u1", url: "http://localhost/job", secret: SECRET })
+      t.mutation(api.ingest.requestIngest, { user: "u1", url: "http://localhost/job", secret: SECRET })
     ).rejects.toThrow();
     await expect(
-      t.mutation(ingest.requestIngest, { user: "u1", url: "file:///etc/passwd", secret: SECRET })
+      t.mutation(api.ingest.requestIngest, { user: "u1", url: "file:///etc/passwd", secret: SECRET })
     ).rejects.toThrow();
   });
 
   test("getIngestStatus returns null for wrong user", async () => {
     const t = convexTest(schema);
-    const res = await t.mutation(ingest.requestIngest, { user: "u1", url: "https://example.com/jobs/a", secret: SECRET });
-    const status = await t.query(ingest.getIngestStatus, { user: "u2", ingestId: res.ingestId as any, secret: SECRET });
+    const res = await t.mutation(api.ingest.requestIngest, { user: "u1", url: "https://example.com/jobs/a", secret: SECRET });
+    const status = await t.query(api.ingest.getIngestStatus, { user: "u2", ingestId: res.ingestId as any, secret: SECRET });
     expect(status).toBeNull();
   });
 
@@ -232,7 +233,7 @@ describe("ingest: runIngest", () => {
   test("fetches, extracts, upserts match and marks done", async () => {
     const t = convexTest(schema);
     // Create a pending ingest via requestIngest (which schedules runIngest, but we will manually invoke)
-    const req = await t.mutation(ingest.requestIngest, {
+    const req = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/555",
       secret: SECRET,
@@ -253,10 +254,9 @@ describe("ingest: runIngest", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     // Directly run the node action (bypassing scheduler)
-    const { runIngest } = await import("./ingest_node");
-    await t.action(runIngest, { user: "u1", ingestId });
+    await t.action(internal.ingest_node.runIngest, { user: "u1", ingestId });
 
-    const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId, secret: SECRET });
+    const row = await t.query(api.ingest.getIngestStatus, { user: "u1", ingestId, secret: SECRET });
     expect(row?.status).toBe("done");
     expect(row?.dedupKey).toBeTruthy();
 
@@ -274,7 +274,7 @@ describe("ingest: runIngest", () => {
 
   test("fetch failure marks ingest as failed with truncated error", async () => {
     const t = convexTest(schema);
-    const req = await t.mutation(ingest.requestIngest, {
+    const req = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/fail",
       secret: SECRET,
@@ -283,10 +283,9 @@ describe("ingest: runIngest", () => {
     const fetchMock = vi.fn(async () => new Response("not found", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const { runIngest } = await import("./ingest_node");
-    await t.action(runIngest, { user: "u1", ingestId });
+    await t.action(internal.ingest_node.runIngest, { user: "u1", ingestId });
 
-    const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId, secret: SECRET });
+    const row = await t.query(api.ingest.getIngestStatus, { user: "u1", ingestId, secret: SECRET });
     expect(row?.status).toBe("failed");
     expect(row?.error).toBeTruthy();
     expect(row!.error!.length).toBeLessThanOrEqual(300);
@@ -296,7 +295,7 @@ describe("ingest: runIngest", () => {
 
   test("200KB cap: large body is truncated", async () => {
     const t = convexTest(schema);
-    const req = await t.mutation(ingest.requestIngest, {
+    const req = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/big",
       secret: SECRET,
@@ -311,9 +310,8 @@ describe("ingest: runIngest", () => {
       "a".repeat(300 * 1024);
     const fetchMock = vi.fn(async () => new Response(bigHtml, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const { runIngest } = await import("./ingest_node");
-    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
-    const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId: req.ingestId as any, secret: SECRET });
+    await t.action(internal.ingest_node.runIngest, { user: "u1", ingestId: req.ingestId as any });
+    const row = await t.query(api.ingest.getIngestStatus, { user: "u1", ingestId: req.ingestId as any, secret: SECRET });
     expect(row?.status).toBe("done");
     const match = await t.run(async (ctx) => await ctx.db.query("matches").first());
     expect(match?.item?.title).toBe("Big Intern");
@@ -322,7 +320,7 @@ describe("ingest: runIngest", () => {
 
   test("200KB cap: job data beyond the cap fails rather than inventing a row", async () => {
     const t = convexTest(schema);
-    const req = await t.mutation(ingest.requestIngest, {
+    const req = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://example.com/jobs/big-late",
       secret: SECRET,
@@ -331,9 +329,8 @@ describe("ingest: runIngest", () => {
       "a".repeat(300 * 1024) +
       `<script type="application/ld+json">{"@type":"JobPosting","title":"Late Intern","hiringOrganization":{"name":"LateCo"}}</script>`;
     vi.stubGlobal("fetch", vi.fn(async () => new Response(lateHtml, { status: 200 })));
-    const { runIngest } = await import("./ingest_node");
-    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
-    const row = await t.query(ingest.getIngestStatus, { user: "u1", ingestId: req.ingestId as any, secret: SECRET });
+    await t.action(internal.ingest_node.runIngest, { user: "u1", ingestId: req.ingestId as any });
+    const row = await t.query(api.ingest.getIngestStatus, { user: "u1", ingestId: req.ingestId as any, secret: SECRET });
     expect(row?.status).toBe("failed");
     const matches = await t.run(async (ctx) => await ctx.db.query("matches").collect());
     expect(matches).toHaveLength(0);
@@ -396,15 +393,14 @@ describe("regressions from live ingest testing", () => {
   test("a 2xx response with an empty body fails instead of creating a row", async () => {
     // Avature answers automated requests with HTTP 202 and no body.
     const t = convexTest(schema);
-    const req = await t.mutation(ingest.requestIngest, {
+    const req = await t.mutation(api.ingest.requestIngest, {
       user: "u1",
       url: "https://careers.example.com/en_US/careers/JobDetail?jobId=1",
       secret: SECRET,
     });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 202 })));
-    const { runIngest } = await import("./ingest_node");
-    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
-    const row = await t.query(ingest.getIngestStatus, {
+    await t.action(internal.ingest_node.runIngest, { user: "u1", ingestId: req.ingestId as any });
+    const row = await t.query(api.ingest.getIngestStatus, {
       user: "u1",
       ingestId: req.ingestId as any,
       secret: SECRET,
@@ -439,8 +435,7 @@ describe("manual rows survive the watcher's snapshot prune", () => {
 
     // The watcher prunes to its own snapshot, which cannot mention the manual
     // row - it only exists in Convex, never in the run state.
-    const tracker = await import("./tracker");
-    await t.mutation(tracker.pruneMatches, {
+    await t.mutation(api.tracker.pruneMatches, {
       user: "u1",
       keep: ["watcher00001"],
       secret: SECRET,
@@ -463,8 +458,7 @@ describe("manual rows survive the watcher's snapshot prune", () => {
         pushedAt: Date.now(),
       });
     });
-    const tracker = await import("./tracker");
-    await t.mutation(tracker.pruneMatches, { user: "u1", keep: [], secret: SECRET });
+    await t.mutation(api.tracker.pruneMatches, { user: "u1", keep: [], secret: SECRET });
     const left = await t.run(async (ctx) => await ctx.db.query("matches").collect());
     expect(left).toHaveLength(0);
   });
@@ -478,7 +472,7 @@ describe("deleteMatch and stale ingest records", () => {
 
   /** Drive a URL all the way to a done ingest with a match row. */
   async function addJob(t: any, url: string) {
-    const req = await t.mutation(ingest.requestIngest, { user: "u1", url, secret: SECRET });
+    const req = await t.mutation(api.ingest.requestIngest, { user: "u1", url, secret: SECRET });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -488,26 +482,24 @@ describe("deleteMatch and stale ingest records", () => {
         )
       )
     );
-    const { runIngest } = await import("./ingest_node");
-    await t.action(runIngest, { user: "u1", ingestId: req.ingestId as any });
+    await t.action(internal.ingest_node.runIngest, { user: "u1", ingestId: req.ingestId as any });
     vi.unstubAllGlobals();
     return req;
   }
 
   test("a deleted job can be added again", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
 
     const first = await addJob(t, URL_A);
     expect(
-      (await t.query(ingest.getIngestStatus, { user: "u1", ingestId: first.ingestId as any, secret: SECRET }))?.status
+      (await t.query(api.ingest.getIngestStatus, { user: "u1", ingestId: first.ingestId as any, secret: SECRET }))?.status
     ).toBe("done");
 
     // Re-adding while it is present is correctly refused.
-    const dup = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    const dup = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
     expect(dup.status).toBe("already_exists");
 
-    const del = await t.mutation(tracker.deleteMatch, {
+    const del = await t.mutation(api.tracker.deleteMatch, {
       user: "u1",
       short: first.short,
       secret: SECRET,
@@ -517,7 +509,7 @@ describe("deleteMatch and stale ingest records", () => {
     expect(del.ingestsRemoved).toBeGreaterThan(0);
 
     // ...and now it can be added again rather than being refused forever.
-    const again = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    const again = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
     expect(again.status).toBe("fetching");
     expect(again.short).toBe(first.short);
   });
@@ -531,7 +523,7 @@ describe("deleteMatch and stale ingest records", () => {
       const m = await ctx.db.query("matches").first();
       await ctx.db.delete(m._id);
     });
-    const again = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    const again = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
     expect(again.status).toBe("fetching");
     // The stale record is cleared out rather than accumulating.
     const rows = await t.run(async (ctx: any) =>
@@ -542,16 +534,15 @@ describe("deleteMatch and stale ingest records", () => {
 
   test("an in-flight ingest still blocks a second submit", async () => {
     const t = convexTest(schema);
-    const first = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    const first = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
     expect(first.status).toBe("fetching"); // no match row yet
-    const second = await t.mutation(ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
+    const second = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
     expect(second.status).toBe("already_exists");
     expect(second.ingestId).toBe(first.ingestId);
   });
 
   test("deleting a watcher row reports that the watcher will re-push it", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await t.run(async (ctx: any) => {
       await ctx.db.insert("matches", {
         user: "u1",
@@ -560,7 +551,7 @@ describe("deleteMatch and stale ingest records", () => {
         pushedAt: Date.now(),
       });
     });
-    const del = await t.mutation(tracker.deleteMatch, {
+    const del = await t.mutation(api.tracker.deleteMatch, {
       user: "u1",
       short: "watcher00001",
       secret: SECRET,
@@ -570,8 +561,7 @@ describe("deleteMatch and stale ingest records", () => {
 
   test("deleting an unknown short is a no-op, not an error", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
-    const del = await t.mutation(tracker.deleteMatch, {
+    const del = await t.mutation(api.tracker.deleteMatch, {
       user: "u1",
       short: "nosuchshort1",
       secret: SECRET,
@@ -581,7 +571,6 @@ describe("deleteMatch and stale ingest records", () => {
 
   test("deleteMatch requires the secret and is scoped to one user", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await t.run(async (ctx: any) => {
       await ctx.db.insert("matches", {
         user: "u1",
@@ -591,10 +580,10 @@ describe("deleteMatch and stale ingest records", () => {
       });
     });
     await expect(
-      t.mutation(tracker.deleteMatch, { user: "u1", short: "shared000001", secret: "wrong" })
+      t.mutation(api.tracker.deleteMatch, { user: "u1", short: "shared000001", secret: "wrong" })
     ).rejects.toThrow("bad secret");
     // u2 deleting the same short must not touch u1's row.
-    const other = await t.mutation(tracker.deleteMatch, {
+    const other = await t.mutation(api.tracker.deleteMatch, {
       user: "u2",
       short: "shared000001",
       secret: SECRET,
@@ -624,10 +613,9 @@ describe("applied ticks create ledger records", () => {
 
   test("ticking applied creates the record without waiting for the watcher", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await seedMatch(t, "watcher00001", { key: "jr:aaa", company: "Acme", title: "SWE Intern" });
 
-    await t.mutation(tracker.setTicks, {
+    await t.mutation(api.tracker.setTicks, {
       user: "u1",
       writes: [{ short: "watcher00001", field: "applied", value: true }],
       secret: SECRET,
@@ -643,7 +631,6 @@ describe("applied ticks create ledger records", () => {
     // The watcher mirrors item["applied"] out of its own run state, which never
     // contains manual rows - so before this these could never be tracked.
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await seedMatch(t, "manual000001", {
       key: "jr:bbb",
       company: "PDT Partners",
@@ -651,7 +638,7 @@ describe("applied ticks create ledger records", () => {
       source: "manual",
     });
 
-    await t.mutation(tracker.setTicks, {
+    await t.mutation(api.tracker.setTicks, {
       user: "u1",
       writes: [{ short: "manual000001", field: "applied", value: true }],
       secret: SECRET,
@@ -664,10 +651,9 @@ describe("applied ticks create ledger records", () => {
 
   test("unticking removes a record that never progressed", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await seedMatch(t, "undo00000001", { key: "jr:ccc", company: "Acme" });
     const write = (value: boolean) =>
-      t.mutation(tracker.setTicks, {
+      t.mutation(api.tracker.setTicks, {
         user: "u1",
         writes: [{ short: "undo00000001", field: "applied", value }],
         secret: SECRET,
@@ -681,15 +667,14 @@ describe("applied ticks create ledger records", () => {
 
   test("unticking never destroys a record with real tracker history", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await seedMatch(t, "progressed01", { key: "jr:ddd", company: "Acme" });
-    await t.mutation(tracker.setTicks, {
+    await t.mutation(api.tracker.setTicks, {
       user: "u1",
       writes: [{ short: "progressed01", field: "applied", value: true }],
       secret: SECRET,
     });
     // The application moves on: an interview is scheduled.
-    await t.mutation(tracker.recordStatus, {
+    await t.mutation(api.tracker.recordStatus, {
       user: "u1",
       short: "progressed01",
       status: "interview",
@@ -697,7 +682,7 @@ describe("applied ticks create ledger records", () => {
     });
 
     // A stray untick must not delete the permanent record.
-    await t.mutation(tracker.setTicks, {
+    await t.mutation(api.tracker.setTicks, {
       user: "u1",
       writes: [{ short: "progressed01", field: "applied", value: false }],
       secret: SECRET,
@@ -708,10 +693,9 @@ describe("applied ticks create ledger records", () => {
 
   test("re-ticking applied does not spam history", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await seedMatch(t, "repeat000001", { key: "jr:eee", company: "Acme" });
     for (let i = 0; i < 3; i++) {
-      await t.mutation(tracker.setTicks, {
+      await t.mutation(api.tracker.setTicks, {
         user: "u1",
         writes: [{ short: "repeat000001", field: "applied", value: true }],
         secret: SECRET,
@@ -723,9 +707,8 @@ describe("applied ticks create ledger records", () => {
 
   test("saved and dismissed ticks never touch the ledger", async () => {
     const t = convexTest(schema);
-    const tracker = await import("./tracker");
     await seedMatch(t, "other0000001", { key: "jr:fff", company: "Acme" });
-    await t.mutation(tracker.setTicks, {
+    await t.mutation(api.tracker.setTicks, {
       user: "u1",
       writes: [
         { short: "other0000001", field: "saved", value: true },

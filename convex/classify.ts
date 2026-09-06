@@ -410,7 +410,7 @@ const TERMINAL_STATUSES = new Set(["offer", "rejected", "withdrawn"]);
  * behaves: proposed "applied" -> "skip" if current applied, else "queue".
  */
 export function decideTransition(
-  current: string | null,
+  current: string | null | undefined,
   proposed: string,
 ): "apply" | "skip" | "queue" {
   if (current == null || current === "") {

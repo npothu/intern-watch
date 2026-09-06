@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import * as settings from "./settings";
+import { api } from "./_generated/api";
 import { normalizeWatch, type WatchPrefs } from "./watch_types";
 
 // Settings > Watch: the object the page saves, the report the watcher
@@ -74,49 +74,49 @@ describe("normalizeWatch", () => {
 describe("getWatch / setWatch / putWatchReport", () => {
   test("empty until saved; save replaces; report is independent", async () => {
     const t = convexTest(schema);
-    expect(await t.query(settings.getWatch, { user: "u", secret: SECRET })).toEqual({
+    expect(await t.query(api.settings.getWatch, { user: "u", secret: SECRET })).toEqual({
       watch: null,
       updatedAt: null,
       report: null,
     });
 
-    const saved = await t.mutation(settings.setWatch, { user: "u", watch: FULL, secret: SECRET });
+    const saved = await t.mutation(api.settings.setWatch, { user: "u", watch: FULL, secret: SECRET });
     expect(saved.watch).toEqual(FULL);
-    const after = await t.query(settings.getWatch, { user: "u", secret: SECRET });
+    const after = await t.query(api.settings.getWatch, { user: "u", secret: SECRET });
     expect(after.watch).toEqual(FULL);
     expect(after.updatedAt).toBeTypeOf("number");
     expect(after.report).toBeNull();
 
     // The watcher's report lands beside the prefs without touching them.
     const report = { reported_at: "2026-08-26T14:00:00+00:00", terms: { rows: [] } };
-    await t.mutation(settings.putWatchReport, { user: "u", report, secret: SECRET });
-    const withReport = await t.query(settings.getWatch, { user: "u", secret: SECRET });
+    await t.mutation(api.settings.putWatchReport, { user: "u", report, secret: SECRET });
+    const withReport = await t.query(api.settings.getWatch, { user: "u", secret: SECRET });
     expect(withReport.report).toEqual(report);
     expect(withReport.watch).toEqual(FULL);
 
     // A second save is a replace, not a merge: dropping a block drops it.
-    await t.mutation(settings.setWatch, {
+    await t.mutation(api.settings.setWatch, {
       user: "u",
       watch: { priority: { ...FULL.priority!, companies: ["Stripe"] } },
       secret: SECRET,
     });
-    const replaced = await t.query(settings.getWatch, { user: "u", secret: SECRET });
+    const replaced = await t.query(api.settings.getWatch, { user: "u", secret: SECRET });
     expect(replaced.watch).toEqual({ priority: { ...FULL.priority!, companies: ["Stripe"] } });
     expect(replaced.report).toEqual(report);
   });
 
   test("a report for a user with no settings row creates one", async () => {
     const t = convexTest(schema);
-    await t.mutation(settings.putWatchReport, { user: "fresh", report: { x: 1 }, secret: SECRET });
-    const got = await t.query(settings.getWatch, { user: "fresh", secret: SECRET });
+    await t.mutation(api.settings.putWatchReport, { user: "fresh", report: { x: 1 }, secret: SECRET });
+    const got = await t.query(api.settings.getWatch, { user: "fresh", secret: SECRET });
     expect(got).toMatchObject({ watch: null, report: { x: 1 } });
   });
 
   test("bad secret and bad values are rejected", async () => {
     const t = convexTest(schema);
-    await expect(t.query(settings.getWatch, { user: "u", secret: "nope" })).rejects.toThrow(/bad secret/);
+    await expect(t.query(api.settings.getWatch, { user: "u", secret: "nope" })).rejects.toThrow(/bad secret/);
     await expect(
-      t.mutation(settings.setWatch, {
+      t.mutation(api.settings.setWatch, {
         user: "u",
         watch: { terms: { leadWeeks: 99, horizonMonths: 14, include: [], exclude: [] } },
         secret: SECRET,

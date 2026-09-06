@@ -1,6 +1,7 @@
+import type { WithoutSystemFields } from "convex/server";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canonicalUrl, validateUrl } from "./ingest_extract";
 
@@ -285,7 +286,7 @@ export const upsertMatchInternal = internalMutation({
       .query("matches")
       .withIndex("by_user_short", (q: any) => q.eq("user", user).eq("short", short))
       .first();
-    const row: Record<string, unknown> = { user, short, item, pushedAt: Date.now() };
+    const row: WithoutSystemFields<Doc<"matches">> = { user, short, item, pushedAt: Date.now() };
     // A freshly acquired JD wins over an older auto-acquired one, but a
     // user-pasted override (which also stamps jobDescriptionUpdatedAt via
     // requestBuild) is never silently replaced by re-ingesting the URL.
