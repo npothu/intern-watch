@@ -3,6 +3,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTest } from "convex-test";
 import { PDFDocument } from "pdf-lib";
+import PDFKitDocument from "pdfkit/js/pdfkit.standalone.js";
+import JSZip from "jszip";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { ProfileV2 } from "./profile_schema";
@@ -61,6 +63,56 @@ afterEach(() => {
 });
 
 describe("PDF-first resume build", () => {
+  test.each([undefined, "base", "swe"])(
+    "saved hidden projects stay out of generated artifacts (variant %s)",
+    async (variant) => {
+      const t = convexTest(schema);
+      const profile = structuredClone(PROFILE);
+      const projects = profile.sections[0].entries;
+      projects.unshift({
+        ...structuredClone(projects[0]),
+        id: "hidden-project",
+        heading: "Hidden Project",
+        hiddenIn: [variant ?? "base"],
+        bullets: { base: ["Hidden project evidence."], swe: ["TypeScript React testing."] },
+      });
+      await t.mutation(api.resume.putProfile, {
+        user: "alice", data: JSON.stringify(profile), secret: SECRET,
+      });
+      await t.mutation(api.tracker.pushMatches, {
+        user: "alice", items: [{ short: "visibility-role", company: "Acme" }], secret: SECRET,
+      });
+      await t.mutation(api.resume.requestBuild, {
+        user: "alice", short: "visibility-role", secret: SECRET,
+        jdText: "Requirements: TypeScript React testing.", variant,
+      });
+      vi.useRealTimers();
+      const textSpy = vi.spyOn(PDFKitDocument.prototype, "text");
+      try {
+        await t.action(internal.resume_node.runBuild, { user: "alice", short: "visibility-role", variant });
+        const stored = await t.run((ctx) => ctx.db.query("resumes").first());
+        expect(stored).not.toBeNull();
+        const report = JSON.parse(stored!.report as string);
+        const docx = await t.run(async (ctx) => {
+          const blob = await ctx.storage.get(stored!.docxStorageId!);
+          return blob!.arrayBuffer();
+        });
+        const zip = await JSZip.loadAsync(docx);
+        const xml = await zip.file("word/document.xml")!.async("string");
+        expect(xml).toContain("Job Finder");
+        expect(xml).not.toContain("Hidden Project");
+        const pdfText = textSpy.mock.calls.map((call) => call[0]).join("\n");
+        expect(pdfText).toContain("Job Finder");
+        expect(pdfText).not.toContain("Hidden Project");
+        expect(report.projects.map((project: { name: string }) => project.name)).toEqual(["Job Finder"]);
+        expect(report.scores).not.toHaveProperty("Hidden Project");
+      } finally {
+        textSpy.mockRestore();
+      }
+    },
+    20_000,
+  );
+
   test("a saved job description can be read and overwritten independently of a build", async () => {
     const t = convexTest(schema);
     await t.mutation(api.tracker.pushMatches, {

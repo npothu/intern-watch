@@ -332,7 +332,9 @@ export function pickVariant(entry: Entry, jd: JDProfile): string {
     return sum;
   };
   // "base" sorts first so ties resolve to it; otherwise dict insertion order.
-  const keys = Object.keys(entry.bullets).sort(
+  const keys = Object.keys(entry.bullets).filter(
+    (variant) => !entry.hiddenIn?.includes(variant),
+  ).sort(
     (a, b) => (a === "base" ? 0 : 1) - (b === "base" ? 0 : 1),
   );
   let best = keys[0] ?? "base";
@@ -361,12 +363,13 @@ export type SelectResult = {
  * the resume always fills up to MAX_PROJECTS, so zero-score projects pad the
  * tail in bank order rather than leaving the page short (MIN_PROJECTS is kept
  * for lockstep with the Python constants but, as there, unused by selection).
- * The `scores` map reports every project's score (including unpicked ones)
- * for the build report.
+ * Visibility is applied before scoring and padding. Auto builds use base
+ * visibility; an explicit variant uses that variant's visibility.
+ * The `scores` map reports every eligible project's score, including unpicked ones.
  */
-export function selectProjects(profile: ProfileV2, jdText: string): SelectResult {
+export function selectProjects(profile: ProfileV2, jdText: string, variant = "base"): SelectResult {
   const jd = analyze(jdText);
-  const entries = projectEntries(profile);
+  const entries = projectEntries(profile).filter((entry) => !entry.hiddenIn?.includes(variant));
 
   const scores: Record<string, number> = {};
   for (const e of entries) scores[e.heading] = scoreProject(e, jd);

@@ -133,7 +133,7 @@ function selectForBuild(
   scores: Record<string, number>;
   variants: Record<string, string>;
 } {
-  const { selected, scores } = scoreSelect(profile, jdText);
+  const { selected, scores } = scoreSelect(profile, jdText, forcedVariant);
   const jd = analyze(jdText);
   const variants: Record<string, string> = {};
   const payload = buildProjectPayload(
