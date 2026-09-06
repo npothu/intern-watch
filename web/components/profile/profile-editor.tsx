@@ -1,34 +1,17 @@
 "use client";
 
-// The resume editor, rebuilt around the v2 profile shape. It owns the working
-// copy of the profile (header, skills blob, and the ordered sections list) and
-// only talks to the server through the profile server actions.
-//
-// 1) THE VARIANT-WRITE RULE
-// -------------------------
-// Bullets live at `entry.bullets[variant]`, falling back to "base". The rule
-// that makes targeted (non-base) resumes safe is enforced in entry-card.tsx's
-// `bulletsForEdit`: on the FIRST edit of a variant that has no array yet, it
-// seeds `bullets[variant]` by COPYING `bullets.base` into a brand-new array,
-// and every bullet writeback is `{ ...e.bullets, [variant]: next }`, which
-// never touches `bullets.base` unless variant === "base". This file owns the
-// `variant` state and passes it down to every EntryCard, so a brand-new
-// variant only "exists" (appears in variantsOf) once some entry actually owns
-// a bullets key for it - exactly what the "+" variant button relies on.
-//
-// 2) THE AUTOSAVE RULE
-// --------------------
-// There is no manual Save button and no broad "unsaved changes" beforeunload
-// warning. Every edit schedules a save debounced 1200ms after the LAST edit;
-// the indicator only shows "Saving..." once a network call is actually in
-// flight. On failure it retries the same save once, then gives up with a
-// toast. A beforeunload guard still exists but only fires while a save is
-// genuinely in flight (between "Saving..." starting and it resolving), not
-// for generic unsaved keystrokes.
+// One working profile and one serialized autosave queue serve both modes.
+// Library edits source content; Compose owns independent saved variants.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { toast } from "sonner";
-import { Eye, EyeOff, Plus, X } from "lucide-react";
+import { Eye, EyeOff, Plus } from "lucide-react";
 import type { Variant } from "@/lib/profile";
 import {
   blankEntry,
@@ -38,7 +21,6 @@ import {
   profileCounts,
   SECTION_KINDS,
   normalizeProfile,
-  variantsOf,
   type Entry,
   type ProfileCounts,
   type ProfileV2,
@@ -55,14 +37,20 @@ import {
   startResumeImport,
   upgradeProfile,
 } from "@/app/(app)/profile/profile-actions";
-import { SectionRail, PERSONAL_INFO_ID } from "@/components/profile/section-rail";
+import {
+  SectionRail,
+  PERSONAL_INFO_ID,
+} from "@/components/profile/section-rail";
 import { HeaderEditor } from "@/components/profile/header-editor";
 import { EntryCard } from "@/components/profile/entry-card";
 import { SkillsEditor } from "@/components/profile/skills-editor";
+import { savedResumes } from "../../../shared/resume-compose";
+import { ComposeEditor } from "./compose-editor";
 import { ResumePreview } from "@/components/profile/resume-preview";
 import { DownloadMenu } from "@/components/profile/download-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { profileSaveSession } from "@/lib/profile-save-session";
 
 const DEBOUNCE_MS = 1200;
 const RETRY_MS = 3000;
@@ -81,16 +69,8 @@ const CHIP =
 // max-w + truncate: variant names are free-text (the "+" prompt has no length
 // limit), so a pathologically long name must not force the pill row wider
 // than the viewport.
-const VAR_PILL =
-  "max-w-[110px] min-w-0 truncate border-r border-line px-2.5 py-1 text-[11.5px] font-medium text-ink-2 transition-colors last:border-r-0 hover:text-ink";
-const VAR_PILL_ACTIVE = "bg-accent text-accent-ink font-semibold";
-// Same height and border as the pill group it sits beside; the icon is the
-// only content, so it reads as "this variant, downloaded".
 const ICON_BUTTON =
-  "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2 transition-colors hover:text-ink disabled:opacity-60";
-
-const BUILD_BUTTON_TITLE =
-  "Start a build from a specific match instead - a resume is built per job, not from this page";
+  "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2";
 
 const ADD_LABEL: Record<SectionKind, string> = {
   education: "Add school",
@@ -128,7 +108,8 @@ type ResumeImportState =
   | { status: "applying"; filename: string }
   | { status: "error"; message: string };
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parse stored JSON defensively. saveProfile already validates JSON
@@ -145,7 +126,13 @@ function parseV2(data: string | null): ParseOutcome {
       parsed !== null &&
       (parsed as { version?: unknown }).version === 2
     ) {
-      return { status: "ok", profile: normalizeProfile(parsed as ProfileV2) };
+      return {
+        status: "ok",
+        profile: normalizeProfile({
+          ...(parsed as ProfileV2),
+          savedResumes: savedResumes(parsed as ProfileV2),
+        }),
+      };
     }
     return { status: "upgrade" };
   } catch {
@@ -189,12 +176,24 @@ export function ProfileEditor(props: {
   initialData: string | null;
   user: string;
 }) {
+  const saveSession = profileSaveSession(props.user);
+  const [waitingForImport, setWaitingForImport] = useState(
+    () => saveSession.importing !== null,
+  );
+  const [refreshOnMount] = useState(() => saveSession.lastSaved !== null);
   // Parse the incoming JSON once, defensively, into a stable initial outcome.
   // This is a plain state value (not a ref) so it is safe to read while
   // rendering; it never changes after mount.
-  const [outcome] = useState(() => parseV2(props.initialData));
+  const [outcome] = useState<ParseOutcome>(() =>
+    (saveSession.draft ?? saveSession.lastSaved)
+      ? { status: "ok", profile: (saveSession.draft ?? saveSession.lastSaved)! }
+      : parseV2(props.initialData),
+  );
   const [profile, setProfile] = useState<ProfileV2 | null>(
-    outcome.status === "ok" ? outcome.profile : null
+    outcome.status === "ok" ? outcome.profile : null,
+  );
+  const [savedProfile, setSavedProfile] = useState(
+    saveSession.draft ? null : profile,
   );
 
   const [activeId, setActiveId] = useState<string | null>(() => {
@@ -206,9 +205,8 @@ export function ProfileEditor(props: {
     );
   });
   const [openEntries, setOpenEntries] = useState<Record<string, boolean>>({});
-  const [addingVariant, setAddingVariant] = useState(false);
-  const [variantDraft, setVariantDraft] = useState("");
-  const [variant, setVariant] = useState<Variant>("base");
+  const [mode, setMode] = useState<"library" | "compose">("compose");
+  const variant: Variant = "base";
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "retrying" | "not-saved"
   >("idle");
@@ -221,11 +219,11 @@ export function ProfileEditor(props: {
   const previewOn = useSyncExternalStore(
     subscribePreview,
     getPreviewSnapshot,
-    () => true
+    () => true,
   );
 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingSave = useRef<ProfileV2 | null>(null);
   const saveGeneration = useRef(0);
   const hasObservedProfile = useRef(false);
   const skipNextDebouncedSave = useRef(false);
@@ -244,109 +242,195 @@ export function ProfileEditor(props: {
     window.dispatchEvent(new Event(PREVIEW_EVENT));
   };
 
-  // attemptSave: perform one network save. On failure it records the snapshot
-  // in a ref and flips to "retrying"; an effect below schedules exactly one
-  // retry 3s later, and if the retry also fails it shows a toast and falls back
-  // to "Not saved" (no more automatic retries - the next edit will schedule a
-  // fresh save through the debounce path). Using useCallback([]) keeps it
-  // stable for effects and avoids the lint's "self-reference" immutability
-  // error; the retry is scheduled by an effect rather than by attemptSave
-  // calling itself.
+  // The request and its retry outlive the editor. A later mount shares this
+  // queue and starts from its unsaved draft, even on a slow connection.
   const pendingRetry = useRef<ProfileV2 | null>(null);
-  const attemptSave = useCallback((snapshot: ProfileV2, isRetry: boolean) => {
-    const generation = ++saveGeneration.current;
-    setSaveState("saving");
-    const request = saveQueue.current
-      .catch(() => undefined)
-      .then(() => saveProfile(JSON.stringify(snapshot, null, 2)));
-    saveQueue.current = request.then(
-      () => undefined,
-      () => undefined
-    );
-    request
-      .then((res) => {
-        if (generation !== saveGeneration.current) return;
-        if (res.ok) {
-          pendingRetry.current = null;
-          setLastSavedAt(Date.now());
-          setSaveState("idle");
-          return;
-        }
-        if (!isRetry) {
+  const attemptSave = useCallback(
+    (snapshot: ProfileV2) => {
+      const generation = ++saveGeneration.current;
+      pendingRetry.current = null;
+      setSaveState("saving");
+      const request = saveSession.tail
+        .catch(() => undefined)
+        .then(async () => {
+          const save = () =>
+            saveProfile(JSON.stringify(snapshot, null, 2)).catch(
+              (error: unknown) => ({
+                ok: false as const,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Couldn't save your changes.",
+              }),
+            );
+          let result = await save();
+          if (!result.ok) {
+            setSaveState("retrying");
+            await sleep(RETRY_MS);
+            // A newer draft will be saved by its own queued request.
+            if (saveSession.draft !== snapshot) return null;
+            result = await save();
+          }
+          if (result.ok) saveSession.acknowledge(snapshot);
+          return result;
+        });
+      saveSession.track(request);
+      request
+        .then((res) => {
+          if (!res || generation !== saveGeneration.current) return;
+          if (res.ok) {
+            pendingRetry.current = null;
+            setSavedProfile(snapshot);
+            setLastSavedAt(Date.now());
+            setSaveState("idle");
+            return;
+          }
           pendingRetry.current = snapshot;
-          setSaveState("retrying");
-        } else {
-          pendingRetry.current = null;
           setSaveState("not-saved");
           toast.error(res.error || "Couldn't save your changes.");
-        }
-      })
-      .catch((err: unknown) => {
-        if (generation !== saveGeneration.current) return;
-        if (!isRetry) {
+        })
+        .catch((err: unknown) => {
+          if (generation !== saveGeneration.current) return;
           pendingRetry.current = snapshot;
-          setSaveState("retrying");
-        } else {
-          pendingRetry.current = null;
           setSaveState("not-saved");
           toast.error((err as Error).message || "Couldn't save your changes.");
-        }
-      });
-  }, []);
+        });
+    },
+    [saveSession],
+  );
 
-  // One retry, 3s after a failed first attempt, of the SAME snapshot. When the
-  // user edits while retrying, the saveState flips to "saving" and this timer's
-  // cleanup clears the pending retry.
+  // Keep the latest unsent draft so navigation can flush the debounce window.
   useEffect(() => {
-    if (saveState !== "retrying") return;
-    const timer = setTimeout(() => {
-      const snap = pendingRetry.current;
-      if (snap) attemptSave(snap, true);
-    }, RETRY_MS);
-    return () => clearTimeout(timer);
-  }, [saveState, attemptSave]);
-
-  // Debounced autosave: reset the timer on every edit (a ref-held timeout, not
-  // a naive effect that fires per keystroke). The effect re-runs on each
-  // profile change and clears the prior timer, so the closure always captures
-  // the LATEST profile - no ref-with-latest needed.
-  useEffect(() => {
-    if (!profile) return;
+    if (!profile || waitingForImport) return;
     if (!hasObservedProfile.current) {
       hasObservedProfile.current = true;
-      return;
+      if (!saveSession.draft) return;
     }
     if (skipNextDebouncedSave.current) {
       skipNextDebouncedSave.current = false;
       return;
     }
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    pendingSave.current = profile;
+    saveSession.setDraft(profile);
+    pendingRetry.current = null;
     debounceTimer.current = setTimeout(() => {
-      attemptSave(profile, false);
+      pendingSave.current = null;
+      attemptSave(profile);
     }, DEBOUNCE_MS);
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [profile, attemptSave]);
+  }, [profile, attemptSave, saveSession, waitingForImport]);
 
-  // Leave no dangling timers on unmount.
+  // Client navigation must not discard the final edit. Use the same queue so
+  // this final snapshot lands after any request already in flight.
   useEffect(() => {
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      const snapshot = pendingSave.current ?? pendingRetry.current;
+      pendingSave.current = null;
+      if (snapshot) attemptSave(snapshot);
     };
-  }, []);
+  }, [attemptSave]);
 
-  // beforeunload: fire ONLY while a save is genuinely in flight (saving or
-  // the scheduled retry). Generic unsaved keystrokes never warn.
+  // A full reload/close can terminate requests, unlike client navigation.
+  // Cover the debounce window and failed saves as well as in-flight requests.
   useEffect(() => {
-    if (saveState !== "saving" && saveState !== "retrying") return;
+    if (
+      profile === savedProfile &&
+      !waitingForImport &&
+      importState.status !== "applying"
+    )
+      return;
     const handler = (e: BeforeUnloadEvent) => {
+      const snapshot = pendingSave.current;
+      if (snapshot) {
+        if (debounceTimer.current) clearTimeout(debounceTimer.current);
+        pendingSave.current = null;
+        attemptSave(snapshot);
+      }
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [saveState]);
+  }, [
+    profile,
+    savedProfile,
+    attemptSave,
+    waitingForImport,
+    importState.status,
+  ]);
+
+  // A cached route response can predate the last acknowledgement. Start from
+  // that acknowledgement and refresh only while the user has made no edits.
+  useEffect(() => {
+    if (!refreshOnMount || waitingForImport) return;
+    let active = true;
+    const revision = saveSession.revision;
+    const unchanged = () =>
+      active &&
+      revision === saveSession.revision &&
+      !saveSession.draft &&
+      !saveSession.importing &&
+      !pendingSave.current;
+    void saveSession.tail
+      .then(async () => {
+        if (!unchanged()) return;
+        const result = await fetchProfile();
+        if (!unchanged() || !result.ok) return;
+        const parsed = parseV2(result.data ?? null);
+        if (parsed.status !== "ok") return;
+        saveSession.acknowledge(parsed.profile);
+        skipNextDebouncedSave.current = true;
+        setProfile(parsed.profile);
+        setSavedProfile(parsed.profile);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [refreshOnMount, waitingForImport, saveSession]);
+
+  // If the user returns while an import is committing, keep the editor frozen
+  // until its serialized write settles, then read the committed profile.
+  useEffect(() => {
+    if (!waitingForImport) return;
+    let active = true;
+    void Promise.resolve(saveSession.importing)
+      .catch(() => undefined)
+      .then(async () => {
+        await saveSession.tail;
+        if (!active) return;
+        if (saveSession.draft) {
+          setProfile(saveSession.draft);
+          setSavedProfile(null);
+          setWaitingForImport(false);
+          return;
+        }
+        const result = await fetchProfile();
+        if (!active) return;
+        if (!result.ok) throw new Error("Profile reload failed");
+        const parsed = parseV2(result.data ?? null);
+        if (parsed.status === "upgrade")
+          throw new Error("Profile migration required");
+        const loaded = parsed.status === "ok" ? parsed.profile : null;
+        setProfile(loaded);
+        setSavedProfile(loaded);
+        if (loaded) saveSession.acknowledge(loaded);
+        setWaitingForImport(false);
+      })
+      .catch(() => {
+        if (active)
+          toast.error(
+            "Couldn't reload the imported profile. Refresh this page to try again.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [saveSession, waitingForImport]);
 
   // Ticker re-renders "Saved Ns ago" every 10s while we have a timestamp.
   useEffect(() => {
@@ -369,9 +453,10 @@ export function ProfileEditor(props: {
           const parsed = parseV2(again.data);
           if (parsed.status === "ok") {
             setProfile(parsed.profile);
+            setSavedProfile(parsed.profile);
             setActiveId(
               parsed.profile.sections.find((s) => s.kind !== "skills")?.id ??
-                null
+                null,
             );
           }
         }
@@ -397,14 +482,16 @@ export function ProfileEditor(props: {
       if (!upload.ok) {
         const detail = (await upload.text().catch(() => "")).slice(0, 300);
         throw new Error(
-          `Resume upload failed (HTTP ${upload.status})${detail ? `: ${detail}` : ""}`
+          `Resume upload failed (HTTP ${upload.status})${detail ? `: ${detail}` : ""}`,
         );
       }
       const uploaded = (await upload.json().catch(() => null)) as {
         storageId?: unknown;
       } | null;
       if (typeof uploaded?.storageId !== "string" || !uploaded.storageId) {
-        throw new Error("Convex accepted the resume upload but returned no storage ID.");
+        throw new Error(
+          "Convex accepted the resume upload but returned no storage ID.",
+        );
       }
       const started = await startResumeImport(uploaded.storageId, file.name);
       if (!started.ok) throw new Error(started.error);
@@ -433,7 +520,9 @@ export function ProfileEditor(props: {
           return;
         }
         if (status.status === "none") {
-          throw new Error("This import was cancelled. Upload the resume again.");
+          throw new Error(
+            "This import was cancelled. Upload the resume again.",
+          );
         }
       }
       // Stop WATCHING, but leave the record and its result alone. The mapping
@@ -488,22 +577,22 @@ export function ProfileEditor(props: {
     // reached Convex, so the backup taken moments later captured the version
     // WITHOUT it - the edit then existed nowhere, live or backed up, which is
     // the exact loss profileBackups was added to prevent.
-    const pending = pendingRetry.current ?? previous;
+    const pending = previous;
+    pendingSave.current = null;
     pendingRetry.current = null;
-    const request = saveQueue.current
+    const request = saveSession.tail
       .catch(() => undefined)
       .then(async () => {
         if (pending) {
           // Best effort: a failure here still leaves the pre-import profile in
           // the backup, so the import is not blocked by an unsaved keystroke.
-          await saveProfile(JSON.stringify(pending, null, 2)).catch(() => undefined);
+          await saveProfile(JSON.stringify(pending, null, 2)).catch(
+            () => undefined,
+          );
         }
         return confirmResumeImport(JSON.stringify(imported, null, 2));
       });
-    saveQueue.current = request.then(
-      () => undefined,
-      () => undefined
-    );
+    saveSession.beginImport(request);
     let res: Awaited<typeof request>;
     try {
       res = await request;
@@ -516,23 +605,26 @@ export function ProfileEditor(props: {
             : "Couldn't apply the import.",
       };
     }
+    saveSession.finishImport(res.ok ? imported : undefined);
     if (!res.ok) {
       toast.error(res.error);
       // Back to the review card - the preview is still valid, nothing was
       // overwritten, and the user can retry or cancel.
       setImportState(importState);
+      if (previous) attemptSave(previous);
       return;
     }
     hasObservedProfile.current = true;
     skipNextDebouncedSave.current = true;
     setProfile(imported);
+    setSavedProfile(imported);
     setActiveId(
       imported.sections.find((section) => section.kind !== "skills")?.id ??
         imported.sections[0]?.id ??
-        null
+        null,
     );
     setOpenEntries({});
-    setVariant("base");
+    setMode("library");
     setImportState({ status: "idle" });
     setLastSavedAt(Date.now());
     setSaveState("idle");
@@ -544,25 +636,14 @@ export function ProfileEditor(props: {
         action: {
           label: "Undo",
           onClick: () => {
-            // Write it back directly rather than leaning on the debounced
-            // autosave. The toast is mounted at the root layout so it outlives
-            // this component: after navigating away, a setProfile-only undo
-            // updated state on an unmounted editor and never reached Convex,
-            // leaving the user certain they had undone something they had not.
-            // Closing the tab inside the debounce window lost it the same way.
-            const json = JSON.stringify(previous, null, 2);
-            void saveProfile(json).then(
-              (res) =>
-                res.ok
-                  ? toast.success("Profile restored")
-                  : toast.error(`Could not restore: ${res.error}`),
-              () => toast.error("Could not restore the previous profile.")
-            );
+            // The toast outlives this editor; write through the shared queue.
+            saveSession.setDraft(previous);
+            attemptSave(previous);
             setProfile(previous);
             setActiveId(
               previous.sections.find((s) => s.kind !== "skills")?.id ??
                 previous.sections[0]?.id ??
-                null
+                null,
             );
           },
         },
@@ -570,11 +651,11 @@ export function ProfileEditor(props: {
     }
   };
 
-  const variants = profile ? variantsOf(profile) : ["base"];
   const activeIndex = profile
     ? profile.sections.findIndex((s) => s.id === activeId)
     : -1;
-  const activeSection = activeIndex >= 0 ? profile!.sections[activeIndex] : null;
+  const activeSection =
+    activeIndex >= 0 ? profile!.sections[activeIndex] : null;
 
   // ---- state mutation helpers (never mutate in place) -------------------
 
@@ -612,7 +693,7 @@ export function ProfileEditor(props: {
 
   const handleReorderSections = (from: number, to: number) => {
     setProfile((p) =>
-      p ? { ...p, sections: moveItem(p.sections, from, to) } : p
+      p ? { ...p, sections: moveItem(p.sections, from, to) } : p,
     );
   };
 
@@ -622,10 +703,10 @@ export function ProfileEditor(props: {
         ? {
             ...p,
             sections: p.sections.map((s) =>
-              s.id === id ? { ...s, title } : s
+              s.id === id ? { ...s, title } : s,
             ),
           }
-        : p
+        : p,
     );
   };
 
@@ -649,7 +730,7 @@ export function ProfileEditor(props: {
     if (!section) return;
 
     setProfile((p) =>
-      p ? { ...p, sections: p.sections.filter((s) => s.id !== id) } : p
+      p ? { ...p, sections: p.sections.filter((s) => s.id !== id) } : p,
     );
     // If the active section was deleted, select a sensible replacement: the
     // one now at the same index, else the first remaining one.
@@ -692,7 +773,7 @@ export function ProfileEditor(props: {
         sections: p.sections.map((s, i) =>
           i === sectionIndex
             ? { ...s, entries: s.entries.filter((e) => e.id !== entry.id) }
-            : s
+            : s,
         ),
       };
     });
@@ -729,65 +810,14 @@ export function ProfileEditor(props: {
     });
   };
 
-  // Adding a variant PERSISTS it on profile.variants rather than only flipping
-  // local state. Before this, a variant existed solely as a bullets key, so a
-  // newly named one was invisible until some entry happened to get a bullet
-  // under it - it looked like "adding a variant does nothing", and then one
-  // would appear later out of nowhere.
-  const commitVariant = () => {
-    const name = variantDraft.trim();
-    setVariantDraft("");
-    setAddingVariant(false);
-    if (!name) return;
-    if (name.toLowerCase() === "base") {
-      toast.error("base always exists - pick another name.");
-      return;
-    }
-    if (variants.some((v) => v.toLowerCase() === name.toLowerCase())) {
-      toast.error(`"${name}" already exists.`);
-      return;
-    }
-    setProfile((p) =>
-      p ? { ...p, variants: [...(p.variants ?? []), name] } : p
-    );
-    setVariant(name);
-  };
-
-  // Removing a variant drops it from the stored list AND from every entry's
-  // bullets, so it stops being resurrected by variantsOf's derived half.
-  const handleDeleteVariant = (name: string) => {
-    if (name === "base") return;
-    const snapshot = profile;
-    setProfile((p) => {
-      if (!p) return p;
-      return {
-        ...p,
-        variants: (p.variants ?? []).filter((v) => v !== name),
-        sections: p.sections.map((s) => ({
-          ...s,
-          entries: s.entries.map((e) => {
-            if (!(name in e.bullets)) return e;
-            const bullets = { ...e.bullets };
-            delete bullets[name];
-            return { ...e, bullets };
-          }),
-        })),
-      };
-    });
-    if (variant === name) setVariant("base");
-    toast(`Variant "${name}" deleted`, {
-      action: {
-        label: "Undo",
-        onClick: () => setProfile(snapshot),
-      },
-    });
-  };
-
   // ---- rendering ---------------------------------------------------------
 
-  if (outcome.status === "invalid" && profile === null) {
+  if (outcome.status !== "upgrade" && profile === null) {
     return (
-      <div className="space-y-3">
+      <fieldset
+        disabled={waitingForImport || importState.status === "applying"}
+        className="min-w-0 space-y-3"
+      >
         <EmptyState
           importing={importState.status === "parsing"}
           onImport={handleImportFile}
@@ -796,9 +826,10 @@ export function ProfileEditor(props: {
             hasObservedProfile.current = true;
             skipNextDebouncedSave.current = true;
             setProfile(blank);
-            attemptSave(blank, false);
+            saveSession.setDraft(blank);
+            attemptSave(blank);
             setActiveId(
-              blank.sections.find((s) => s.kind !== "skills")?.id ?? null
+              blank.sections.find((s) => s.kind !== "skills")?.id ?? null,
             );
           }}
         />
@@ -808,7 +839,7 @@ export function ProfileEditor(props: {
           onConfirm={() => void handleConfirmImport()}
           onCancel={handleCancelImport}
         />
-      </div>
+      </fieldset>
     );
   }
 
@@ -825,9 +856,12 @@ export function ProfileEditor(props: {
   }
 
   const savedText = (() => {
+    if (waitingForImport || importState.status === "applying")
+      return "Applying import...";
     if (saveState === "saving") return "Saving...";
     if (saveState === "retrying") return "Not saved - retrying";
     if (saveState === "not-saved") return "Not saved";
+    if (profile !== savedProfile) return "Saving...";
     if (lastSavedAt !== null) {
       const secs = Math.max(0, Math.floor((now - lastSavedAt) / 1000));
       return `Saved ${secs}s ago`;
@@ -837,90 +871,51 @@ export function ProfileEditor(props: {
   const saveErrored = saveState === "retrying" || saveState === "not-saved";
 
   return (
-    <div className="min-w-0">
+    <fieldset
+      disabled={waitingForImport || importState.status === "applying"}
+      className="min-w-0"
+    >
       {/* Top bar: heading, variant switcher, save indicator, spacer, toggle. */}
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <h3 className="text-[15px] font-semibold text-ink">Resume</h3>
 
-        {/* Labelled so the pill row is self-describing - unlabelled pills gave
-            no clue what they switched. */}
-        <span className="text-[11px] font-medium uppercase tracking-wider text-ink-2">
-          Variant
-        </span>
-
-        <div className="inline-flex overflow-hidden rounded-md border border-line bg-surface">
-          {variants.map((v) => (
-            <span key={v} className="group/var inline-flex items-center">
-              <button
-                type="button"
-                aria-current={variant === v ? "page" : undefined}
-                onClick={() => setVariant(v)}
-                className={cn(VAR_PILL, variant === v && VAR_PILL_ACTIVE)}
-              >
-                {v}
-              </button>
-              {v !== "base" && variant === v && (
-                <button
-                  type="button"
-                  onClick={() => handleDeleteVariant(v)}
-                  aria-label={`Delete variant ${v}`}
-                  title={`Delete variant ${v}`}
-                  className="border-r border-line bg-accent px-1.5 py-1 text-accent-ink/70 transition-colors last:border-r-0 hover:text-accent-ink"
-                >
-                  <X className="size-3" />
-                </button>
-              )}
-            </span>
-          ))}
-          {addingVariant ? (
-            <input
-              autoFocus
-              value={variantDraft}
-              placeholder="Name"
-              aria-label="New variant name"
-              className="w-24 min-w-0 bg-bg px-2 py-1 text-[11.5px] text-ink outline-none placeholder:text-ink-2"
-              onChange={(e) => setVariantDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitVariant();
-                }
-                if (e.key === "Escape") {
-                  setAddingVariant(false);
-                  setVariantDraft("");
-                }
-              }}
-              onBlur={commitVariant}
-            />
-          ) : (
+        <div
+          className="inline-flex rounded-md border border-line bg-surface p-1"
+          aria-label="Resume workspace"
+        >
+          {(["library", "compose"] as const).map((tab) => (
             <button
+              key={tab}
               type="button"
-              onClick={() => {
-                setVariantDraft("");
-                setAddingVariant(true);
-              }}
-              aria-label="Add variant"
-              className={cn(VAR_PILL, "font-semibold")}
+              aria-pressed={mode === tab}
+              onClick={() => setMode(tab)}
+              className={cn(
+                "rounded px-4 py-1.5 text-xs capitalize",
+                mode === tab ? "bg-accent text-accent-ink" : "text-ink-2",
+              )}
             >
-              +
+              {tab}
             </button>
-          )}
+          ))}
         </div>
-
-        {/* Downloads the selected variant whole - it sits right after the
-            pills so the two read as one control. */}
-        <DownloadMenu profile={profile} variant={variant} className={ICON_BUTTON} />
+        {mode === "library" && (
+          <DownloadMenu
+            profile={profile}
+            variant="base"
+            className={ICON_BUTTON}
+          />
+        )}
 
         <span
           className={cn(
             "inline-flex items-center gap-1 text-[11.5px] tabular-nums",
-            saveErrored ? "text-red" : "text-ink-2"
+            saveErrored ? "text-red" : "text-ink-2",
           )}
         >
           <span
             className={cn(
               "size-1.5 rounded-full",
-              saveErrored ? "bg-red" : "bg-accent"
+              saveErrored ? "bg-red" : "bg-accent",
             )}
           />
           {savedText}
@@ -928,102 +923,129 @@ export function ProfileEditor(props: {
 
         <div className="min-w-2 flex-1" />
 
-        <button
-          type="button"
-          onClick={togglePreview}
-          aria-label={previewOn ? "Hide resume preview" : "Show resume preview"}
-          title="Toggle resume preview"
-          className="hidden items-center gap-1.5 rounded-md border border-line-2 bg-surface px-2.5 py-1 text-[12px] text-ink-2 transition-colors hover:text-ink lg:inline-flex"
-        >
-          {previewOn ? (
-            <Eye className="size-3.5" />
-          ) : (
-            <EyeOff className="size-3.5" />
-          )}
-          Preview
-        </button>
+        {mode === "library" && (
+          <button
+            type="button"
+            onClick={togglePreview}
+            aria-label={
+              previewOn ? "Hide resume preview" : "Show resume preview"
+            }
+            title="Toggle resume preview"
+            className="hidden items-center gap-1.5 rounded-md border border-line-2 bg-surface px-2.5 py-1 text-[12px] text-ink-2 transition-colors hover:text-ink lg:inline-flex"
+          >
+            {previewOn ? (
+              <Eye className="size-3.5" />
+            ) : (
+              <EyeOff className="size-3.5" />
+            )}
+            Preview
+          </button>
+        )}
 
-        <ResumeImportButton
-          disabled={importState.status === "parsing"}
-          label={importState.status === "parsing" ? "Parsing..." : "Import resume"}
-          onSelect={handleImportFile}
-        />
-
-        <Button disabled title={BUILD_BUTTON_TITLE}>
-          Build resume
-        </Button>
+        {mode === "library" && (
+          <ResumeImportButton
+            disabled={importState.status === "parsing"}
+            label={
+              importState.status === "parsing" ? "Parsing..." : "Import resume"
+            }
+            onSelect={handleImportFile}
+          />
+        )}
       </div>
 
       <ResumeImportStatus
         state={importState}
-        current={profile && !isProfileEmpty(profile) ? profileCounts(profile) : null}
+        current={
+          profile && !isProfileEmpty(profile) ? profileCounts(profile) : null
+        }
         onConfirm={() => void handleConfirmImport()}
         onCancel={handleCancelImport}
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
-        <div className="min-w-0">
-          <SectionRail
-            sections={profile.sections}
-            activeId={activeId ?? ""}
-            onSelect={setActiveId}
-            onReorder={handleReorderSections}
-            onRename={handleRenameSection}
-            onDelete={handleDeleteSection}
-            onAdd={handleAddSection}
-            headerIncomplete={
-              !profile.header.name.trim() || !profile.header.contact_line.trim()
-            }
-          />
-        </div>
-
-        <div className="min-w-0">
-          {activeId === PERSONAL_INFO_ID ? (
-            <HeaderEditor
-              header={profile.header}
-              onChange={(header) => setProfile((p) => (p ? { ...p, header } : p))}
+      {mode === "compose" ? (
+        <ComposeEditor
+          profile={profile}
+          onChange={(update) =>
+            setProfile((current) =>
+              current
+                ? typeof update === "function"
+                  ? update(current)
+                  : update
+                : current,
+            )
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
+          <div className="min-w-0">
+            <SectionRail
+              sections={profile.sections}
+              activeId={activeId ?? ""}
+              onSelect={setActiveId}
+              onReorder={handleReorderSections}
+              onRename={handleRenameSection}
+              onDelete={handleDeleteSection}
+              onAdd={handleAddSection}
+              headerIncomplete={
+                !profile.header.name.trim() ||
+                !profile.header.contact_line.trim()
+              }
             />
-          ) : (
-            <>
-              {/* Name the variant being edited in the canvas itself. The pill
+          </div>
+
+          <div className="min-w-0">
+            {activeId === PERSONAL_INFO_ID ? (
+              <HeaderEditor
+                header={profile.header}
+                onChange={(header) =>
+                  setProfile((p) => (p ? { ...p, header } : p))
+                }
+              />
+            ) : (
+              <>
+                {/* Name the variant being edited in the canvas itself. The pill
                   row alone was too easy to lose track of, and editing bullets
                   under the wrong variant is silent and annoying to undo. */}
-              <p className="mb-2 text-[11.5px] text-ink-2">
-                Editing the{" "}
-                {variant === "base" ? (
-                  "base variant"
-                ) : (
-                  <>
-                    <span className="font-semibold text-accent">{variant}</span> variant
-                  </>
-                )}
-              </p>
-              <SectionBody
-                section={activeSection}
-                variant={variant}
-                skills={profile.skills}
-                openEntries={openEntries}
-                onToggleOpen={(id) =>
-                  setOpenEntries((o) => ({ ...o, [id]: !o[id] }))
-                }
-                onAddEntry={handleAddEntry}
-                onDeleteEntry={handleDeleteEntry}
-                onToggleHidden={handleToggleHidden}
-                onChangeEntry={updateActiveEntry}
-                onMoveEntry={moveActiveEntry}
-                onSkillsChange={updateSkills}
-              />
-            </>
+                <p className="mb-2 text-[11.5px] text-ink-2">
+                  Editing the{" "}
+                  {variant === "base" ? (
+                    "base variant"
+                  ) : (
+                    <>
+                      <span className="font-semibold text-accent">
+                        {variant}
+                      </span>{" "}
+                      variant
+                    </>
+                  )}
+                </p>
+                <SectionBody
+                  section={activeSection}
+                  variant={variant}
+                  skills={profile.skills}
+                  openEntries={openEntries}
+                  onToggleOpen={(id) =>
+                    setOpenEntries((o) => ({ ...o, [id]: !o[id] }))
+                  }
+                  onAddEntry={handleAddEntry}
+                  onDeleteEntry={handleDeleteEntry}
+                  onToggleHidden={handleToggleHidden}
+                  onChangeEntry={updateActiveEntry}
+                  onMoveEntry={moveActiveEntry}
+                  onSkillsChange={updateSkills}
+                />
+              </>
+            )}
+          </div>
+
+          {previewOn && (
+            <div className="hidden min-w-0 lg:block">
+              <ResumePreview profile={profile} variant={variant} />
+            </div>
           )}
         </div>
-
-        {previewOn && (
-          <div className="hidden min-w-0 lg:block">
-            <ResumePreview profile={profile} variant={variant} />
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </fieldset>
   );
 }
 
@@ -1042,7 +1064,8 @@ function EmptyState({
         No profile on file
       </h2>
       <p className="text-[12px] text-ink-2">
-        Import an existing resume to review it before saving, or start from scratch.
+        Import an existing resume to review it before saving, or start from
+        scratch.
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" onClick={onStart}>
@@ -1095,7 +1118,11 @@ function ResumeImportButton({
 }
 
 // Pluralize a count for the replace warning ("1 entry", "12 entries").
-function countNoun(count: number, singular: string, plural = `${singular}s`): string {
+function countNoun(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
@@ -1134,7 +1161,9 @@ function ResumeImportStatus({
     return (
       <div className={cn(CARD, "mb-3")}>
         <p className="text-[13px] font-semibold text-red">Import failed</p>
-        <p className="mt-1 break-words text-[12px] text-ink-2">{state.message}</p>
+        <p className="mt-1 break-words text-[12px] text-ink-2">
+          {state.message}
+        </p>
         <button
           type="button"
           onClick={onCancel}
@@ -1191,7 +1220,10 @@ function ResumeImportStatus({
                 </p>
                 <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
                   {semanticWarnings.map((warning, index) => (
-                    <li key={`${index}-${warning}`} className="text-[11.5px] text-ink-2">
+                    <li
+                      key={`${index}-${warning}`}
+                      className="text-[11.5px] text-ink-2"
+                    >
                       {warning}
                     </li>
                   ))}
@@ -1210,7 +1242,9 @@ function ResumeImportStatus({
                   {partialMappedLines.map((line) => (
                     <li key={line.id} className="text-[11.5px] text-ink-2">
                       <p>{line.text}</p>
-                      <p className="mt-0.5 text-amber">Not imported: {line.droppedText}</p>
+                      <p className="mt-0.5 text-amber">
+                        Not imported: {line.droppedText}
+                      </p>
                     </li>
                   ))}
                 </ul>
@@ -1220,7 +1254,10 @@ function ResumeImportStatus({
               <div>
                 <p className="text-[12px] font-semibold text-amber">
                   {state.preview.unmappedLines.length} source{" "}
-                  {state.preview.unmappedLines.length === 1 ? "line was" : "lines were"} not mapped
+                  {state.preview.unmappedLines.length === 1
+                    ? "line was"
+                    : "lines were"}{" "}
+                  not mapped
                 </p>
                 <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
                   {state.preview.unmappedLines.map((line) => (
@@ -1240,20 +1277,21 @@ function ResumeImportStatus({
           const imported = profileCounts(state.preview.profile);
           return (
             <p className="mt-3 text-[11.5px] font-semibold text-amber">
-              Importing REPLACES your current profile ({countNoun(current.sections, "section")},{" "}
+              Importing REPLACES your current profile (
+              {countNoun(current.sections, "section")},{" "}
               {countNoun(current.entries, "entry", "entries")},{" "}
-              {countNoun(current.bullets, "bullet")}) with the imported content (
-              {countNoun(imported.sections, "section")},{" "}
+              {countNoun(current.bullets, "bullet")}) with the imported content
+              ({countNoun(imported.sections, "section")},{" "}
               {countNoun(imported.entries, "entry", "entries")},{" "}
-              {countNoun(imported.bullets, "bullet")}). A backup of the current profile is
-              saved first, and you can undo right after.
+              {countNoun(imported.bullets, "bullet")}). A backup of the current
+              profile is saved first, and you can undo right after.
             </p>
           );
         })()
       ) : (
         <p className="mt-3 text-[11.5px] text-ink-2">
-          This will fill in your empty profile. Nothing changes until you confirm this
-          import.
+          This will fill in your empty profile. Nothing changes until you
+          confirm this import.
         </p>
       )}
       <div className="mt-3 flex gap-2">
@@ -1323,8 +1361,7 @@ function SectionBody({
       <div className="min-w-2 flex-1" />
       {section && section.kind !== "skills" && (
         <Button size="sm" onClick={onAddEntry}>
-          <Plus className="size-3.5" />
-          + {ADD_LABEL[section.kind]}
+          <Plus className="size-3.5" />+ {ADD_LABEL[section.kind]}
         </Button>
       )}
     </div>

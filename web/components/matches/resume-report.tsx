@@ -31,9 +31,10 @@ import { variantsOf, type ProfileV2 } from "@/lib/profile";
 import type { ResumeMeta, ResumeReport } from "@/lib/convex";
 
 export type RebuildOpts = {
+  profileSnapshot?: string;
   jdText?: string;
   instructions?: string;
-  overrides?: { name: string; bullets: string[] }[];
+  overrides?: { entryId?: string; name: string; bullets: string[] }[];
   /** The forced bullet variant, undefined = Auto (per-project JD pick). */
   variant?: string;
 };
@@ -68,7 +69,7 @@ function Chip({
           "bg-[color-mix(in_srgb,var(--color-amber)_13%,transparent)] text-amber",
         tone === "red" &&
           "bg-[color-mix(in_srgb,var(--color-red)_12%,transparent)] text-red",
-        tone === "chip" && "bg-chip text-ink-2"
+        tone === "chip" && "bg-chip text-ink-2",
       )}
     >
       {children}
@@ -108,7 +109,7 @@ function OutlineMiniature({ report }: { report: ResumeReport }) {
               className={cn(
                 i === 0 && "text-center text-[14px] font-bold tracking-wide",
                 i === 1 && "mb-1.5 text-center text-[8.5px] text-[#555]",
-                hot && "bg-[color-mix(in_srgb,#33604a_14%,#fff)]"
+                hot && "bg-[color-mix(in_srgb,#33604a_14%,#fff)]",
               )}
             >
               {t || " "}
@@ -140,11 +141,12 @@ function PreviewTab({
     return (
       <div className="rounded-md border border-amber/45 bg-amber/10 px-3 py-2.5">
         <p className="text-[12px] text-amber">
-          This build produced an empty document - it ran before your resume had a name and
-          contact line, so there was nothing to render.
+          This build produced an empty document - it ran before your resume had
+          a name and contact line, so there was nothing to render.
         </p>
         <p className="mt-1 text-[11.5px] text-ink-2">
-          Fill in Personal info on the Resume page, then rebuild from the Edit tab.
+          Fill in Personal info on the Resume page, then rebuild from the Edit
+          tab.
         </p>
       </div>
     );
@@ -170,7 +172,9 @@ function PreviewTab({
 /* ------------------------------ Changes tab ------------------------------ */
 
 function ChangesTab({ report }: { report: ResumeReport }) {
-  const rewritten = report.projects.filter((p) => p.llmRewritten || p.overridden);
+  const rewritten = report.projects.filter(
+    (p) => p.llmRewritten || p.overridden,
+  );
   return (
     <div>
       <p className="mb-2 text-[12px] text-ink-2">
@@ -181,7 +185,7 @@ function ChangesTab({ report }: { report: ResumeReport }) {
       {report.projects.map((p) => {
         const changedIdx = p.before.join("\n") !== p.after.join("\n");
         return (
-          <div key={p.name} className="mb-3 last:mb-0">
+          <div key={p.entryId ?? p.name} className="mb-3 last:mb-0">
             <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[12.5px] font-semibold text-ink">
               {p.name}
               {p.variant && p.variant !== "base" && (
@@ -244,15 +248,17 @@ function SelectionTab({ report }: { report: ResumeReport }) {
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         <Chip tone="accent">
-          {report.variant ? `Requested variant: ${report.variant}` : "Variant mode: Auto"}
+          {report.variant
+            ? `Requested variant: ${report.variant}`
+            : "Variant mode: Auto"}
         </Chip>
         <span className="text-[11.5px] text-ink-2">
           The exact rendered variant for each selected project is shown below.
         </span>
       </div>
       <p className="mb-2 text-[12px] text-ink-2">
-        Projects scored against the JD - tags ×3, tech ×2, bullet prose ×1
-        (the select.py rules). Top 6 make the page.
+        Projects scored against the JD - tags ×3, tech ×2, bullet prose ×1 (the
+        select.py rules). Top 6 make the page.
       </p>
       <div className="grid grid-cols-[minmax(0,1fr)_46px_minmax(0,1.1fr)] items-center gap-x-2.5 gap-y-1.5 text-[12.5px]">
         {entries.map(([name, score]) => {
@@ -282,14 +288,17 @@ function SelectionTab({ report }: { report: ResumeReport }) {
               <span
                 className={cn(
                   "text-right font-mono text-[11px] tabular-nums",
-                  out ? "text-ink-2" : "text-ink"
+                  out ? "text-ink-2" : "text-ink",
                 )}
               >
                 {score.toFixed(1)}
               </span>
               <div className="h-1.5 overflow-hidden rounded-full bg-chip">
                 <div
-                  className={cn("h-full rounded-full", out ? "bg-ink-2/40" : "bg-accent")}
+                  className={cn(
+                    "h-full rounded-full",
+                    out ? "bg-ink-2/40" : "bg-accent",
+                  )}
                   style={{ width: `${Math.max((score / max) * 100, 2)}%` }}
                 />
               </div>
@@ -361,7 +370,9 @@ function InputsTab({
       toast.success("Job description saved");
       if (rebuild) onRebuild({ jdText: result.text ?? clean });
     } catch (error) {
-      toast.error((error as Error).message || "Couldn't save the job description.");
+      toast.error(
+        (error as Error).message || "Couldn't save the job description.",
+      );
     } finally {
       setSaving(false);
     }
@@ -370,8 +381,12 @@ function InputsTab({
   return (
     <div className="text-[12.5px]">
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        {report.jdSource === "manual" && <Chip tone="accent">pasted JD · {report.jdChars} chars</Chip>}
-        {report.jdSource === "fetched" && <Chip tone="accent">JD fetched · {report.jdChars} chars</Chip>}
+        {report.jdSource === "manual" && (
+          <Chip tone="accent">pasted JD · {report.jdChars} chars</Chip>
+        )}
+        {report.jdSource === "fetched" && (
+          <Chip tone="accent">JD fetched · {report.jdChars} chars</Chip>
+        )}
         {report.jdSource === "stub" && (
           <Chip tone="red">no JD acquired - built from the title stub</Chip>
         )}
@@ -382,7 +397,9 @@ function InputsTab({
           </Chip>
         ) : (
           <Chip tone="amber">
-            {report.llmError ? `LLM failed: ${report.llmError.slice(0, 40)}` : "LLM unavailable - bank text"}
+            {report.llmError
+              ? `LLM failed: ${report.llmError.slice(0, 40)}`
+              : "LLM unavailable - bank text"}
           </Chip>
         )}
       </div>
@@ -450,31 +467,39 @@ function EditTab({
   // Working copy of every selected project's bullets; only projects whose
   // text actually differs from the report are sent as overrides.
   const [bullets, setBullets] = useState<Record<string, string[]>>(() =>
-    Object.fromEntries(report.projects.map((p) => [p.name, [...p.after]]))
+    Object.fromEntries(
+      report.projects.map((p) => [p.entryId ?? p.name, [...p.after]]),
+    ),
   );
   const [instructions, setInstructions] = useState("");
   // "" means Auto (no override), matching RebuildOpts.variant === undefined.
-  const [forcedVariant, setForcedVariant] = useState("");
+  const [forcedVariant, setForcedVariant] = useState(report.variant ?? "");
 
+  const variantChanged = forcedVariant !== (report.variant ?? "");
   const overrides = report.projects
     .filter((p) => {
-      const cur = bullets[p.name] ?? [];
+      const cur = bullets[p.entryId ?? p.name] ?? [];
       return cur.join("\n") !== p.after.join("\n");
     })
     .map((p) => ({
+      entryId: p.entryId,
       name: p.name,
-      bullets: (bullets[p.name] ?? []).map((b) => b.trim()).filter(Boolean),
+      bullets: (bullets[p.entryId ?? p.name] ?? [])
+        .map((b) => b.trim())
+        .filter(Boolean),
     }));
   // A variant override counts as a change on its own - otherwise picking one
   // and pressing nothing else would leave Rebuild disabled with no explanation.
   const dirty =
-    overrides.length > 0 || instructions.trim().length > 0 || forcedVariant !== "";
+    overrides.length > 0 ||
+    instructions.trim().length > 0 ||
+    forcedVariant !== (report.variant ?? "");
 
   return (
     <div className="text-[12.5px]">
       <p className="mb-2 text-ink-2">
-        Edit any bullet directly - your words win over the LLM&apos;s. Or describe
-        the change below and let the model apply it across the resume.
+        Edit any bullet directly, including locked bullets, for this build. Or
+        describe the change below and let the model apply it across the resume.
       </p>
 
       {/* Variant override. Only worth showing when the profile actually has a
@@ -498,24 +523,33 @@ function EditTab({
             ))}
           </select>
           <p className="mt-1 text-[11px] text-ink-2">
-            Auto picks the best-scoring variant for each project. Choosing one forces it
-            everywhere, falling back to base where a project has no bullets for it.
+            Auto selects from Library. A saved variant preserves its selections,
+            order, and AI locks. Rebuilding the same variant uses its captured
+            version.
           </p>
         </div>
       )}
+      {variantChanged && (
+        <p className="mb-3 text-xs text-ink-2">
+          Rebuild with this variant first to edit its generated bullets.
+        </p>
+      )}
       {report.projects.map((p) => (
-        <div key={p.name} className="mb-2.5">
-          <div className="mb-1 text-[12px] font-semibold text-ink">{p.name}</div>
-          {(bullets[p.name] ?? []).map((b, i) => (
+        <div key={p.entryId ?? p.name} className="mb-2.5">
+          <div className="mb-1 text-[12px] font-semibold text-ink">
+            {p.name}
+          </div>
+          {(bullets[p.entryId ?? p.name] ?? []).map((b, i) => (
             <textarea
               key={i}
               value={b}
+              disabled={variantChanged}
               rows={Math.max(1, Math.ceil(b.length / 82))}
               onChange={(e) =>
                 setBullets((prev) => {
-                  const next = [...(prev[p.name] ?? [])];
+                  const next = [...(prev[p.entryId ?? p.name] ?? [])];
                   next[i] = e.target.value;
-                  return { ...prev, [p.name]: next };
+                  return { ...prev, [p.entryId ?? p.name]: next };
                 })
               }
               className="mb-1 w-full resize-y rounded-md border border-line-2 bg-bg px-2.5 py-1.5 font-mono text-[11.5px] leading-snug text-ink outline-none transition-colors focus:border-accent"
@@ -546,9 +580,10 @@ function EditTab({
           disabled={!dirty}
           onClick={() =>
             onRebuild({
-              overrides: overrides.length ? overrides : undefined,
+              overrides:
+                !variantChanged && overrides.length ? overrides : undefined,
               instructions: instructions.trim() || undefined,
-              variant: forcedVariant || undefined,
+              variant: forcedVariant,
             })
           }
         >
@@ -615,7 +650,14 @@ export function ResumeReportDialog({
 
   const report = meta?.report ?? null;
   const rebuild = (opts: RebuildOpts) => {
-    if (short) onRebuild(short, opts);
+    const variant = opts.variant ?? report?.variant;
+    if (short)
+      onRebuild(short, {
+        ...opts,
+        variant,
+        profileSnapshot:
+          variant === report?.variant ? report?.sourceProfile : undefined,
+      });
   };
 
   const onDelete = async () => {
@@ -672,7 +714,7 @@ export function ResumeReportDialog({
                     "cursor-pointer border-b-2 px-2.5 py-1.5 text-[12.5px] font-medium transition-colors",
                     tab === t
                       ? "border-accent text-ink"
-                      : "border-transparent text-ink-2 hover:text-ink"
+                      : "border-transparent text-ink-2 hover:text-ink",
                   )}
                 >
                   {t}
@@ -699,7 +741,12 @@ export function ResumeReportDialog({
                 />
               )}
               {tab === "Edit" && (
-                <EditTab key={short} report={report} onRebuild={rebuild} variants={variants} />
+                <EditTab
+                  key={`${short}-${report.builtAt}`}
+                  report={report}
+                  onRebuild={rebuild}
+                  variants={variants}
+                />
               )}
             </div>
           </>
@@ -721,10 +768,13 @@ export function ResumeReportDialog({
             {/* Destructive action, kept on the far left away from Download and
                 Close. The confirm is inline rather than window.confirm, which
                 blocks the page and cannot be styled. */}
-            {short && meta?.url && (
-              confirmDelete ? (
+            {short &&
+              meta?.url &&
+              (confirmDelete ? (
                 <span className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11.5px] text-ink-2">Delete this build?</span>
+                  <span className="text-[11.5px] text-ink-2">
+                    Delete this build?
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -754,8 +804,7 @@ export function ResumeReportDialog({
                   <Trash2 className="size-3.5" />
                   Delete
                 </Button>
-              )
-            )}
+              ))}
           </span>
           <span className="flex gap-1.5">
             {meta?.format === "pdf" && meta.docxUrl && (

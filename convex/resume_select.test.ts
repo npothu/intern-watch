@@ -104,9 +104,40 @@ describe("pick_variant", () => {
     const p = proj({ bullets: { base: ["Python"], other: ["Python"] } });
     expect(pickVariant(p, analyze("Python"))).toBe("base");
   });
+
+  test("Auto does not pick bullets from a variant that hides the project", () => {
+    const p = proj({
+      hiddenIn: ["swe"],
+      bullets: { base: ["General project text"], swe: ["Python and Docker"] },
+    });
+    expect(pickVariant(p, analyze("Python Docker"))).toBe("base");
+  });
 });
 
 describe("select_projects ordering / cap / pad", () => {
+  test.each(["Python", ""])("filters hidden projects before scoring or padding (%s)", (jd) => {
+    const p = profile({ Hidden: proj({ tags: ["python"] }), Visible: proj() });
+    const projects = p.sections.find((section) => section.kind === "projects")!;
+    projects.entries[0].hiddenIn = ["base"];
+
+    const result = selectProjects(p, jd);
+    expect(result.selected.map(([name]) => name)).toEqual(["Visible"]);
+    expect(Object.keys(result.scores)).toEqual(["Visible"]);
+
+    projects.entries[1].hiddenIn = ["base"];
+    expect(selectProjects(p, jd)).toEqual({ selected: [], scores: {} });
+  });
+
+  test("visibility belongs to the requested variant even when its bullets fall back to base", () => {
+    const p = profile({ BaseOnly: proj(), SweOnly: proj() });
+    const projects = p.sections.find((section) => section.kind === "projects")!;
+    projects.entries[0].hiddenIn = ["swe"];
+    projects.entries[1].hiddenIn = ["base"];
+
+    expect(selectProjects(p, "").selected.map(([name]) => name)).toEqual(["BaseOnly"]);
+    expect(selectProjects(p, "", "swe").selected.map(([name]) => name)).toEqual(["SweOnly"]);
+  });
+
   test("scores are reported for every project, including unpicked ones", () => {
     const r = selectProjects(profile({ A: proj(), B: proj() }), "Redis");
     expect(Object.keys(r.scores).sort()).toEqual(["A", "B"]);

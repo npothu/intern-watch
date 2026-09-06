@@ -21,7 +21,7 @@ export default async function ProfilePage() {
   // down - the editor's empty state invites re-seeding from scratch.
   const data = res.ok ? res.data ?? null : null;
   return (
-    <div className="mx-auto w-full max-w-[1060px] px-5 pt-5 pb-24">
+    <div className="mx-auto w-full max-w-[1440px] px-5 pt-5 pb-24">
       {/* Resume has no cell of its own - the switch lands here with all
           three cells inactive, so it still gets the user back to Matches,
           Tracker or Inbox without reaching for the browser's back button. */}

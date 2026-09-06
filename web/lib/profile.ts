@@ -1,3 +1,5 @@
+import type { SavedResume } from "../../shared/resume-compose";
+
 /**
  * The resume profile (bank) shape, version 2 - the web-bundle mirror of
  * convex/profile_schema.ts.
@@ -73,6 +75,7 @@ export type Entry = {
   tech?: string[];
   /** Projects: selection hints consumed by resume_select.ts. */
   tags?: string[];
+  priority?: number;
   /** Education only. */
   degrees?: Degree[];
   /** Extra dated lines (study abroad, honors). */
@@ -109,6 +112,7 @@ export type Section = {
 
 export type ProfileV2 = {
   version: 2;
+  savedResumes?: SavedResume[];
   header: {
     name: string;
     contact_line: string;
@@ -268,6 +272,7 @@ export function visibleEntries(section: Section, variant: Variant): Entry[] {
 
 /** Every variant key that appears anywhere, "base" first. */
 export function variantsOf(profile: ProfileV2): Variant[] {
+  if (profile.savedResumes) return ["base", ...profile.savedResumes.map(r => r.name)];
   const out: Variant[] = ["base"];
   for (const v of profile.variants ?? []) if (v !== "base" && !out.includes(v)) out.push(v);
   for (const s of profile.sections)

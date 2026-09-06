@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { convexTest } from "convex-test";
+import { convexTest, type TestConvex } from "convex-test";
 import schema from "./schema";
-import * as mail from "./mail";
+import { api, internal } from "./_generated/api";
 
 // Phase 3 tests: the classify-and-dispatch decision core. End-to-end through
 // `sync` where the shape matters (regex auto path, LLM fallback), and through
@@ -60,7 +60,7 @@ function plainMessage(
   };
 }
 
-type T = Awaited<ReturnType<typeof convexTest>>;
+type T = TestConvex<typeof schema>;
 
 async function seedAccount(t: T, fields?: Record<string, unknown>) {
   await t.run(async (ctx) => {
@@ -143,7 +143,7 @@ test("decisive regex rejection auto-applies with an evidence + deep-link note", 
     "Update on your application", REJECTION,
   )));
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const app = await getApp(t, "aaaaaaaaaaaa");
   expect(app!.status).toBe("rejected");
@@ -173,7 +173,7 @@ test("ambiguous candidates queue an inbox action instead of auto-applying", asyn
     "gm1", "th-1", "no-reply@acme.com", "Update on your application", REJECTION,
   )));
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   expect((await getApp(t, "aaaaaaaaaaaa"))!.status).toBe("applied");
   expect((await getApp(t, "bbbbbbbbbbbb"))!.status).toBe("applied");
@@ -196,8 +196,8 @@ test("a follow-up in the same thread updates the pending action, not duplicates 
     classification: { signal: "oa", evidence: "online assessment", source: "regex" },
     candidates: [],
   };
-  await t.mutation(mail.recordOutcome, { ...base, gmailMessageId: "gm1" });
-  await t.mutation(mail.recordOutcome, {
+  await t.mutation(internal.mail.recordOutcome, { ...base, gmailMessageId: "gm1" });
+  await t.mutation(internal.mail.recordOutcome, {
     ...base,
     gmailMessageId: "gm2",
     classification: { signal: "interview", evidence: "schedule an interview", source: "regex" },
@@ -214,7 +214,7 @@ test("backward/from-terminal transitions queue for a human", async () => {
   await seedApp(t, "aaaaaaaaaaaa", "offer", {
     company: "Acme", title: "SWE Intern", url: "https://careers.acme.com/jobs/1",
   });
-  await t.mutation(mail.recordOutcome, {
+  await t.mutation(internal.mail.recordOutcome, {
     user: "u1", gmailMessageId: "gm1", threadId: "th-1",
     headers: { from: "no-reply@acme.com", subject: "Update", date: "", messageId: "" },
     accountEmail: "me@gmail.com",
@@ -234,7 +234,7 @@ test("same-status signal is recorded as ignored, no action and no history spam",
   await seedApp(t, "aaaaaaaaaaaa", "rejected", {
     company: "Acme", title: "SWE Intern", url: "https://careers.acme.com/jobs/1",
   });
-  await t.mutation(mail.recordOutcome, {
+  await t.mutation(internal.mail.recordOutcome, {
     user: "u1", gmailMessageId: "gm1", threadId: "th-1",
     headers: { from: "no-reply@acme.com", subject: "Update", date: "", messageId: "" },
     accountEmail: "me@gmail.com",
@@ -270,7 +270,7 @@ test("LLM fallback is queue-only even with a decisive candidate", async () => {
     return syncRouter(message)(url);
   });
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   expect((await getApp(t, "aaaaaaaaaaaa"))!.status).toBe("applied"); // never auto
   const actions = await pendingActions(t);
@@ -292,7 +292,7 @@ test("LLM daily cap: at the cap the fallback is skipped entirely", async () => {
     "We'd love to chat about your candidacy next week.",
   )));
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   expect((await messageRows(t))[0].outcome).toBe("ignored");
   expect(await pendingActions(t)).toHaveLength(0);
@@ -319,7 +319,7 @@ test("resolveAction writes through to the ledger and backfills the snapshot", as
     }),
   );
 
-  await t.mutation(mail.resolveAction, {
+  await t.mutation(api.mail.resolveAction, {
     user: "u1", id, short: "cccccccccccc", status: "oa", secret: SECRET,
   });
 

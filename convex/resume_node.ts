@@ -15,6 +15,12 @@
 // JD fetch -> model call -> PDF/DOCX generation -> storage - runs here under
 // the Node runtime instead of risking a runtime-only failure in the isolate.
 
+import {
+  getResume,
+  resolveResume,
+  MAX_PROFILE_BYTES,
+} from "../shared/resume-compose";
+import { suggestResumeCuts } from "./resume_cuts";
 import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
@@ -30,11 +36,17 @@ import {
 import { acquireJdFromUrl, llmExtractJd } from "./jd_acquire";
 import {
   composeResumeDoc,
+  fullResumeContent,
   projectEntries,
   resumeFilename,
   resumeOutline,
 } from "./resume_renderers/docx";
-import { buildResumePdf, pdfFilename, endsInWidow } from "./resume_renderers/pdf";
+import {
+  buildExactResumePdf,
+  buildResumePdf,
+  pdfFilename,
+  endsInWidow,
+} from "./resume_renderers/pdf";
 import {
   callModel,
   chooseLlm,
@@ -50,7 +62,11 @@ import {
   MAX_IMPORT_BYTES,
   meteredInvoke,
 } from "./resume_import";
-import { analyze, pickVariant, selectProjects as scoreSelect } from "./resume_select";
+import {
+  analyze,
+  pickVariant,
+  selectProjects as scoreSelect,
+} from "./resume_select";
 import { exportResume, parseExportProfile } from "./resume_export";
 
 // The TRACKER_SECRET env var set in the Convex dashboard (same gate as
@@ -63,7 +79,7 @@ function checkSecret(secret: string) {
 
 // saveProfile's cap (web/app/(app)/profile/profile-actions.ts), so any profile
 // the editor could save also exports; the route re-checks it before calling.
-const EXPORT_MAX_BYTES = 256 * 1024;
+
 const EXPORT_VARIANT_MAX = 40;
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
@@ -76,7 +92,9 @@ const JD_MAX_CHARS = 20_000; // full JD (jd_acquire.JD_MAX_CHARS); the tailor ex
 // Basic html-to-text: drop script/style blocks, strip tags, decode a few
 // entities, collapse whitespace. Cap the length for the prompt.
 function stripHtml(html: string): string {
-  const noScript = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const noScript = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
   const text = noScript
     .replace(/<[^>]+>/g, " ")
     .replace(/&amp;/g, "&")
@@ -133,7 +151,7 @@ function selectForBuild(
   scores: Record<string, number>;
   variants: Record<string, string>;
 } {
-  const { selected, scores } = scoreSelect(profile, jdText);
+  const { selected, scores } = scoreSelect(profile, jdText, forcedVariant);
   const jd = analyze(jdText);
   const variants: Record<string, string> = {};
   const payload = buildProjectPayload(
@@ -167,16 +185,18 @@ type BuildReport = {
   // The user-forced bullet variant, when one was picked instead of the
   // per-project JD auto-pick. Undefined = auto.
   variant?: string;
+  sourceProfile?: string;
   scores: Record<string, number>;
   notes: string[];
   format: "pdf";
-  pageCount: 1;
+  pageCount: number;
   fit: {
     heightPt: number;
     safeHeightPt: number;
     adjustments: string[];
   };
   projects: {
+    entryId?: string;
     name: string;
     variant: string;
     before: string[];
@@ -187,7 +207,7 @@ type BuildReport = {
   outline: string[];
 };
 
-type BuildOverride = { name: string; bullets: string[] };
+type BuildOverride = { entryId?: string; name: string; bullets: string[] };
 
 // The build's executable body. Shared by the runBuild action so the error
 // boundary lives in one place.
@@ -200,9 +220,13 @@ async function performBuild(
     instructions?: string;
     overrides?: BuildOverride[];
     variant?: string;
+    profileSnapshot?: string;
   } = {},
 ): Promise<void> {
-  const match = await ctx.runQuery(internal.resume.getMatchInternal, { user, short });
+  const match = await ctx.runQuery(internal.resume.getMatchInternal, {
+    user,
+    short,
+  });
   if (!match) throw new Error("match not found");
   const item = (match.item ?? {}) as {
     company?: string;
@@ -214,13 +238,25 @@ async function performBuild(
   const title = item.title ?? "";
   const location = item.location ?? "";
 
-  const profileRow = await ctx.runQuery(internal.resume.getProfileInternal, { user });
+  const profileRow = await ctx.runQuery(internal.resume.getProfileInternal, {
+    user,
+  });
   if (!profileRow) throw new Error("profile not found");
   // `data` is a JSON string (putProfile's contract - object storage rejects
   // non-ASCII dict keys); tolerate legacy rows written as a raw object.
-  const profile: ProfileV2 = toV2(
-    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data,
+  const bank = toV2(
+    opts.profileSnapshot
+      ? JSON.parse(opts.profileSnapshot)
+      : typeof profileRow.data === "string"
+        ? JSON.parse(profileRow.data)
+        : profileRow.data,
   );
+  const composition = opts.variant ? getResume(bank, opts.variant) : undefined;
+  const profile: ProfileV2 = composition ? resolveResume(composition) : bank;
+  const composedProjects = composition?.sections
+    .filter((s) => s.kind === "projects")
+    .flatMap((s) => s.entries)
+    .filter((e) => e.included);
 
   // JD text, most trustworthy source first: user-pasted (a rebuild after the
   // report said acquisition failed, or an override of a bad fetch), then the
@@ -237,7 +273,11 @@ async function performBuild(
     jdText = await fetchJdText(item.url ?? "");
     jdSource = jdText ? "fetched" : "stub";
     if (!jdText) {
-      jdText = [company && `Company: ${company}`, title && `Title: ${title}`, location && `Location: ${location}`]
+      jdText = [
+        company && `Company: ${company}`,
+        title && `Title: ${title}`,
+        location && `Location: ${location}`,
+      ]
         .filter(Boolean)
         .join("\n");
     }
@@ -245,11 +285,53 @@ async function performBuild(
 
   // Tailor the selected project bullets with the LLM (all failures fall back
   // to the deterministic bank text, exactly like tailor.py never raising).
-  const { payload: selected, scores, variants } = selectForBuild(
-    profile,
-    jdText,
-    opts.variant,
-  );
+  const {
+    payload: selected,
+    scores,
+    variants,
+  } = composedProjects
+    ? {
+        payload: buildProjectPayload(
+          composedProjects.map((e) => ({
+            name: e.id,
+            tech: (e.tech ?? []).join(", "),
+            bullets: e.bullets.filter((b) => b.included).map((b) => b.text),
+          })),
+        ),
+        scores: {} as Record<string, number>,
+        variants: Object.fromEntries(
+          composedProjects.map((e) => [
+            e.id,
+            bank.savedResumes ||
+            bank.sections.some((s) =>
+              s.entries.some(
+                (original) =>
+                  original.id === e.id && original.bullets[opts.variant!],
+              ),
+            )
+              ? opts.variant!
+              : "base",
+          ]),
+        ),
+      }
+    : selectForBuild(profile, jdText);
+  // Protected text never enters the rewrite payload. IDs distinguish identical headings.
+  const rewritePayload = composedProjects
+    ? buildProjectPayload(
+        composedProjects
+          .map((e) => ({
+            name: e.id,
+            tech: (e.tech ?? []).join(", "),
+            bullets: e.locked
+              ? []
+              : e.bullets
+                  .filter((b) => b.included && !b.locked)
+                  .map((b) => b.text),
+          }))
+          .filter((e) => e.bullets.length),
+      )
+    : selected;
+
   const projectDates = new Map(
     projectEntries(profile).map((e) => [e.heading, e.date]),
   );
@@ -275,7 +357,10 @@ async function performBuild(
   // per-user daily allowance. A user who has configured nothing still gets a
   // resume; the LLM step is simply skipped and the report says so. That is the
   // whole point of the design: the key is an upgrade, never a toll.
-  const settingsRow = await ctx.runQuery(internal.settings.getSettingsInternal, { user });
+  const settingsRow = await ctx.runQuery(
+    internal.settings.getSettingsInternal,
+    { user },
+  );
   // The stored row uses resume-prefixed column names; chooseLlm takes the
   // generic shape so it stays a pure function with no schema knowledge.
   const preference = {
@@ -306,7 +391,7 @@ async function performBuild(
   });
 
   const apiKey = choice.apiKey;
-  if (apiKey) {
+  if (apiKey && rewritePayload.length) {
     try {
       // Free-form user guidance rides into the prompt alongside the JD, so
       // "emphasize the Go work" steers the same rewrite pass a plain build
@@ -314,7 +399,10 @@ async function performBuild(
       const jdForPrompt = opts.instructions
         ? `Additional instructions from the candidate (follow these):\n${opts.instructions.slice(0, 1000)}\n\n${jdText}`
         : jdText;
-      const { system, user: userMsg } = assemblePrompt(jdForPrompt, selected);
+      const { system, user: userMsg } = assemblePrompt(
+        jdForPrompt,
+        rewritePayload,
+      );
       const text = await callModel(choice.provider, {
         model: choice.model,
         system,
@@ -323,7 +411,10 @@ async function performBuild(
       });
       const rewrites = parseRewrites(text);
       const applied = applyRewrites(
-        selected.map((p) => ({ name: p.name, bullets: p.bullets.map((b) => b.text) })),
+        rewritePayload.map((p) => ({
+          name: p.name,
+          bullets: p.bullets.map((b) => b.text),
+        })),
         rewrites,
         endsInWidow,
       );
@@ -331,11 +422,25 @@ async function performBuild(
       for (const p of applied.projects) {
         if (p.llmRewritten) rewritten.add(p.name);
       }
-      const bulletsByName = new Map(applied.projects.map((p) => [p.name, p.bullets]));
+      const bulletsByName = new Map(
+        applied.projects.map((p) => [p.name, p.bullets]),
+      );
       content = {
         projects: content.projects.map((p) => ({
           ...p,
-          bullets: bulletsByName.get(p.name) ?? p.bullets,
+          bullets: (() => {
+            const entry = composedProjects?.find((e) => e.id === p.name);
+            const rewrites = bulletsByName.get(p.name);
+            if (!entry) return rewrites ?? p.bullets;
+            let index = 0;
+            return entry.bullets
+              .filter((b) => b.included)
+              .map((b) =>
+                entry.locked || b.locked
+                  ? b.text
+                  : (rewrites?.[index++] ?? b.text),
+              );
+          })(),
         })),
       };
       usedLlm = true;
@@ -361,10 +466,21 @@ async function performBuild(
   // words, applied after the LLM pass per project name.
   const overridden = new Set<string>();
   for (const o of opts.overrides ?? []) {
-    const target = content.projects.find((p) => p.name === o.name);
+    const matching = content.projects.filter((p) =>
+      o.entryId
+        ? p.name === o.entryId
+        : (composedProjects?.find((e) => e.id === p.name)?.heading ??
+            p.name) === o.name,
+    );
+    const target = matching.length === 1 ? matching[0] : undefined;
     if (target && o.bullets.length) {
-      target.bullets = o.bullets;
-      overridden.add(o.name);
+      const entry = composedProjects?.find((e) => e.id === target.name);
+      target.bullets = entry
+        ? entry.bullets
+            .filter((b) => b.included)
+            .map((b, i) => o.bullets[i] ?? b.text)
+        : o.bullets;
+      overridden.add(target.name);
     }
   }
 
@@ -372,9 +488,30 @@ async function performBuild(
   // owns pagination and may deterministically condense or remove the least
   // relevant optional content. DOCX is composed from that exact fitted plan,
   // so both downloads contain the same selected projects and bullets.
-  const pdf = await buildResumePdf(profile, content, {
-    scores,
-  });
+  const composedById = new Map(composedProjects?.map((e) => [e.id, e]) ?? []);
+  const reportProjects = content.projects.map((p) => ({
+    entryId: composedById.has(p.name) ? p.name : undefined,
+    name: composedById.get(p.name)?.heading ?? p.name,
+    variant: variants[p.name] ?? "base",
+    before: before.get(p.name) ?? [],
+    after: p.bullets,
+    llmRewritten: rewritten.has(p.name),
+    overridden: overridden.has(p.name),
+  }));
+  if (composition) {
+    for (const section of profile.sections)
+      for (const entry of section.entries) {
+        const tailored = content.projects.find((p) => p.name === entry.id);
+        if (tailored) entry.bullets = { base: tailored.bullets };
+      }
+    content = fullResumeContent(profile, "base");
+    notes.push(
+      "Used the selected resume exactly. Exclusions, order, and locked wording were preserved; no automatic cuts were made.",
+    );
+  }
+  const pdf = composition
+    ? await buildExactResumePdf(profile, content)
+    : await buildResumePdf(profile, content, { scores });
   content = pdf.content;
   notes.push(...pdf.notes.map((note) => note.message));
 
@@ -382,7 +519,10 @@ async function performBuild(
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   const doc = composeResumeDoc(pdf.profile, content);
   const buf = await Packer.toBuffer(doc);
-  const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+  const arrayBuffer = buf.buffer.slice(
+    buf.byteOffset,
+    buf.byteOffset + buf.byteLength,
+  ) as ArrayBuffer;
   const docxBlob = new Blob([arrayBuffer], { type: DOCX_MIME });
   const pdfArrayBuffer = pdf.bytes.buffer.slice(
     pdf.bytes.byteOffset,
@@ -398,23 +538,38 @@ async function performBuild(
     jdChars: jdText.length,
     instructions: opts.instructions,
     variant: opts.variant,
+    sourceProfile: composition
+      ? JSON.stringify(
+          opts.variant === "base"
+            ? resolveResume(composition)
+            : {
+                version: 2,
+                header: composition.header,
+                skills: composition.skills,
+                sections: [],
+                savedResumes: [composition],
+              },
+        )
+      : undefined,
     scores,
     notes,
     format: "pdf",
-    pageCount: 1,
+    pageCount: pdf.pages,
     fit: {
       heightPt: pdf.heightPt,
       safeHeightPt: pdf.safeHeightPt,
       adjustments: pdf.notes.map((note) => note.message),
     },
-    projects: content.projects.map((p) => ({
-      name: p.name,
-      variant: variants[p.name] ?? "base",
-      before: before.get(p.name) ?? [],
-      after: p.bullets,
-      llmRewritten: rewritten.has(p.name),
-      overridden: overridden.has(p.name),
-    })),
+    projects: composition
+      ? reportProjects
+      : content.projects.map((p) => ({
+          name: p.name,
+          variant: variants[p.name] ?? "base",
+          before: before.get(p.name) ?? [],
+          after: p.bullets,
+          llmRewritten: rewritten.has(p.name),
+          overridden: overridden.has(p.name),
+        })),
     outline: resumeOutline(pdf.profile, content),
   };
 
@@ -455,22 +610,37 @@ export const runBuild = internalAction({
     jdText: v.optional(v.string()),
     instructions: v.optional(v.string()),
     overrides: v.optional(
-      v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
+      v.array(
+        v.object({
+          entryId: v.optional(v.string()),
+          name: v.string(),
+          bullets: v.array(v.string()),
+        }),
+      ),
     ),
     variant: v.optional(v.string()),
+    profileSnapshot: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, jdText, instructions, overrides, variant }) => {
+  handler: async (
+    ctx,
+    { user, short, jdText, instructions, overrides, variant, profileSnapshot },
+  ) => {
     try {
       await performBuild(ctx, user, short, {
         jdText,
         instructions,
         overrides,
         variant,
+        profileSnapshot,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("resume build failed", err);
-      await ctx.runMutation(internal.resume.markBuildFailed, { user, short, error: message });
+      await ctx.runMutation(internal.resume.markBuildFailed, {
+        user,
+        short,
+        error: message,
+      });
     }
   },
 });
@@ -491,7 +661,9 @@ export const runBuild = internalAction({
 export const runProfileImport = internalAction({
   args: { user: v.string(), storageId: v.id("_storage") },
   handler: async (ctx, { user, storageId: scheduledFor }) => {
-    const record = await ctx.runQuery(internal.resume.getPendingProfileImport, { user });
+    const record = await ctx.runQuery(internal.resume.getPendingProfileImport, {
+      user,
+    });
     // Discarded, or superseded by a newer claim, before this ran. Nothing to
     // clean either: whoever removed or replaced the record removed its blob.
     if (!record || record.status !== "mapping" || !record.storageId) return;
@@ -502,29 +674,40 @@ export const runProfileImport = internalAction({
     const storageId = record.storageId;
     try {
       const blob = await ctx.storage.get(storageId);
-      if (!blob) throw new Error("The temporary resume upload could not be found. Upload it again.");
+      if (!blob)
+        throw new Error(
+          "The temporary resume upload could not be found. Upload it again.",
+        );
       if (blob.size > MAX_IMPORT_BYTES) {
         throw new Error("Resume files must be 5 MB or smaller.");
       }
       const storedType = blob.type.trim().toLowerCase();
       const declaredType = record.contentType.trim().toLowerCase();
       if (storedType && declaredType && storedType !== declaredType) {
-        throw new Error("The uploaded resume content type changed during upload.");
+        throw new Error(
+          "The uploaded resume content type changed during upload.",
+        );
       }
       const extraction = await extractResume(
         new Uint8Array(await blob.arrayBuffer()),
         { filename: record.filename, contentType: storedType || declaredType },
       );
 
-      const settingsRow = await ctx.runQuery(internal.settings.getSettingsInternal, { user });
+      const settingsRow = await ctx.runQuery(
+        internal.settings.getSettingsInternal,
+        { user },
+      );
       const preference = {
         provider: settingsRow?.resumeProvider,
         model: settingsRow?.resumeModel,
       };
-      const userKey = await ctx.runAction(internal.credentials.resolveProviderKey, {
-        user,
-        provider: effectiveProvider(preference),
-      });
+      const userKey = await ctx.runAction(
+        internal.credentials.resolveProviderKey,
+        {
+          user,
+          provider: effectiveProvider(preference),
+        },
+      );
       const operatorKey = process.env.GEMINI_API_KEY ?? null;
       // Read the allowance before spending anything, so a capped user is told
       // to bring a key instead of burning shared calls that cannot succeed.
@@ -544,7 +727,13 @@ export const runProfileImport = internalAction({
         );
       }
 
-      const invokeModel = async ({ system, user: userMsg }: { system: string; user: string }) => {
+      const invokeModel = async ({
+        system,
+        user: userMsg,
+      }: {
+        system: string;
+        user: string;
+      }) => {
         try {
           return await callModel(choice.provider, {
             model: choice.model,
@@ -553,7 +742,10 @@ export const runProfileImport = internalAction({
             apiKey: choice.apiKey!,
             // Gemini exposes a larger structured-output budget. Free-form
             // custom models keep their conservative provider default.
-            maxOutputTokens: resumeImportOutputTokens(choice.provider, choice.model),
+            maxOutputTokens: resumeImportOutputTokens(
+              choice.provider,
+              choice.model,
+            ),
           });
         } catch (error) {
           throw new Error(
@@ -613,7 +805,8 @@ export const exportProfile = action({
   },
   handler: async (_ctx, { data, variant, format, secret }) => {
     checkSecret(secret);
-    if (Buffer.byteLength(data) > EXPORT_MAX_BYTES) throw new Error("profile is too large");
+    if (Buffer.byteLength(data) > MAX_PROFILE_BYTES)
+      throw new Error("profile is too large");
     const name = variant.trim().slice(0, EXPORT_VARIANT_MAX) || "base";
     const exported = await exportResume(parseExportProfile(data), name, format);
     return {
@@ -621,5 +814,17 @@ export const exportProfile = action({
       contentType: exported.contentType,
       base64: Buffer.from(exported.bytes).toString("base64"),
     };
+  },
+});
+
+export const suggestCuts = action({
+  args: { data: v.string(), variant: v.string(), secret: v.string() },
+  handler: async (_ctx, { data, variant, secret }) => {
+    checkSecret(secret);
+    if (Buffer.byteLength(data) > MAX_PROFILE_BYTES)
+      throw new Error("Profile is too large.");
+    return await suggestResumeCuts(
+      getResume(parseExportProfile(data), variant),
+    );
   },
 });

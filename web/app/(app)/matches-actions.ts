@@ -6,6 +6,7 @@
  * from the client - so a signed-in user can only ever write their own rows.
  */
 
+import { MAX_PROFILE_BYTES } from "../../../shared/resume-compose";
 import { revalidatePath } from "next/cache";
 import { resolveTrackerUser } from "@/lib/user";
 import {
@@ -29,11 +30,13 @@ const FIELDS = new Set(["applied", "saved", "dismissed"]);
 const MAX_WRITES = 500;
 
 export async function writeTicks(
-  writes: TickWrite[]
+  writes: TickWrite[],
 ): Promise<{ ok: true; count: number }> {
   const user = await resolveTrackerUser();
   if (!user) {
-    throw new Error("This account isn't provisioned - no tracker user to write to.");
+    throw new Error(
+      "This account isn't provisioned - no tracker user to write to.",
+    );
   }
   if (!Array.isArray(writes)) {
     throw new Error("Invalid write payload.");
@@ -71,7 +74,7 @@ export type ResumeBuildResult = { ok: true } | { ok: false; error: string };
  */
 export async function requestResumeBuild(
   short: string,
-  opts: { jdText?: string } = {}
+  opts: { jdText?: string } = {},
 ): Promise<ResumeBuildResult> {
   const user = await resolveTrackerUser();
   if (!user) {
@@ -90,16 +93,22 @@ export async function requestResumeBuild(
         : undefined;
     const res = await convexRequestBuild(user, short, { jdText });
     if (!res.ok) {
-      return { ok: false, error: res.error ?? "Couldn't start the resume build." };
+      return {
+        ok: false,
+        error: res.error ?? "Couldn't start the resume build.",
+      };
     }
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message || "Build request failed." };
+    return {
+      ok: false,
+      error: (err as Error).message || "Build request failed.",
+    };
   }
 }
 
 export async function fetchJobDescription(
-  short: string
+  short: string,
 ): Promise<JobDescription> {
   const user = await resolveTrackerUser();
   if (!user || typeof short !== "string" || !SHORT_RE.test(short)) {
@@ -110,7 +119,7 @@ export async function fetchJobDescription(
 
 export async function saveJobDescription(
   short: string,
-  jdText: string
+  jdText: string,
 ): Promise<{ ok: boolean; error?: string; text?: string; updatedAt?: number }> {
   const user = await resolveTrackerUser();
   if (!user) return { ok: false, error: "Not signed in." };
@@ -156,7 +165,7 @@ export async function fetchResumeUrl(short: string): Promise<string | null> {
  * rebuild completes.
  */
 export async function fetchResumeMeta(
-  short: string
+  short: string,
 ): Promise<ResumeMeta | null> {
   const user = await resolveTrackerUser();
   if (!user) return null;
@@ -175,9 +184,10 @@ export async function requestResumeRebuild(
   opts: {
     jdText?: string;
     instructions?: string;
-    overrides?: { name: string; bullets: string[] }[];
+    overrides?: { entryId?: string; name: string; bullets: string[] }[];
     variant?: string;
-  }
+    profileSnapshot?: string;
+  },
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await resolveTrackerUser();
   if (!user) return { ok: false, error: "Not signed in." };
@@ -197,7 +207,7 @@ export async function requestResumeRebuild(
             o &&
             typeof o.name === "string" &&
             Array.isArray(o.bullets) &&
-            o.bullets.every((b) => typeof b === "string")
+            o.bullets.every((b) => typeof b === "string"),
         )
         .slice(0, 12)
     : undefined;
@@ -205,12 +215,18 @@ export async function requestResumeRebuild(
     typeof opts.variant === "string" && opts.variant.trim()
       ? opts.variant.trim().slice(0, 40)
       : undefined;
+  if (
+    opts.profileSnapshot &&
+    new Blob([opts.profileSnapshot]).size > MAX_PROFILE_BYTES
+  )
+    return { ok: false, error: "Profile is too large." };
   try {
     return await convexRequestBuild(user, short, {
       jdText,
       instructions,
       overrides,
       variant,
+      profileSnapshot: opts.profileSnapshot,
     });
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -219,7 +235,7 @@ export async function requestResumeRebuild(
 
 /** Swap back to the previous kept build (keep-N=2 restore). */
 export async function requestResumeRestore(
-  short: string
+  short: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await resolveTrackerUser();
   if (!user) return { ok: false, error: "Not signed in." };
@@ -239,7 +255,7 @@ export async function requestResumeRestore(
  * the match's document icon / resume count reflect the deletion immediately.
  */
 export async function removeResume(
-  short: string
+  short: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await resolveTrackerUser();
   if (!user) {
@@ -256,12 +272,18 @@ export async function removeResume(
     if (!res.ok) {
       return {
         ok: false,
-        error: res.reason === "not_found" ? "This resume is already gone." : "Couldn't delete the resume.",
+        error:
+          res.reason === "not_found"
+            ? "This resume is already gone."
+            : "Couldn't delete the resume.",
       };
     }
     revalidatePath("/");
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message || "Delete request failed." };
+    return {
+      ok: false,
+      error: (err as Error).message || "Delete request failed.",
+    };
   }
 }

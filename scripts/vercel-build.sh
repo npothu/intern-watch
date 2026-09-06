@@ -71,7 +71,7 @@ fi
 
 export CONVEX_SCRATCH
 CONVEX_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/convex-deploy.XXXXXX")
-cp -r "$REPO/convex" "$REPO/package.json" "$REPO/package-lock.json" "$CONVEX_SCRATCH/"
+cp -r "$REPO/convex" "$REPO/shared" "$REPO/package.json" "$REPO/package-lock.json" "$CONVEX_SCRATCH/"
 rm -rf "$CONVEX_SCRATCH/convex/_generated"
 (cd "$CONVEX_SCRATCH" && npm ci --include=dev --ignore-scripts --no-audit --no-fund --silent)
 

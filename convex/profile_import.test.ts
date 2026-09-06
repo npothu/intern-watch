@@ -1,8 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { convexTest } from "convex-test";
+import { convexTest, type TestConvex } from "convex-test";
 import schema from "./schema";
-import * as resume from "./resume";
-import { runProfileImport } from "./resume_node";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 // The resume-import claim/poll/apply flow, exercised against convex-test.
@@ -28,7 +27,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-type T = ReturnType<typeof convexTest>;
+type T = TestConvex<typeof schema>;
 
 async function storeText(t: T, text: string): Promise<Id<"_storage">> {
   return await t.run(async (ctx) =>
@@ -41,7 +40,7 @@ async function blobExists(t: T, id: Id<"_storage">): Promise<boolean> {
 }
 
 async function claim(t: T, user: string, storageId: Id<"_storage">) {
-  return await t.mutation(resume.claimProfileImportUpload, {
+  return await t.mutation(api.resume.claimProfileImportUpload, {
     user,
     storageId,
     filename: "resume.txt",
@@ -121,13 +120,13 @@ describe("claim / discard: the pending-import record owns the storage id", () =>
     await claim(t, "alice", blob);
 
     // Mallory has no way to name Alice's storage id: discard takes none.
-    await t.mutation(resume.discardProfileImportUpload, {
+    await t.mutation(api.resume.discardProfileImportUpload, {
       user: "mallory",
       secret: SECRET,
     });
 
     expect(await blobExists(t, blob)).toBe(true);
-    const record = await t.query(resume.getPendingProfileImport, { user: "alice" });
+    const record = await t.query(internal.resume.getPendingProfileImport, { user: "alice" });
     expect(record?.storageId).toBe(blob);
   });
 
@@ -136,10 +135,10 @@ describe("claim / discard: the pending-import record owns the storage id", () =>
     const blob = await storeText(t, "alice resume");
     await claim(t, "alice", blob);
 
-    await t.mutation(resume.discardProfileImportUpload, { user: "alice", secret: SECRET });
+    await t.mutation(api.resume.discardProfileImportUpload, { user: "alice", secret: SECRET });
 
     expect(await blobExists(t, blob)).toBe(false);
-    expect(await t.query(resume.getPendingProfileImport, { user: "alice" })).toBeNull();
+    expect(await t.query(internal.resume.getPendingProfileImport, { user: "alice" })).toBeNull();
   });
 
   test("a stale abandoned claim is swept (blob and row) on the next claim by anyone", async () => {
@@ -161,7 +160,7 @@ describe("claim / discard: the pending-import record owns the storage id", () =>
     await claim(t, "bob", fresh);
 
     expect(await blobExists(t, abandoned)).toBe(false);
-    expect(await t.query(resume.getPendingProfileImport, { user: "ghost" })).toBeNull();
+    expect(await t.query(internal.resume.getPendingProfileImport, { user: "ghost" })).toBeNull();
     // Bob's own fresh claim is untouched by the sweep.
     expect(await blobExists(t, fresh)).toBe(true);
   });
@@ -172,13 +171,13 @@ describe("claim / discard: the pending-import record owns the storage id", () =>
     const superseded = await storeText(t, "superseded upload");
     await claim(t, "alice", current);
 
-    await t.mutation(resume.finishProfileImport, {
+    await t.mutation(internal.resume.finishProfileImport, {
       user: "alice",
       storageId: superseded,
       error: "stale mapping outcome",
     });
 
-    const record = await t.query(resume.getPendingProfileImport, { user: "alice" });
+    const record = await t.query(internal.resume.getPendingProfileImport, { user: "alice" });
     expect(record?.status).toBe("mapping");
     expect(record?.storageId).toBe(current);
     expect(await blobExists(t, current)).toBe(true);
@@ -189,13 +188,13 @@ describe("claim / discard: the pending-import record owns the storage id", () =>
     const blob = await storeText(t, "alice resume");
     await claim(t, "alice", blob);
 
-    await t.mutation(resume.finishProfileImport, {
+    await t.mutation(internal.resume.finishProfileImport, {
       user: "alice",
       storageId: blob,
       preview: JSON.stringify({ profile: IMPORTED_PROFILE }),
     });
 
-    const status = await t.query(resume.getProfileImportStatus, {
+    const status = await t.query(api.resume.getProfileImportStatus, {
       user: "alice",
       secret: SECRET,
     });
@@ -217,11 +216,11 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
 
     // There is no argument through which mallory can name alice's storage id:
     // the action's only input is the user, and mallory's record is empty.
-    await t.action(runProfileImport, { user: "mallory", storageId: blob });
+    await t.action(internal.resume_node.runProfileImport, { user: "mallory", storageId: blob });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(await blobExists(t, blob)).toBe(true);
-    const record = await t.query(resume.getPendingProfileImport, { user: "alice" });
+    const record = await t.query(internal.resume.getPendingProfileImport, { user: "alice" });
     expect(record?.status).toBe("mapping");
   });
 
@@ -232,9 +231,9 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
     vi.stubEnv("GEMINI_API_KEY", "operator-key");
     vi.stubGlobal("fetch", vi.fn(async () => geminiResponse(VALID_MODEL_TEXT)));
 
-    await t.action(runProfileImport, { user: "alice", storageId: blob });
+    await t.action(internal.resume_node.runProfileImport, { user: "alice", storageId: blob });
 
-    const status = await t.query(resume.getProfileImportStatus, {
+    const status = await t.query(api.resume.getProfileImportStatus, {
       user: "alice",
       secret: SECRET,
     });
@@ -255,9 +254,9 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
       .mockResolvedValueOnce(geminiResponse(VALID_MODEL_TEXT));
     vi.stubGlobal("fetch", fetchMock);
 
-    await t.action(runProfileImport, { user: "alice", storageId: blob });
+    await t.action(internal.resume_node.runProfileImport, { user: "alice", storageId: blob });
 
-    const status = await t.query(resume.getProfileImportStatus, {
+    const status = await t.query(api.resume.getProfileImportStatus, {
       user: "alice",
       secret: SECRET,
     });
@@ -272,9 +271,9 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
     vi.stubEnv("GEMINI_API_KEY", "operator-key");
     vi.stubGlobal("fetch", vi.fn(async () => geminiResponse("still not json")));
 
-    await t.action(runProfileImport, { user: "alice", storageId: blob });
+    await t.action(internal.resume_node.runProfileImport, { user: "alice", storageId: blob });
 
-    const status = await t.query(resume.getProfileImportStatus, {
+    const status = await t.query(api.resume.getProfileImportStatus, {
       user: "alice",
       secret: SECRET,
     });
@@ -292,9 +291,9 @@ describe("runProfileImport: the mapping action reads only the caller's own recor
     await claim(t, "alice", blob);
     // No GEMINI_API_KEY, no user key.
 
-    await t.action(runProfileImport, { user: "alice", storageId: blob });
+    await t.action(internal.resume_node.runProfileImport, { user: "alice", storageId: blob });
 
-    const status = await t.query(resume.getProfileImportStatus, {
+    const status = await t.query(api.resume.getProfileImportStatus, {
       user: "alice",
       secret: SECRET,
     });
@@ -308,10 +307,10 @@ describe("applyProfileImport: snapshot before overwrite", () => {
   test("replacing an existing profile parks it in profileBackups first", async () => {
     const t = convexTest(schema);
     const oldData = JSON.stringify({ version: 2, header: { name: "Old Me" } });
-    await t.mutation(resume.putProfile, { user: "alice", data: oldData, secret: SECRET });
+    await t.mutation(api.resume.putProfile, { user: "alice", data: oldData, secret: SECRET });
 
     const newData = JSON.stringify(IMPORTED_PROFILE);
-    await t.mutation(resume.applyProfileImport, {
+    await t.mutation(api.resume.applyProfileImport, {
       user: "alice",
       data: newData,
       secret: SECRET,
@@ -333,9 +332,9 @@ describe("applyProfileImport: snapshot before overwrite", () => {
     // The blank scaffold: "empty" is a client-side copy judgment, and the
     // backup is what makes getting it wrong recoverable.
     const blank = JSON.stringify({ version: 2, header: { name: "", contact_line: "" }, skills: {}, sections: [] });
-    await t.mutation(resume.putProfile, { user: "alice", data: blank, secret: SECRET });
+    await t.mutation(api.resume.putProfile, { user: "alice", data: blank, secret: SECRET });
 
-    await t.mutation(resume.applyProfileImport, {
+    await t.mutation(api.resume.applyProfileImport, {
       user: "alice",
       data: JSON.stringify(IMPORTED_PROFILE),
       secret: SECRET,
@@ -350,13 +349,13 @@ describe("applyProfileImport: snapshot before overwrite", () => {
     const t = convexTest(schema);
     const blob = await storeText(t, "Alex Example");
     await claim(t, "alice", blob);
-    await t.mutation(resume.finishProfileImport, {
+    await t.mutation(internal.resume.finishProfileImport, {
       user: "alice",
       storageId: blob,
       preview: JSON.stringify({ profile: IMPORTED_PROFILE }),
     });
 
-    await t.mutation(resume.applyProfileImport, {
+    await t.mutation(api.resume.applyProfileImport, {
       user: "alice",
       data: JSON.stringify(IMPORTED_PROFILE),
       secret: SECRET,
@@ -365,13 +364,13 @@ describe("applyProfileImport: snapshot before overwrite", () => {
     expect(await t.run(async (ctx) => ctx.db.query("profileBackups").collect())).toHaveLength(0);
     expect(await t.run(async (ctx) => ctx.db.query("profiles").collect())).toHaveLength(1);
     // Confirming consumed the ready import record.
-    expect(await t.query(resume.getPendingProfileImport, { user: "alice" })).toBeNull();
+    expect(await t.query(internal.resume.getPendingProfileImport, { user: "alice" })).toBeNull();
   });
 
   test("invalid JSON is rejected before anything is written", async () => {
     const t = convexTest(schema);
     await expect(
-      t.mutation(resume.applyProfileImport, {
+      t.mutation(api.resume.applyProfileImport, {
         user: "alice",
         data: "{broken",
         secret: SECRET,

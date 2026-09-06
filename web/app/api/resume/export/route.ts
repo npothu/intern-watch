@@ -1,3 +1,4 @@
+import { MAX_PROFILE_BYTES } from "../../../../../shared/resume-compose";
 import { NextResponse } from "next/server";
 import { resolveTrackerUser } from "@/lib/user";
 import { exportProfileFile, type ResumeExportFormat } from "@/lib/convex";
@@ -17,7 +18,6 @@ import { exportProfileFile, type ResumeExportFormat } from "@/lib/convex";
 
 export const dynamic = "force-dynamic";
 
-const MAX_PROFILE_BYTES = 256 * 1024; // saveProfile's cap
 const MAX_VARIANT_CHARS = 40;
 
 type ExportBody = { profile: string; variant: string; format: ResumeExportFormat };
@@ -33,7 +33,7 @@ function parseBody(raw: unknown): ExportBody | string {
     return "Send the profile to export.";
   }
   if (new Blob([profile]).size > MAX_PROFILE_BYTES) {
-    return "Profile is too large (max 256KB).";
+    return "Profile is too large (max 768KB).";
   }
   try {
     JSON.parse(profile);

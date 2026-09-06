@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { convexTest } from "convex-test";
+import { convexTest, type TestConvex } from "convex-test";
 import schema from "./schema";
-import * as mail from "./mail";
+import { internal } from "./_generated/api";
 
 // Phase 2 tests for the Gmail API plumbing: token refresh, watch arm, sync
 // (history / full-sync fallback), the recordOutcome idempotency barrier, and
@@ -68,7 +68,7 @@ function gmailMessage(
   };
 }
 
-async function seedAccount(t: Awaited<ReturnType<typeof convexTest>>, fields?: Record<string, unknown>) {
+async function seedAccount(t: TestConvex<typeof schema>, fields?: Record<string, unknown>) {
   await t.run(async (ctx) => {
     await ctx.db.insert("mailAccounts", {
       user: "u1",
@@ -79,7 +79,7 @@ async function seedAccount(t: Awaited<ReturnType<typeof convexTest>>, fields?: R
   });
 }
 
-async function getAccountRow(t: Awaited<ReturnType<typeof convexTest>>, user = "u1") {
+async function getAccountRow(t: TestConvex<typeof schema>, user = "u1") {
   return t.run(async (ctx) =>
     ctx.db
       .query("mailAccounts")
@@ -115,7 +115,7 @@ test("sync happy path: one history page -> messages.get -> recordOutcome, cursor
   await seedAccount(t, { historyId: "100" });
   stubFetch(happyRouter());
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
   expect(rows).toHaveLength(1);
@@ -136,8 +136,8 @@ test("sync double delivery: same message recorded once (idempotency barrier)", a
   await seedAccount(t, { historyId: "100" });
   stubFetch(happyRouter());
 
-  await t.action(mail.sync, { user: "u1" });
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
   expect(rows).toHaveLength(1);
@@ -157,7 +157,7 @@ test("sync history.list 404 -> full-sync fallback (messages.list + profile re-an
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
   expect(rows).toHaveLength(1);
@@ -192,7 +192,7 @@ test("sync skips a message deleted after history.list and still advances", async
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
   expect(rows).toHaveLength(1);
@@ -215,7 +215,7 @@ test("sync with no stored cursor uses full-sync path and anchors from profile", 
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
   expect(rows).toHaveLength(1);
@@ -234,7 +234,7 @@ test("sync token refresh failure stamps lastError and does not throw", async () 
   });
 
   // The action should swallow the failure (no crash-loop), not reject.
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const account = await getAccountRow(t);
   expect(account!.lastError).toContain("invalid_grant");
@@ -255,8 +255,8 @@ test("recordOutcome second call with the same gmailMessageId is a no-op", async 
     headers: { from: "r@acme.com", subject: "SWE Intern", date: "2026-08-05T00:00:00Z", messageId: "msg-1" },
     accountEmail: "a@example.com",
   };
-  await t.mutation(mail.recordOutcome, args);
-  await t.mutation(mail.recordOutcome, args);
+  await t.mutation(internal.mail.recordOutcome, args);
+  await t.mutation(internal.mail.recordOutcome, args);
 
   const rows = await t.run(async (ctx) => ctx.db.query("mailMessages").collect());
   expect(rows).toHaveLength(1);
@@ -274,7 +274,7 @@ test("monotonic historyId: a stale sync result never regresses the cursor", asyn
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const account = await getAccountRow(t);
   expect(account!.historyId).toBe("2000"); // never regressed below 2000
@@ -301,7 +301,7 @@ test("history ids as strings + top-level historyId advance the cursor (real API 
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.sync, { user: "u1" });
+  await t.action(internal.mail.sync, { user: "u1" });
 
   const account = await getAccountRow(t);
   expect(account!.historyId).toBe("2615129099");
@@ -320,7 +320,7 @@ test("startWatch stores expiration and anchors historyId when unset", async () =
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.startWatch, { user: "u1" });
+  await t.action(internal.mail.startWatch, { user: "u1" });
 
   const account = await getAccountRow(t);
   expect(account!.watchExpiration).toBe(1789200000000);
@@ -337,7 +337,7 @@ test("startWatch does not overwrite an existing historyId", async () => {
     throw new Error(`unexpected url: ${url}`);
   });
 
-  await t.action(mail.startWatch, { user: "u1" });
+  await t.action(internal.mail.startWatch, { user: "u1" });
 
   const account = await getAccountRow(t);
   expect(account!.historyId).toBe("old"); // anchor only when unset

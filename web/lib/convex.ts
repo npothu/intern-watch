@@ -133,16 +133,18 @@ export type ResumeReport = {
   instructions?: string;
   /** The user-forced bullet variant for this build (undefined = JD auto-pick). */
   variant?: string;
+  sourceProfile?: string;
   scores: Record<string, number>;
   notes: string[];
   format?: "pdf";
-  pageCount?: 1;
+  pageCount?: number;
   fit?: {
     heightPt: number;
     safeHeightPt: number;
     adjustments: string[];
   };
   projects: {
+    entryId?: string;
     name: string;
     variant?: string;
     before: string[];
@@ -315,9 +317,10 @@ export type ResumeBuildResponse = { ok: boolean; error?: string };
 
 /** Optional rebuild refinements forwarded to resume:requestBuild. */
 export type ResumeBuildOpts = {
+  profileSnapshot?: string;
   jdText?: string;
   instructions?: string;
-  overrides?: { name: string; bullets: string[] }[];
+  overrides?: { entryId?: string; name: string; bullets: string[] }[];
   variant?: string;
 };
 
@@ -872,4 +875,8 @@ export async function setResumeLlm(
     { user, provider: provider ?? undefined, model: model ?? undefined },
     "settings"
   );
+}
+
+export async function suggestProfileCuts(data: string, variant: string) {
+  return await post("action", "suggestCuts", { data, variant }, "resume_node") as import("../../shared/resume-compose").CutProposal;
 }

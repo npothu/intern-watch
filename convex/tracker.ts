@@ -1,3 +1,5 @@
+import type { WithoutSystemFields } from "convex/server";
+import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { applyStatus, removeIfUnprogressed } from "./ledger";
@@ -215,7 +217,7 @@ export const pushMatches = mutation({
           q.eq("user", user).eq("short", short),
         )
         .first();
-      const row: Record<string, unknown> = { user, short, item, pushedAt: Date.now() };
+      const row: WithoutSystemFields<Doc<"matches">> = { user, short, item, pushedAt: Date.now() };
       if (jd && !existing?.jobDescription) {
         row.jobDescription = jd;
       }

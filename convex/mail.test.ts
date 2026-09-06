@@ -1,7 +1,7 @@
 import { beforeAll, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import * as mail from "./mail";
+import { api } from "./_generated/api";
 import { decryptJson } from "./credentials_crypto";
 
 // Phase 1 tests for the mail-sync skeleton: account upsert, pending-action
@@ -63,14 +63,14 @@ test("getOAuthConfig requires the complete operator-managed mail setup", async (
   delete process.env.MAIL_PUSH_TOKEN;
 
   try {
-    const incomplete = await t.query(mail.getOAuthConfig, { secret: SECRET });
+    const incomplete = await t.query(api.mail.getOAuthConfig, { secret: SECRET });
     expect(incomplete.missing).toEqual(
       expect.arrayContaining(["MAIL_PUBSUB_TOPIC", "MAIL_PUSH_TOKEN"]),
     );
 
     process.env.MAIL_PUBSUB_TOPIC = "projects/test/topics/gmail";
     process.env.MAIL_PUSH_TOKEN = PUSH_TOKEN;
-    const ready = await t.query(mail.getOAuthConfig, { secret: SECRET });
+    const ready = await t.query(api.mail.getOAuthConfig, { secret: SECRET });
     expect(ready.missing).toEqual([]);
   } finally {
     if (previousTopic === undefined) delete process.env.MAIL_PUBSUB_TOPIC;
@@ -84,7 +84,7 @@ test("getOAuthConfig requires the complete operator-managed mail setup", async (
 
 test("setMailAccount inserts then upserts, clearing lastError", async () => {
   const t = convexTest(schema);
-  await t.action(mail.setMailAccount, {
+  await t.action(api.mail.setMailAccount, {
     user: "u1",
     email: "a@example.com",
     refreshToken: "r1",
@@ -98,7 +98,7 @@ test("setMailAccount inserts then upserts, clearing lastError", async () => {
       .first();
     await ctx.db.patch(row!._id, { lastError: "boom", lastErrorAt: 123 });
   });
-  await t.action(mail.setMailAccount, {
+  await t.action(api.mail.setMailAccount, {
     user: "u1",
     email: "a@example.com",
     refreshToken: "r2",
@@ -149,7 +149,7 @@ test("a legacy plaintext row is still readable, and is upgraded on the next writ
   );
   expect(before?.refreshTokenIv).toBeUndefined();
 
-  await t.action(mail.setMailAccount, {
+  await t.action(api.mail.setMailAccount, {
     user: "legacy",
     email: "old@example.com",
     refreshToken: "rotated-token",
@@ -171,7 +171,7 @@ test("a legacy plaintext row is still readable, and is upgraded on the next writ
 
 test("getActions returns empty actions and null health for an unknown user", async () => {
   const t = convexTest(schema);
-  const res = await t.query(mail.getActions, { user: "nobody", secret: SECRET });
+  const res = await t.query(api.mail.getActions, { user: "nobody", secret: SECRET });
   expect(res.actions).toEqual([]);
   expect(res.health).toBeNull();
 });
@@ -188,7 +188,7 @@ test("getActions returns pending action + account health", async () => {
     });
     await ctx.db.insert("inboxActions", { ...pendingAction });
   });
-  const res = await t.query(mail.getActions, { user: "u1", secret: SECRET });
+  const res = await t.query(api.mail.getActions, { user: "u1", secret: SECRET });
   expect(res.health).toEqual(
     expect.objectContaining({
       email: "a@example.com",
@@ -221,7 +221,7 @@ test("getActions returns pending action + account health", async () => {
 test("resolveAction resolves a pending action with a status", async () => {
   const t = convexTest(schema);
   const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
-  await t.mutation(mail.resolveAction, {
+  await t.mutation(api.mail.resolveAction, {
     user: "u1",
     id,
     short: "ab12cd34ef56",
@@ -237,7 +237,7 @@ test("resolveAction resolves a pending action with a status", async () => {
 test("resolveAction dismisses a pending action", async () => {
   const t = convexTest(schema);
   const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
-  await t.mutation(mail.resolveAction, { user: "u1", id, dismiss: true, secret: SECRET });
+  await t.mutation(api.mail.resolveAction, { user: "u1", id, dismiss: true, secret: SECRET });
   const row = await t.run(async (ctx) => ctx.db.get(id));
   expect(row!.state).toBe("dismissed");
   expect(row!.resolution!.short).toBeUndefined();
@@ -249,7 +249,7 @@ test("resolveAction rejects a bad status", async () => {
   const t = convexTest(schema);
   const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
   await expect(
-    t.mutation(mail.resolveAction, {
+    t.mutation(api.mail.resolveAction, {
       user: "u1",
       id,
       short: "ab12cd34ef56",
@@ -263,7 +263,7 @@ test("resolveAction rejects an action that is not the user's", async () => {
   const t = convexTest(schema);
   const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
   await expect(
-    t.mutation(mail.resolveAction, {
+    t.mutation(api.mail.resolveAction, {
       user: "intruder",
       id,
       short: "ab12cd34ef56",
@@ -276,9 +276,9 @@ test("resolveAction rejects an action that is not the user's", async () => {
 test("resolveAction rejects an already-resolved action", async () => {
   const t = convexTest(schema);
   const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
-  await t.mutation(mail.resolveAction, { user: "u1", id, dismiss: true, secret: SECRET });
+  await t.mutation(api.mail.resolveAction, { user: "u1", id, dismiss: true, secret: SECRET });
   await expect(
-    t.mutation(mail.resolveAction, {
+    t.mutation(api.mail.resolveAction, {
       user: "u1",
       id,
       short: "ab12cd34ef56",
@@ -293,19 +293,19 @@ test("resolveAction rejects an already-resolved action", async () => {
 test("bad secret throws for setMailAccount, getActions, resolveAction", async () => {
   const t = convexTest(schema);
   await expect(
-    t.mutation(mail.setMailAccount, {
+    t.action(api.mail.setMailAccount, {
       user: "u1",
       email: "a@example.com",
       refreshToken: "r1",
       secret: "wrong",
     }),
   ).rejects.toThrow("bad secret");
-  await expect(t.query(mail.getActions, { user: "u1", secret: "wrong" })).rejects.toThrow(
+  await expect(t.query(api.mail.getActions, { user: "u1", secret: "wrong" })).rejects.toThrow(
     "bad secret",
   );
   const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
   await expect(
-    t.mutation(mail.resolveAction, {
+    t.mutation(api.mail.resolveAction, {
       user: "u1",
       id,
       short: "ab12cd34ef56",

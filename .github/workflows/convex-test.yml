@@ -3,12 +3,14 @@ name: convex-test
 on:
   push:
     paths:
+      - "shared/**"
       - "convex/**"
       - "package.json"
       - "vitest.config.mts"
       - ".github/workflows/convex-test.yml"
   pull_request:
     paths:
+      - "shared/**"
       - "convex/**"
       - "package.json"
       - "vitest.config.mts"
