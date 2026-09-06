@@ -229,3 +229,51 @@ test("undoing deletion also restores legacy AI wording and visibility without lo
   expect(undone.sections[0].entries[0].hiddenIn).toContain("swe");
   expect(undone.variants).toContain("swe");
 });
+
+test("suggestions can exclude whole optional projects to reach one page while protecting a locked bullet's parent", async () => {
+  const r = getResume(fixture(), "base");
+  r.sections = [
+    {
+      id: "projects",
+      title: "Projects",
+      kind: "projects",
+      entries: Array.from({ length: 12 }, (_, i) => ({
+        id: `project${i}`,
+        heading: `Project ${i}`,
+        date: "2026",
+        included: true,
+        locked: false,
+        bullets: [
+          {
+            id: `bullet${i}`,
+            text: "Built tested software using TypeScript to automate data validation and improve system reliability. ".repeat(
+              3,
+            ),
+            included: true,
+            locked: i === 11,
+          },
+        ],
+      })),
+    },
+  ];
+  const proposal = await suggestResumeCuts(r);
+  expect(proposal.beforePages).toBeGreaterThan(1);
+  expect(proposal.afterPages).toBe(1);
+  expect(
+    proposal.cuts.every((c) => !c.bulletId && c.entryId !== "project11"),
+  ).toBe(true);
+  const accepted = applyCuts(
+    r,
+    proposal,
+    proposal.cuts.map((c) => c.id),
+  );
+  expect(
+    accepted.sections[0].entries.find((e) => e.id === "project11")?.included,
+  ).toBe(true);
+  const p = putResume(
+    { ...fixture(), savedResumes: [] },
+    { ...accepted, name: "One page" },
+  );
+  const pdf = await exportResume(p, "One page", "pdf");
+  expect((await PDFDocument.load(pdf.bytes)).getPageCount()).toBe(1);
+});

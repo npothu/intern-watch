@@ -25,7 +25,7 @@ export type SavedResume = {
 export type CutSuggestion = {
   id: string;
   entryId: string;
-  bulletId: string;
+  bulletId?: string;
   text: string;
   heading: string;
   reason: string;
@@ -179,6 +179,12 @@ export function applyCuts(
       ...s,
       entries: s.entries.map((e) => ({
         ...e,
+        included:
+          !e.locked &&
+          !e.bullets.some((b) => b.included && b.locked) &&
+          cuts.some((c) => c.entryId === e.id && !c.bulletId)
+            ? false
+            : e.included,
         bullets: e.bullets.map((b) =>
           !e.locked &&
           !b.locked &&

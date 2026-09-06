@@ -1,10 +1,10 @@
 # Resume Compose implementation
 
 - [x] Ground the existing profile, autosave, export, generation, and browser paths.
-- [ ] Sketch two candidate data models and choose the simplest complete model.
-- [ ] Implement variant copying, project and bullet selection, locks, and base comparison.
-- [ ] Implement exact preview, overflow warnings, reviewed cut suggestions, and tailoring from a saved variant.
-- [ ] Verify data isolation, PDF/DOCX content, lock invariants, responsive UI, and deployed workflows.
+- [x] Sketch two candidate data models and choose the simplest complete model.
+- [x] Implement variant copying, project and bullet selection, locks, and base comparison.
+- [x] Implement exact preview, overflow warnings, reviewed cut suggestions, and tailoring from a saved variant.
+- [x] Verify data isolation, PDF/DOCX content, lock invariants, responsive UI, and deployed workflows.
 - [ ] Review, open a ready PR, deploy through the repository workflow, and report remaining limits.
 
 Scope: implement option 3 of the hosted mock, inside the production Resume area.
@@ -41,7 +41,17 @@ Protected text never enters the rewrite payload, and a final merge retains locke
 Project IDs distinguish projects with identical headings during rewriting and section rendering.
 
 Custom output and explicit-variant tailoring paginate without automatic cuts.
-Cut suggestions are reversible bullet exclusions measured with the real PDF renderer.
+Cut suggestions are reversible bullet or optional-entry exclusions measured with the real PDF renderer.
 The proposal records the full source revision, including locks and excluded content, and applies only accepted choices against that unchanged revision.
 The preview rerenders after applying a subset.
 When protected content prevents one page, the user can retain a multipage document.
+
+## Verification
+
+The branch passes 386 TypeScript tests and 993 Python tests, with one Python skip.
+Web lint, web and Convex TypeScript checks, production Next build, Ruff, mypy, and configuration checks pass.
+Both review axes completed, and their concrete findings were fixed and rechecked.
+Signed-in browser verification on the separate Vercel preview database covered copying a saved variant, excluding a project and bullet, locking a remaining bullet, comparison, accepting one cut, actual two-page PDF preview, both download formats, a selected-job build, and reload persistence.
+Downloaded custom and tailored PDF and Word files were parsed to verify the exact excluded project and bullet were absent and the protected bullet remained.
+At a 390px viewport, both PDF pages render without horizontal overflow.
+The preview deployment has no shared AI key, so its build exercised the explicit fallback; an automated action test exercises adversarial AI rewrites, captured-source rebuilds, and manual overrides of duplicate-named projects.

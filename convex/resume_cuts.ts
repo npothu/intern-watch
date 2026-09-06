@@ -28,9 +28,11 @@ export async function suggestResumeCuts(
     )
     .sort((a, b) => (b.entry.priority ?? 1) - (a.entry.priority ?? 1));
   for (const { entry } of entries.reverse()) {
+    const lead = entry.bullets.find((b) => b.included)?.id;
     for (const bullet of [...entry.bullets].reverse()) {
       if (afterPages <= 1) break;
       if (
+        bullet.id === lead ||
         !bullet.included ||
         bullet.locked ||
         entry.bullets.filter((b) => b.included).length <= 1
@@ -49,6 +51,30 @@ export async function suggestResumeCuts(
       afterPages = await pages(candidate);
     }
     if (afterPages <= 1) break;
+  }
+  // Offer optional entries when supporting bullets alone cannot reach one page.
+  // A locked selected bullet also protects its containing entry from removal.
+  for (const { entry, kind } of entries) {
+    if (afterPages <= 1) break;
+    if (kind !== "projects" && kind !== "community") continue;
+    if (entry.bullets.some((b) => b.included && b.locked)) continue;
+    const remaining = candidate.sections
+      .filter((s) => s.kind === kind)
+      .flatMap((s) => s.entries)
+      .filter((e) => e.included);
+    if (remaining.length <= 1) continue;
+    entry.included = false;
+    for (let index = cuts.length - 1; index >= 0; index--)
+      if (cuts[index].entryId === entry.id) cuts.splice(index, 1);
+    cuts.push({
+      id: `${entry.id}/entry`,
+      entryId: entry.id,
+      heading: entry.heading,
+      text: "Exclude this entire entry from the resume.",
+      reason:
+        "Makes room while retaining this entry and its bullets in Excluded.",
+    });
+    afterPages = await pages(candidate);
   }
   return { revision: resumeRevision(source), beforePages, afterPages, cuts };
 }

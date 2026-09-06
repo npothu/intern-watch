@@ -427,4 +427,30 @@ test("saved variant builds capture the draft and protect locked text from advers
   expect(xml).toContain("Second protected project");
   expect(xml).not.toContain("Excluded secret evidence");
   expect(xml).not.toContain("Replaced locked evidence");
+  // Rebuild from the captured source after the live bank changed, addressing a duplicate by ID.
+  await t.action(internal.resume_node.runBuild, {
+    user: "alice",
+    short: "composed-role",
+    variant: report.variant,
+    profileSnapshot: report.sourceProfile,
+    jdText: "TypeScript software engineering",
+    overrides: [
+      {
+        entryId: "duplicate",
+        name: "Job Finder",
+        bullets: ["Deliberate manual wording"],
+      },
+    ],
+  });
+  const rebuilt = await t.run((ctx) => ctx.db.query("resumes").first());
+  const rebuiltReport = JSON.parse(rebuilt!.report as string);
+  expect(rebuiltReport.projects[0].after).toEqual([
+    "Protected original evidence",
+    "Shipped reliable software",
+  ]);
+  expect(rebuiltReport.projects[1]).toMatchObject({
+    entryId: "duplicate",
+    after: ["Deliberate manual wording"],
+    overridden: true,
+  });
 });

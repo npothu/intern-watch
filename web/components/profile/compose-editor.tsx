@@ -141,7 +141,11 @@ export function ComposeEditor({
   const name = resumes.some((r) => r.name === selected) ? selected : "base";
   const resume = getResume(profile, name);
   const editable = name !== "base";
-  const [sectionId, setSectionId] = useState("all");
+  const [sectionId, setSectionId] = useState(
+    () =>
+      resume.sections.find((section) => section.kind === "projects")?.id ??
+      "all",
+  );
   const [filter, setFilter] = useState<"all" | "included" | "excluded">("all");
   const [search, setSearch] = useState("");
   const [mobilePreview, setMobilePreview] = useState(false);
@@ -160,7 +164,16 @@ export function ComposeEditor({
     (sum, e) => sum + e.bullets.filter((b) => b.included).length,
     0,
   );
-  const excludedCount = entries.filter((e) => !e.included).length;
+  const scopeEntries =
+    sectionId === "all"
+      ? entries
+      : (resume.sections.find((s) => s.id === sectionId)?.entries ?? []);
+  const excludedCount = scopeEntries.reduce(
+    (count, entry) =>
+      count +
+      (!entry.included ? 1 : entry.bullets.filter((b) => !b.included).length),
+    0,
+  );
   const change = (next: SavedResume) => onChange(putResume(profile, next));
   const updateEntry = (id: string, edit: (entry: ResumeEntry) => ResumeEntry) =>
     change({
@@ -317,15 +330,29 @@ export function ComposeEditor({
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.85fr)] xl:grid-cols-[170px_minmax(0,1fr)_minmax(360px,0.9fr)]">
         <aside
           className={cn(
-            "min-w-0 space-y-3 lg:col-span-2 xl:col-span-1",
-            mobilePreview && "hidden lg:block",
+            "flex min-w-0 items-center gap-2 lg:col-span-2 xl:col-span-1 xl:block xl:space-y-3",
+            mobilePreview && "hidden lg:flex xl:block",
           )}
         >
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-ink-2">
+          <p className="hidden text-[10px] font-semibold uppercase tracking-widest text-ink-2 xl:block">
             Sections
           </p>
+          <select
+            aria-label="Resume section"
+            value={sectionId}
+            onChange={(event) => setSectionId(event.target.value)}
+            className={cn(field, "min-w-0 flex-1 text-xs xl:hidden")}
+          >
+            <option value="all">All content</option>
+            <option value="contact">Contact information</option>
+            {resume.sections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.title}
+              </option>
+            ))}
+          </select>
           <nav
-            className="flex flex-wrap gap-1 xl:block xl:space-y-1"
+            className="hidden xl:block xl:space-y-1"
             aria-label="Resume sections"
           >
             <button
@@ -382,7 +409,7 @@ export function ComposeEditor({
           </nav>
           {editable && (
             <button
-              className={cn(subtle, "w-full")}
+              className={cn(subtle, "shrink-0 xl:w-full")}
               onClick={() => {
                 const next = addFromLibrary(profile, resume);
                 undoable(
@@ -1010,6 +1037,7 @@ function TailorDialog({
     Awaited<ReturnType<typeof listTailoringJobs>>
   >([]);
   const [short, setShort] = useState("");
+  const [jobSearch, setJobSearch] = useState("");
   const [instructions, setInstructions] = useState("");
   const [status, setStatus] = useState<
     "idle" | "requesting" | "building" | "ready"
@@ -1135,6 +1163,19 @@ function TailorDialog({
         ) : (
           <>
             <label className="text-xs">
+              Find a job
+              <input
+                className={cn(field, "mt-1")}
+                placeholder="Search company or role"
+                value={jobSearch}
+                disabled={status !== "idle"}
+                onChange={(event) => {
+                  setJobSearch(event.target.value);
+                  setShort("");
+                }}
+              />
+            </label>
+            <label className="text-xs">
               Choose a tracked job
               <select
                 disabled={status !== "idle"}
@@ -1143,11 +1184,17 @@ function TailorDialog({
                 onChange={(e) => setShort(e.target.value)}
               >
                 <option value="">Select a job</option>
-                {jobs.map((job) => (
-                  <option key={job.short} value={job.short}>
-                    {job.company} · {job.title}
-                  </option>
-                ))}
+                {jobs
+                  .filter((job) =>
+                    `${job.company} ${job.title}`
+                      .toLowerCase()
+                      .includes(jobSearch.toLowerCase()),
+                  )
+                  .map((job) => (
+                    <option key={job.short} value={job.short}>
+                      {job.company} · {job.title}
+                    </option>
+                  ))}
               </select>
             </label>
             {!jobs.length && (

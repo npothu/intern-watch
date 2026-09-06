@@ -823,28 +823,34 @@ export function ProfileEditor(props: {
 
         <div className="min-w-2 flex-1" />
 
-        <button
-          type="button"
-          onClick={togglePreview}
-          aria-label={previewOn ? "Hide resume preview" : "Show resume preview"}
-          title="Toggle resume preview"
-          className="hidden items-center gap-1.5 rounded-md border border-line-2 bg-surface px-2.5 py-1 text-[12px] text-ink-2 transition-colors hover:text-ink lg:inline-flex"
-        >
-          {previewOn ? (
-            <Eye className="size-3.5" />
-          ) : (
-            <EyeOff className="size-3.5" />
-          )}
-          Preview
-        </button>
+        {mode === "library" && (
+          <button
+            type="button"
+            onClick={togglePreview}
+            aria-label={
+              previewOn ? "Hide resume preview" : "Show resume preview"
+            }
+            title="Toggle resume preview"
+            className="hidden items-center gap-1.5 rounded-md border border-line-2 bg-surface px-2.5 py-1 text-[12px] text-ink-2 transition-colors hover:text-ink lg:inline-flex"
+          >
+            {previewOn ? (
+              <Eye className="size-3.5" />
+            ) : (
+              <EyeOff className="size-3.5" />
+            )}
+            Preview
+          </button>
+        )}
 
-        <ResumeImportButton
-          disabled={importState.status === "parsing"}
-          label={
-            importState.status === "parsing" ? "Parsing..." : "Import resume"
-          }
-          onSelect={handleImportFile}
-        />
+        {mode === "library" && (
+          <ResumeImportButton
+            disabled={importState.status === "parsing"}
+            label={
+              importState.status === "parsing" ? "Parsing..." : "Import resume"
+            }
+            onSelect={handleImportFile}
+          />
+        )}
       </div>
 
       <ResumeImportStatus
