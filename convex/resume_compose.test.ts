@@ -212,3 +212,20 @@ test("comparison reports rendered metadata and section heading changes", async (
   );
   expect(changes.flatMap((c) => c.after).join("\n")).toContain("Distinction");
 });
+
+test("undoing deletion also restores legacy AI wording and visibility without losing later Library edits", async () => {
+  const { undoVariantChange } = await import("../shared/resume-compose");
+  const before = fixture(),
+    after = deleteResumeVariant(before, "swe");
+  const edited = structuredClone(after);
+  edited.sections[1].entries[0].bullets.base = ["Later base text"];
+  const undone = undoVariantChange(edited, before, after, "swe");
+  expect(undone.sections[1].entries[0].bullets.swe).toEqual(
+    before.sections[1].entries[0].bullets.swe,
+  );
+  expect(undone.sections[1].entries[0].bullets.base).toEqual([
+    "Later base text",
+  ]);
+  expect(undone.sections[0].entries[0].hiddenIn).toContain("swe");
+  expect(undone.variants).toContain("swe");
+});

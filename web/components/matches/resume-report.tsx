@@ -185,7 +185,7 @@ function ChangesTab({ report }: { report: ResumeReport }) {
       {report.projects.map((p) => {
         const changedIdx = p.before.join("\n") !== p.after.join("\n");
         return (
-          <div key={p.name} className="mb-3 last:mb-0">
+          <div key={p.entryId ?? p.name} className="mb-3 last:mb-0">
             <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[12.5px] font-semibold text-ink">
               {p.name}
               {p.variant && p.variant !== "base" && (

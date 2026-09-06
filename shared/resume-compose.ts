@@ -317,10 +317,64 @@ export function undoVariantChange(
     throw new Error(
       "This variant changed after that action. Undo would overwrite newer edits.",
     );
+  const resumes = savedResumes(current).filter((r) => r.name !== name);
+  if (previous)
+    resumes.splice(
+      Math.min(
+        savedResumes(before).findIndex((r) => r.name === name),
+        resumes.length,
+      ),
+      0,
+      previous,
+    );
+  const restoreMembership = (
+    actual: string[] | undefined,
+    old: string[] | undefined,
+    expected: string[] | undefined,
+  ) => {
+    if (Boolean(actual?.includes(name)) !== Boolean(expected?.includes(name)))
+      return actual;
+    const result = (actual ?? []).filter((value) => value !== name);
+    if (old?.includes(name))
+      result.splice(Math.min(old.indexOf(name), result.length), 0, name);
+    return result;
+  };
   return {
     ...current,
-    savedResumes: previous
-      ? [...savedResumes(current).filter((r) => r.name !== name), previous]
-      : savedResumes(current).filter((r) => r.name !== name),
+    savedResumes: resumes,
+    variants: restoreMembership(
+      current.variants,
+      before.variants,
+      after.variants,
+    ),
+    sections: current.sections.map((section) => ({
+      ...section,
+      entries: section.entries.map((entry) => {
+        const old = before.sections
+          .flatMap((s) => s.entries)
+          .find((e) => e.id === entry.id);
+        const expected = after.sections
+          .flatMap((s) => s.entries)
+          .find((e) => e.id === entry.id);
+        if (!old || !expected) return entry;
+        const bullets = { ...entry.bullets };
+        if (
+          JSON.stringify(bullets[name]) ===
+          JSON.stringify(expected.bullets[name])
+        ) {
+          if (old.bullets[name]) bullets[name] = old.bullets[name];
+          else delete bullets[name];
+        }
+        return {
+          ...entry,
+          bullets,
+          hiddenIn: restoreMembership(
+            entry.hiddenIn,
+            old.hiddenIn,
+            expected.hiddenIn,
+          ),
+        };
+      }),
+    })),
   };
 }

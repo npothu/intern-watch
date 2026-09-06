@@ -480,7 +480,7 @@ async function performBuild(
             .filter((b) => b.included)
             .map((b, i) => o.bullets[i] ?? b.text)
         : o.bullets;
-      overridden.add(o.name);
+      overridden.add(target.name);
     }
   }
 
