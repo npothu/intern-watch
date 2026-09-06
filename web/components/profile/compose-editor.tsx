@@ -24,6 +24,7 @@ import {
   putResume,
   resumeRevision,
   savedResumes,
+  undoVariantChange,
   type CutProposal,
   type ResumeEntry,
   type SavedResume,
@@ -133,7 +134,7 @@ export function ComposeEditor({
   onChange,
 }: {
   profile: ProfileV2;
-  onChange: (profile: ProfileV2) => void;
+  onChange: (profile: ProfileV2 | ((current: ProfileV2) => ProfileV2)) => void;
 }) {
   const resumes = savedResumes(profile);
   const [selected, setSelected] = useState(() => resumes[0]?.name ?? "base");
@@ -173,7 +174,18 @@ export function ComposeEditor({
     const before = profile;
     onChange(next);
     toast(message, {
-      action: { label: "Undo", onClick: () => onChange(before) },
+      action: {
+        label: "Undo",
+        onClick: () =>
+          onChange((current) => {
+            try {
+              return undoVariantChange(current, before, next, name);
+            } catch (err) {
+              toast.error((err as Error).message);
+              return current;
+            }
+          }),
+      },
     });
   };
   const openNew = () => {
@@ -973,6 +985,7 @@ export function ComposeEditor({
         </DialogContent>
       </Dialog>
       <TailorDialog
+        key={name}
         open={modal === "tailor"}
         onClose={() => setModal(null)}
         profile={profile}

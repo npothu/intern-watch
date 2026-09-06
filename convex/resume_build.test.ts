@@ -1,6 +1,14 @@
 // @vitest-environment node
 
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+} from "vitest";
 import { convexTest } from "convex-test";
 import { PDFDocument } from "pdf-lib";
 import PDFKitDocument from "pdfkit/js/pdfkit.standalone.js";
@@ -35,7 +43,9 @@ const PROFILE: ProfileV2 = {
           tech: ["TypeScript", "React"],
           tags: ["full stack"],
           bullets: {
-            base: ["Built a reliable job-search workflow with automated tests."],
+            base: [
+              "Built a reliable job-search workflow with automated tests.",
+            ],
           },
         },
       ],
@@ -76,22 +86,36 @@ describe("PDF-first resume build", () => {
         id: "hidden-project",
         heading: "Hidden Project",
         hiddenIn: [variant ?? "base"],
-        bullets: { base: ["Hidden project evidence."], swe: ["TypeScript React testing."] },
+        bullets: {
+          base: ["Hidden project evidence."],
+          swe: ["TypeScript React testing."],
+        },
       });
       await t.mutation(api.resume.putProfile, {
-        user: "alice", data: JSON.stringify(profile), secret: SECRET,
+        user: "alice",
+        data: JSON.stringify(profile),
+        secret: SECRET,
       });
       await t.mutation(api.tracker.pushMatches, {
-        user: "alice", items: [{ short: "visibility-role", company: "Acme" }], secret: SECRET,
+        user: "alice",
+        items: [{ short: "visibility-role", company: "Acme" }],
+        secret: SECRET,
       });
       await t.mutation(api.resume.requestBuild, {
-        user: "alice", short: "visibility-role", secret: SECRET,
-        jdText: "Requirements: TypeScript React testing.", variant,
+        user: "alice",
+        short: "visibility-role",
+        secret: SECRET,
+        jdText: "Requirements: TypeScript React testing.",
+        variant,
       });
       vi.useRealTimers();
       const textSpy = vi.spyOn(PDFKitDocument.prototype, "text");
       try {
-        await t.action(internal.resume_node.runBuild, { user: "alice", short: "visibility-role", variant });
+        await t.action(internal.resume_node.runBuild, {
+          user: "alice",
+          short: "visibility-role",
+          variant,
+        });
         const stored = await t.run((ctx) => ctx.db.query("resumes").first());
         expect(stored).not.toBeNull();
         const report = JSON.parse(stored!.report as string);
@@ -106,7 +130,9 @@ describe("PDF-first resume build", () => {
         const pdfText = textSpy.mock.calls.map((call) => call[0]).join("\n");
         expect(pdfText).toContain("Job Finder");
         expect(pdfText).not.toContain("Hidden Project");
-        expect(report.projects.map((project: { name: string }) => project.name)).toEqual(["Job Finder"]);
+        expect(
+          report.projects.map((project: { name: string }) => project.name),
+        ).toEqual(["Job Finder"]);
         expect(report.scores).not.toHaveProperty("Hidden Project");
       } finally {
         textSpy.mockRestore();
@@ -184,7 +210,8 @@ describe("PDF-first resume build", () => {
       user: "alice",
       short: "acme-role",
       secret: SECRET,
-      jdText: "Requirements: TypeScript, React, automated testing, and full-stack development.",
+      jdText:
+        "Requirements: TypeScript, React, automated testing, and full-stack development.",
     });
     expect(requested).toEqual({ ok: true });
     const savedMatch = await t.run(async (ctx) =>
@@ -278,26 +305,72 @@ describe("PDF-first resume build", () => {
   }, 20_000);
 });
 
-
 test("saved variant builds capture the draft and protect locked text from adversarial rewrites", async () => {
   const t = convexTest(schema);
   let bank = copyResume(PROFILE, "base", "Platform");
   const resume = structuredClone(getResume(bank, "Platform"));
   resume.sections[0].entries[0].bullets = [
-    { id: "locked", text: "Protected original evidence", included: true, locked: true },
-    { id: "open", text: "Built reliable software", included: true, locked: false },
-    { id: "excluded", text: "Excluded secret evidence", included: false, locked: false },
+    {
+      id: "locked",
+      text: "Protected original evidence",
+      included: true,
+      locked: true,
+    },
+    {
+      id: "open",
+      text: "Built reliable software",
+      included: true,
+      locked: false,
+    },
+    {
+      id: "excluded",
+      text: "Excluded secret evidence",
+      included: false,
+      locked: false,
+    },
   ];
-  resume.sections[0].entries.push({ ...structuredClone(resume.sections[0].entries[0]), id: "duplicate", locked: true,
-    bullets: [{ id: "second", text: "Second protected project", included: true, locked: false }] });
+  resume.sections[0].entries.push({
+    ...structuredClone(resume.sections[0].entries[0]),
+    id: "duplicate",
+    locked: true,
+    bullets: [
+      {
+        id: "second",
+        text: "Second protected project",
+        included: true,
+        locked: false,
+      },
+    ],
+  });
   bank = putResume(bank, resume);
-  await t.mutation(api.resume.putProfile, { user: "alice", data: JSON.stringify(bank), secret: SECRET });
-  await t.mutation(api.tracker.pushMatches, { user: "alice", items: [{ short: "composed-role", company: "Acme" }], secret: SECRET });
-  await t.mutation(api.resume.requestBuild, { user: "alice", short: "composed-role", secret: SECRET, variant: "Platform", profileSnapshot: JSON.stringify(bank), jdText: "TypeScript software engineering" });
-  const scheduled = await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
+  await t.mutation(api.resume.putProfile, {
+    user: "alice",
+    data: JSON.stringify(bank),
+    secret: SECRET,
+  });
+  await t.mutation(api.tracker.pushMatches, {
+    user: "alice",
+    items: [{ short: "composed-role", company: "Acme" }],
+    secret: SECRET,
+  });
+  await t.mutation(api.resume.requestBuild, {
+    user: "alice",
+    short: "composed-role",
+    secret: SECRET,
+    variant: "Platform",
+    profileSnapshot: JSON.stringify(bank),
+    jdText: "TypeScript software engineering",
+  });
+  const scheduled = await t.run((ctx) =>
+    ctx.db.system.query("_scheduled_functions").collect(),
+  );
   const args = scheduled[0].args[0];
   // Later saves must not change an already queued build.
-  await t.mutation(api.resume.putProfile, { user: "alice", data: JSON.stringify({ ...PROFILE, sections: [] }), secret: SECRET });
+  await t.mutation(api.resume.putProfile, {
+    user: "alice",
+    data: JSON.stringify({ ...PROFILE, sections: [] }),
+    secret: SECRET,
+  });
   expect(args.profileSnapshot).toBe(JSON.stringify(bank));
   vi.stubEnv("GEMINI_API_KEY", "fake-key");
   const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -305,23 +378,51 @@ test("saved variant builds capture the draft and protect locked text from advers
     expect(request).not.toContain("Protected original evidence");
     expect(request).not.toContain("Second protected project");
     expect(request).not.toContain("Excluded secret evidence");
-    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify([
-      { name: "project-1", bullets: ["Shipped reliable software"] },
-      { name: "duplicate", bullets: ["Replaced locked evidence"] },
-    ]) }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify([
+                    {
+                      name: "project-1",
+                      bullets: ["Shipped reliable software"],
+                    },
+                    {
+                      name: "duplicate",
+                      bullets: ["Replaced locked evidence"],
+                    },
+                  ]),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
   });
   vi.stubGlobal("fetch", fetchMock);
   vi.useRealTimers();
   await t.action(internal.resume_node.runBuild, args);
-  const stored = await t.run(ctx => ctx.db.query("resumes").first());
+  const stored = await t.run((ctx) => ctx.db.query("resumes").first());
   expect(stored).not.toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const report = JSON.parse(stored!.report as string);
   expect(report.projects.map((p: { after: string[] }) => p.after)).toEqual([
-    ["Protected original evidence", "Shipped reliable software"], ["Second protected project"],
+    ["Protected original evidence", "Shipped reliable software"],
+    ["Second protected project"],
   ]);
-  const bytes = await t.run(async ctx => (await ctx.storage.get(stored!.docxStorageId!))!.arrayBuffer());
-  const xml = await (await JSZip.loadAsync(bytes)).file("word/document.xml")!.async("string");
+  const bytes = await t.run(async (ctx) =>
+    (await ctx.storage.get(stored!.docxStorageId!))!.arrayBuffer(),
+  );
+  const xml = await (
+    await JSZip.loadAsync(bytes)
+  )
+    .file("word/document.xml")!
+    .async("string");
   expect(xml).toContain("Protected original evidence");
   expect(xml).toContain("Second protected project");
   expect(xml).not.toContain("Excluded secret evidence");

@@ -3,7 +3,13 @@
 // One working profile and one serialized autosave queue serve both modes.
 // Library edits source content; Compose owns independent saved variants.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff, Plus } from "lucide-react";
 import type { Variant } from "@/lib/profile";
@@ -31,7 +37,10 @@ import {
   startResumeImport,
   upgradeProfile,
 } from "@/app/(app)/profile/profile-actions";
-import { SectionRail, PERSONAL_INFO_ID } from "@/components/profile/section-rail";
+import {
+  SectionRail,
+  PERSONAL_INFO_ID,
+} from "@/components/profile/section-rail";
 import { HeaderEditor } from "@/components/profile/header-editor";
 import { EntryCard } from "@/components/profile/entry-card";
 import { SkillsEditor } from "@/components/profile/skills-editor";
@@ -59,7 +68,8 @@ const CHIP =
 // max-w + truncate: variant names are free-text (the "+" prompt has no length
 // limit), so a pathologically long name must not force the pill row wider
 // than the viewport.
-const ICON_BUTTON = "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2";
+const ICON_BUTTON =
+  "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2";
 
 const ADD_LABEL: Record<SectionKind, string> = {
   education: "Add school",
@@ -97,7 +107,8 @@ type ResumeImportState =
   | { status: "applying"; filename: string }
   | { status: "error"; message: string };
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parse stored JSON defensively. saveProfile already validates JSON
@@ -114,7 +125,13 @@ function parseV2(data: string | null): ParseOutcome {
       parsed !== null &&
       (parsed as { version?: unknown }).version === 2
     ) {
-      return { status: "ok", profile: normalizeProfile({ ...(parsed as ProfileV2), savedResumes: savedResumes(parsed as ProfileV2) }) };
+      return {
+        status: "ok",
+        profile: normalizeProfile({
+          ...(parsed as ProfileV2),
+          savedResumes: savedResumes(parsed as ProfileV2),
+        }),
+      };
     }
     return { status: "upgrade" };
   } catch {
@@ -163,7 +180,7 @@ export function ProfileEditor(props: {
   // rendering; it never changes after mount.
   const [outcome] = useState(() => parseV2(props.initialData));
   const [profile, setProfile] = useState<ProfileV2 | null>(
-    outcome.status === "ok" ? outcome.profile : null
+    outcome.status === "ok" ? outcome.profile : null,
   );
 
   const [activeId, setActiveId] = useState<string | null>(() => {
@@ -189,7 +206,7 @@ export function ProfileEditor(props: {
   const previewOn = useSyncExternalStore(
     subscribePreview,
     getPreviewSnapshot,
-    () => true
+    () => true,
   );
 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -229,7 +246,7 @@ export function ProfileEditor(props: {
       .then(() => saveProfile(JSON.stringify(snapshot, null, 2)));
     saveQueue.current = request.then(
       () => undefined,
-      () => undefined
+      () => undefined,
     );
     request
       .then((res) => {
@@ -339,7 +356,7 @@ export function ProfileEditor(props: {
             setProfile(parsed.profile);
             setActiveId(
               parsed.profile.sections.find((s) => s.kind !== "skills")?.id ??
-                null
+                null,
             );
           }
         }
@@ -365,14 +382,16 @@ export function ProfileEditor(props: {
       if (!upload.ok) {
         const detail = (await upload.text().catch(() => "")).slice(0, 300);
         throw new Error(
-          `Resume upload failed (HTTP ${upload.status})${detail ? `: ${detail}` : ""}`
+          `Resume upload failed (HTTP ${upload.status})${detail ? `: ${detail}` : ""}`,
         );
       }
       const uploaded = (await upload.json().catch(() => null)) as {
         storageId?: unknown;
       } | null;
       if (typeof uploaded?.storageId !== "string" || !uploaded.storageId) {
-        throw new Error("Convex accepted the resume upload but returned no storage ID.");
+        throw new Error(
+          "Convex accepted the resume upload but returned no storage ID.",
+        );
       }
       const started = await startResumeImport(uploaded.storageId, file.name);
       if (!started.ok) throw new Error(started.error);
@@ -401,7 +420,9 @@ export function ProfileEditor(props: {
           return;
         }
         if (status.status === "none") {
-          throw new Error("This import was cancelled. Upload the resume again.");
+          throw new Error(
+            "This import was cancelled. Upload the resume again.",
+          );
         }
       }
       // Stop WATCHING, but leave the record and its result alone. The mapping
@@ -464,13 +485,15 @@ export function ProfileEditor(props: {
         if (pending) {
           // Best effort: a failure here still leaves the pre-import profile in
           // the backup, so the import is not blocked by an unsaved keystroke.
-          await saveProfile(JSON.stringify(pending, null, 2)).catch(() => undefined);
+          await saveProfile(JSON.stringify(pending, null, 2)).catch(
+            () => undefined,
+          );
         }
         return confirmResumeImport(JSON.stringify(imported, null, 2));
       });
     saveQueue.current = request.then(
       () => undefined,
-      () => undefined
+      () => undefined,
     );
     let res: Awaited<typeof request>;
     try {
@@ -497,7 +520,7 @@ export function ProfileEditor(props: {
     setActiveId(
       imported.sections.find((section) => section.kind !== "skills")?.id ??
         imported.sections[0]?.id ??
-        null
+        null,
     );
     setOpenEntries({});
     setMode("library");
@@ -524,13 +547,13 @@ export function ProfileEditor(props: {
                 res.ok
                   ? toast.success("Profile restored")
                   : toast.error(`Could not restore: ${res.error}`),
-              () => toast.error("Could not restore the previous profile.")
+              () => toast.error("Could not restore the previous profile."),
             );
             setProfile(previous);
             setActiveId(
               previous.sections.find((s) => s.kind !== "skills")?.id ??
                 previous.sections[0]?.id ??
-                null
+                null,
             );
           },
         },
@@ -541,7 +564,8 @@ export function ProfileEditor(props: {
   const activeIndex = profile
     ? profile.sections.findIndex((s) => s.id === activeId)
     : -1;
-  const activeSection = activeIndex >= 0 ? profile!.sections[activeIndex] : null;
+  const activeSection =
+    activeIndex >= 0 ? profile!.sections[activeIndex] : null;
 
   // ---- state mutation helpers (never mutate in place) -------------------
 
@@ -579,7 +603,7 @@ export function ProfileEditor(props: {
 
   const handleReorderSections = (from: number, to: number) => {
     setProfile((p) =>
-      p ? { ...p, sections: moveItem(p.sections, from, to) } : p
+      p ? { ...p, sections: moveItem(p.sections, from, to) } : p,
     );
   };
 
@@ -589,10 +613,10 @@ export function ProfileEditor(props: {
         ? {
             ...p,
             sections: p.sections.map((s) =>
-              s.id === id ? { ...s, title } : s
+              s.id === id ? { ...s, title } : s,
             ),
           }
-        : p
+        : p,
     );
   };
 
@@ -616,7 +640,7 @@ export function ProfileEditor(props: {
     if (!section) return;
 
     setProfile((p) =>
-      p ? { ...p, sections: p.sections.filter((s) => s.id !== id) } : p
+      p ? { ...p, sections: p.sections.filter((s) => s.id !== id) } : p,
     );
     // If the active section was deleted, select a sensible replacement: the
     // one now at the same index, else the first remaining one.
@@ -659,7 +683,7 @@ export function ProfileEditor(props: {
         sections: p.sections.map((s, i) =>
           i === sectionIndex
             ? { ...s, entries: s.entries.filter((e) => e.id !== entry.id) }
-            : s
+            : s,
         ),
       };
     });
@@ -711,7 +735,7 @@ export function ProfileEditor(props: {
             setProfile(blank);
             attemptSave(blank, false);
             setActiveId(
-              blank.sections.find((s) => s.kind !== "skills")?.id ?? null
+              blank.sections.find((s) => s.kind !== "skills")?.id ?? null,
             );
           }}
         />
@@ -755,21 +779,43 @@ export function ProfileEditor(props: {
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <h3 className="text-[15px] font-semibold text-ink">Resume</h3>
 
-        <div className="inline-flex rounded-md border border-line bg-surface p-1" aria-label="Resume workspace">
-          {(["library", "compose"] as const).map(tab => <button key={tab} type="button" aria-pressed={mode === tab} onClick={() => setMode(tab)} className={cn("rounded px-4 py-1.5 text-xs capitalize", mode === tab ? "bg-accent text-accent-ink" : "text-ink-2")}>{tab}</button>)}
+        <div
+          className="inline-flex rounded-md border border-line bg-surface p-1"
+          aria-label="Resume workspace"
+        >
+          {(["library", "compose"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              aria-pressed={mode === tab}
+              onClick={() => setMode(tab)}
+              className={cn(
+                "rounded px-4 py-1.5 text-xs capitalize",
+                mode === tab ? "bg-accent text-accent-ink" : "text-ink-2",
+              )}
+            >
+              {tab}
+            </button>
+          ))}
         </div>
-        {mode === "library" && <DownloadMenu profile={profile} variant="base" className={ICON_BUTTON} />}
+        {mode === "library" && (
+          <DownloadMenu
+            profile={profile}
+            variant="base"
+            className={ICON_BUTTON}
+          />
+        )}
 
         <span
           className={cn(
             "inline-flex items-center gap-1 text-[11.5px] tabular-nums",
-            saveErrored ? "text-red" : "text-ink-2"
+            saveErrored ? "text-red" : "text-ink-2",
           )}
         >
           <span
             className={cn(
               "size-1.5 rounded-full",
-              saveErrored ? "bg-red" : "bg-accent"
+              saveErrored ? "bg-red" : "bg-accent",
             )}
           />
           {savedText}
@@ -794,82 +840,105 @@ export function ProfileEditor(props: {
 
         <ResumeImportButton
           disabled={importState.status === "parsing"}
-          label={importState.status === "parsing" ? "Parsing..." : "Import resume"}
+          label={
+            importState.status === "parsing" ? "Parsing..." : "Import resume"
+          }
           onSelect={handleImportFile}
         />
-
-
       </div>
 
       <ResumeImportStatus
         state={importState}
-        current={profile && !isProfileEmpty(profile) ? profileCounts(profile) : null}
+        current={
+          profile && !isProfileEmpty(profile) ? profileCounts(profile) : null
+        }
         onConfirm={() => void handleConfirmImport()}
         onCancel={handleCancelImport}
       />
 
-      {mode === "compose" ? <ComposeEditor profile={profile} onChange={setProfile} /> : <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
-        <div className="min-w-0">
-          <SectionRail
-            sections={profile.sections}
-            activeId={activeId ?? ""}
-            onSelect={setActiveId}
-            onReorder={handleReorderSections}
-            onRename={handleRenameSection}
-            onDelete={handleDeleteSection}
-            onAdd={handleAddSection}
-            headerIncomplete={
-              !profile.header.name.trim() || !profile.header.contact_line.trim()
-            }
-          />
-        </div>
-
-        <div className="min-w-0">
-          {activeId === PERSONAL_INFO_ID ? (
-            <HeaderEditor
-              header={profile.header}
-              onChange={(header) => setProfile((p) => (p ? { ...p, header } : p))}
+      {mode === "compose" ? (
+        <ComposeEditor
+          profile={profile}
+          onChange={(update) =>
+            setProfile((current) =>
+              current
+                ? typeof update === "function"
+                  ? update(current)
+                  : update
+                : current,
+            )
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
+          <div className="min-w-0">
+            <SectionRail
+              sections={profile.sections}
+              activeId={activeId ?? ""}
+              onSelect={setActiveId}
+              onReorder={handleReorderSections}
+              onRename={handleRenameSection}
+              onDelete={handleDeleteSection}
+              onAdd={handleAddSection}
+              headerIncomplete={
+                !profile.header.name.trim() ||
+                !profile.header.contact_line.trim()
+              }
             />
-          ) : (
-            <>
-              {/* Name the variant being edited in the canvas itself. The pill
+          </div>
+
+          <div className="min-w-0">
+            {activeId === PERSONAL_INFO_ID ? (
+              <HeaderEditor
+                header={profile.header}
+                onChange={(header) =>
+                  setProfile((p) => (p ? { ...p, header } : p))
+                }
+              />
+            ) : (
+              <>
+                {/* Name the variant being edited in the canvas itself. The pill
                   row alone was too easy to lose track of, and editing bullets
                   under the wrong variant is silent and annoying to undo. */}
-              <p className="mb-2 text-[11.5px] text-ink-2">
-                Editing the{" "}
-                {variant === "base" ? (
-                  "base variant"
-                ) : (
-                  <>
-                    <span className="font-semibold text-accent">{variant}</span> variant
-                  </>
-                )}
-              </p>
-              <SectionBody
-                section={activeSection}
-                variant={variant}
-                skills={profile.skills}
-                openEntries={openEntries}
-                onToggleOpen={(id) =>
-                  setOpenEntries((o) => ({ ...o, [id]: !o[id] }))
-                }
-                onAddEntry={handleAddEntry}
-                onDeleteEntry={handleDeleteEntry}
-                onToggleHidden={handleToggleHidden}
-                onChangeEntry={updateActiveEntry}
-                onMoveEntry={moveActiveEntry}
-                onSkillsChange={updateSkills}
-              />
-            </>
+                <p className="mb-2 text-[11.5px] text-ink-2">
+                  Editing the{" "}
+                  {variant === "base" ? (
+                    "base variant"
+                  ) : (
+                    <>
+                      <span className="font-semibold text-accent">
+                        {variant}
+                      </span>{" "}
+                      variant
+                    </>
+                  )}
+                </p>
+                <SectionBody
+                  section={activeSection}
+                  variant={variant}
+                  skills={profile.skills}
+                  openEntries={openEntries}
+                  onToggleOpen={(id) =>
+                    setOpenEntries((o) => ({ ...o, [id]: !o[id] }))
+                  }
+                  onAddEntry={handleAddEntry}
+                  onDeleteEntry={handleDeleteEntry}
+                  onToggleHidden={handleToggleHidden}
+                  onChangeEntry={updateActiveEntry}
+                  onMoveEntry={moveActiveEntry}
+                  onSkillsChange={updateSkills}
+                />
+              </>
+            )}
+          </div>
+
+          {previewOn && (
+            <div className="hidden min-w-0 lg:block">
+              <ResumePreview profile={profile} variant={variant} />
+            </div>
           )}
         </div>
-
-        {previewOn && (
-          <div className="hidden min-w-0 lg:block">
-            <ResumePreview profile={profile} variant={variant} />
-          </div>
-        )}
-      </div>}
+      )}
     </div>
   );
 }
@@ -889,7 +958,8 @@ function EmptyState({
         No profile on file
       </h2>
       <p className="text-[12px] text-ink-2">
-        Import an existing resume to review it before saving, or start from scratch.
+        Import an existing resume to review it before saving, or start from
+        scratch.
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" onClick={onStart}>
@@ -942,7 +1012,11 @@ function ResumeImportButton({
 }
 
 // Pluralize a count for the replace warning ("1 entry", "12 entries").
-function countNoun(count: number, singular: string, plural = `${singular}s`): string {
+function countNoun(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
@@ -981,7 +1055,9 @@ function ResumeImportStatus({
     return (
       <div className={cn(CARD, "mb-3")}>
         <p className="text-[13px] font-semibold text-red">Import failed</p>
-        <p className="mt-1 break-words text-[12px] text-ink-2">{state.message}</p>
+        <p className="mt-1 break-words text-[12px] text-ink-2">
+          {state.message}
+        </p>
         <button
           type="button"
           onClick={onCancel}
@@ -1038,7 +1114,10 @@ function ResumeImportStatus({
                 </p>
                 <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
                   {semanticWarnings.map((warning, index) => (
-                    <li key={`${index}-${warning}`} className="text-[11.5px] text-ink-2">
+                    <li
+                      key={`${index}-${warning}`}
+                      className="text-[11.5px] text-ink-2"
+                    >
                       {warning}
                     </li>
                   ))}
@@ -1057,7 +1136,9 @@ function ResumeImportStatus({
                   {partialMappedLines.map((line) => (
                     <li key={line.id} className="text-[11.5px] text-ink-2">
                       <p>{line.text}</p>
-                      <p className="mt-0.5 text-amber">Not imported: {line.droppedText}</p>
+                      <p className="mt-0.5 text-amber">
+                        Not imported: {line.droppedText}
+                      </p>
                     </li>
                   ))}
                 </ul>
@@ -1067,7 +1148,10 @@ function ResumeImportStatus({
               <div>
                 <p className="text-[12px] font-semibold text-amber">
                   {state.preview.unmappedLines.length} source{" "}
-                  {state.preview.unmappedLines.length === 1 ? "line was" : "lines were"} not mapped
+                  {state.preview.unmappedLines.length === 1
+                    ? "line was"
+                    : "lines were"}{" "}
+                  not mapped
                 </p>
                 <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md bg-chip p-2">
                   {state.preview.unmappedLines.map((line) => (
@@ -1087,20 +1171,21 @@ function ResumeImportStatus({
           const imported = profileCounts(state.preview.profile);
           return (
             <p className="mt-3 text-[11.5px] font-semibold text-amber">
-              Importing REPLACES your current profile ({countNoun(current.sections, "section")},{" "}
+              Importing REPLACES your current profile (
+              {countNoun(current.sections, "section")},{" "}
               {countNoun(current.entries, "entry", "entries")},{" "}
-              {countNoun(current.bullets, "bullet")}) with the imported content (
-              {countNoun(imported.sections, "section")},{" "}
+              {countNoun(current.bullets, "bullet")}) with the imported content
+              ({countNoun(imported.sections, "section")},{" "}
               {countNoun(imported.entries, "entry", "entries")},{" "}
-              {countNoun(imported.bullets, "bullet")}). A backup of the current profile is
-              saved first, and you can undo right after.
+              {countNoun(imported.bullets, "bullet")}). A backup of the current
+              profile is saved first, and you can undo right after.
             </p>
           );
         })()
       ) : (
         <p className="mt-3 text-[11.5px] text-ink-2">
-          This will fill in your empty profile. Nothing changes until you confirm this
-          import.
+          This will fill in your empty profile. Nothing changes until you
+          confirm this import.
         </p>
       )}
       <div className="mt-3 flex gap-2">
@@ -1170,8 +1255,7 @@ function SectionBody({
       <div className="min-w-2 flex-1" />
       {section && section.kind !== "skills" && (
         <Button size="sm" onClick={onAddEntry}>
-          <Plus className="size-3.5" />
-          + {ADD_LABEL[section.kind]}
+          <Plus className="size-3.5" />+ {ADD_LABEL[section.kind]}
         </Button>
       )}
     </div>

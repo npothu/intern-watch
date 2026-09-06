@@ -1,6 +1,11 @@
 import { MAX_PROFILE_BYTES, getResume } from "../shared/resume-compose";
 import { toV2 } from "./profile_schema";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -52,9 +57,7 @@ export const getJobDescription = query({
     checkSecret(secret);
     const match = await ctx.db
       .query("matches")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (!match?.jobDescription) return { text: null, updatedAt: null };
     return {
@@ -79,9 +82,7 @@ export const saveJobDescription = mutation({
     }
     const match = await ctx.db
       .query("matches")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (!match) {
       return { ok: false as const, error: "Match not found." };
@@ -115,12 +116,30 @@ export const requestBuild = mutation({
     jdText: v.optional(v.string()),
     instructions: v.optional(v.string()),
     overrides: v.optional(
-      v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
+      v.array(
+        v.object({
+          entryId: v.optional(v.string()),
+          name: v.string(),
+          bullets: v.array(v.string()),
+        }),
+      ),
     ),
     variant: v.optional(v.string()),
     profileSnapshot: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, secret, jdText, instructions, overrides, variant, profileSnapshot }) => {
+  handler: async (
+    ctx,
+    {
+      user,
+      short,
+      secret,
+      jdText,
+      instructions,
+      overrides,
+      variant,
+      profileSnapshot,
+    },
+  ) => {
     checkSecret(secret);
     // Validate the preconditions before spending a scheduler slot: the user
     // must have a resume profile AND a matching match row to build from.
@@ -129,22 +148,35 @@ export const requestBuild = mutation({
       .withIndex("by_user", (q) => q.eq("user", user))
       .first();
     if (!profile) {
-      return { ok: false as const, error: "No resume profile on file for this user." };
+      return {
+        ok: false as const,
+        error: "No resume profile on file for this user.",
+      };
     }
     const match = await ctx.db
       .query("matches")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (!match) {
       return { ok: false as const, error: "Match not found." };
     }
     // Capture the request's selected source before scheduling any asynchronous work.
-    const captured = profileSnapshot ?? (typeof profile.data === "string" ? profile.data : JSON.stringify(profile.data));
-    if (new TextEncoder().encode(captured).byteLength > MAX_PROFILE_BYTES) return { ok: false as const, error: "Profile is too large." };
-    try { if (variant) getResume(toV2(JSON.parse(captured)), variant); else JSON.parse(captured); }
-    catch { return { ok: false as const, error: "The selected resume is invalid or no longer exists." }; }
+    const captured =
+      profileSnapshot ??
+      (typeof profile.data === "string"
+        ? profile.data
+        : JSON.stringify(profile.data));
+    if (new TextEncoder().encode(captured).byteLength > MAX_PROFILE_BYTES)
+      return { ok: false as const, error: "Profile is too large." };
+    try {
+      if (variant) getResume(toV2(JSON.parse(captured)), variant);
+      else JSON.parse(captured);
+    } catch {
+      return {
+        ok: false as const,
+        error: "The selected resume is invalid or no longer exists.",
+      };
+    }
     const suppliedJd = jdText?.trim().slice(0, JD_MAX);
     if (suppliedJd) {
       await ctx.db.patch(match._id, {
@@ -155,9 +187,7 @@ export const requestBuild = mutation({
     // Upsert the in-flight marker to "building".
     const existing = await ctx.db
       .query("resumeBuilds")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     const row = {
       user,
@@ -196,9 +226,7 @@ export const deleteResume = mutation({
     checkSecret(secret);
     const row = await ctx.db
       .query("resumes")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (!row) {
       return { ok: false as const, reason: "not_found" };
@@ -222,9 +250,7 @@ export const deleteResume = mutation({
     // UI for an artifact that no longer exists, so clear it too.
     const build = await ctx.db
       .query("resumeBuilds")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (build) {
       await ctx.db.delete(build._id);
@@ -500,9 +526,7 @@ export const getBuildStatus = query({
     checkSecret(secret);
     const row = await ctx.db
       .query("resumeBuilds")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (!row) return null;
     if (row.status === "failed") {
@@ -592,9 +616,7 @@ export const attachResumeInternal = internalMutation({
   ) => {
     const existing = await ctx.db
       .query("resumes")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (existing) {
       if (existing.prevStorageId) {
@@ -646,9 +668,7 @@ export const markBuildFailed = internalMutation({
       error.length > ERROR_MAX ? `${error.slice(0, ERROR_MAX - 3)}...` : error;
     const existing = await ctx.db
       .query("resumeBuilds")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (existing) {
       await ctx.db.patch(existing._id, { status: "failed", error: message });
@@ -672,9 +692,7 @@ export const clearBuild = internalMutation({
   handler: async (ctx, { user, short }) => {
     const existing = await ctx.db
       .query("resumeBuilds")
-      .withIndex("by_user_short", (q) =>
-        q.eq("user", user).eq("short", short),
-      )
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (existing) {
       await ctx.db.delete(existing._id);

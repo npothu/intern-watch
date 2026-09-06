@@ -180,3 +180,35 @@ describe("saved resume composition", () => {
     );
   });
 });
+
+test("undo restores only its variant and rejects newer changes to that variant", async () => {
+  const { undoVariantChange } = await import("../shared/resume-compose");
+  const before = copyResume(fixture(), "swe", "Platform");
+  const after = putResume(before, modify(getResume(before, "Platform")));
+  const other = copyResume(after, "base", "Another");
+  other.header.name = "New Library name";
+  const undone = undoVariantChange(other, before, after, "Platform");
+  expect(undone.header.name).toBe("New Library name");
+  expect(getResume(undone, "Another")).toEqual(getResume(other, "Another"));
+  expect(getResume(undone, "Platform")).toEqual(getResume(before, "Platform"));
+  const edited = structuredClone(getResume(after, "Platform"));
+  edited.header.name = "Later edit";
+  expect(() =>
+    undoVariantChange(putResume(after, edited), before, after, "Platform"),
+  ).toThrow("newer edits");
+});
+
+test("comparison reports rendered metadata and section heading changes", async () => {
+  const { compareWithBase } = await import("../shared/resume-compose");
+  const p = fixture(),
+    r = getResume(p, "base");
+  r.sections[1].entries[0].tech = ["TypeScript"];
+  r.sections[0].entries[0].extras = [{ text: "Distinction" }];
+  r.sections[0].title = "Employment";
+  const changes = compareWithBase(p, r);
+  expect(changes.map((c) => c.heading)).toContain("Sections and order");
+  expect(changes.flatMap((c) => c.after).join("\n")).toContain(
+    "Technologies: TypeScript",
+  );
+  expect(changes.flatMap((c) => c.after).join("\n")).toContain("Distinction");
+});

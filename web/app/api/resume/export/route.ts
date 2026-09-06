@@ -1,3 +1,4 @@
+import { MAX_PROFILE_BYTES } from "../../../../../shared/resume-compose";
 import { NextResponse } from "next/server";
 import { resolveTrackerUser } from "@/lib/user";
 import { exportProfileFile, type ResumeExportFormat } from "@/lib/convex";
@@ -17,7 +18,6 @@ import { exportProfileFile, type ResumeExportFormat } from "@/lib/convex";
 
 export const dynamic = "force-dynamic";
 
-const MAX_PROFILE_BYTES = 768 * 1024; // saveProfile's cap
 const MAX_VARIANT_CHARS = 40;
 
 type ExportBody = { profile: string; variant: string; format: ResumeExportFormat };

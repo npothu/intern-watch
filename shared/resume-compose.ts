@@ -250,11 +250,11 @@ export function compareWithBase(
       after: [JSON.stringify(after.skills)],
     });
   if (
-    before.sections.map((s) => s.id).join() !==
-    after.sections.map((s) => s.id).join()
+    JSON.stringify(before.sections.map((s) => [s.id, s.title, s.kind])) !==
+    JSON.stringify(after.sections.map((s) => [s.id, s.title, s.kind]))
   )
     changes.push({
-      heading: "Section order",
+      heading: "Sections and order",
       before: before.sections.map((s) => s.title),
       after: after.sections.map((s) => s.title),
     });
@@ -269,8 +269,24 @@ export function compareWithBase(
         ? [
             e.heading,
             [e.subheading, e.location, e.date].filter(Boolean).join(" · "),
+            e.tech?.length ? `Technologies: ${e.tech.join(", ")}` : "",
+            ...(e.degrees ?? []).map((d) =>
+              [d.degree, d.concentration, d.grad_date, d.gpa]
+                .filter(Boolean)
+                .join(" · "),
+            ),
+            ...(e.extras ?? []).map((extra) =>
+              [extra.text, extra.date, extra.italics ? "italic" : ""]
+                .filter(Boolean)
+                .join(" · "),
+            ),
+            ...(e.headingRuns ?? []).map((run) =>
+              [run.text, run.bold ? "bold" : "", run.italics ? "italic" : ""]
+                .filter(Boolean)
+                .join(" · "),
+            ),
             ...(e.bullets.base ?? []),
-          ]
+          ].filter(Boolean)
         : [];
     const left = describe(x),
       right = describe(y);
@@ -285,4 +301,26 @@ export function compareWithBase(
       });
   }
   return changes;
+}
+
+/** Undo one variant without replacing intervening edits elsewhere in the bank. */
+export function undoVariantChange(
+  current: ProfileV2,
+  before: ProfileV2,
+  after: ProfileV2,
+  name: string,
+): ProfileV2 {
+  const previous = savedResumes(before).find((r) => r.name === name);
+  const expected = savedResumes(after).find((r) => r.name === name);
+  const actual = savedResumes(current).find((r) => r.name === name);
+  if (JSON.stringify(actual) !== JSON.stringify(expected))
+    throw new Error(
+      "This variant changed after that action. Undo would overwrite newer edits.",
+    );
+  return {
+    ...current,
+    savedResumes: previous
+      ? [...savedResumes(current).filter((r) => r.name !== name), previous]
+      : savedResumes(current).filter((r) => r.name !== name),
+  };
 }

@@ -133,6 +133,7 @@ export type ResumeReport = {
   instructions?: string;
   /** The user-forced bullet variant for this build (undefined = JD auto-pick). */
   variant?: string;
+  sourceProfile?: string;
   scores: Record<string, number>;
   notes: string[];
   format?: "pdf";
@@ -143,6 +144,7 @@ export type ResumeReport = {
     adjustments: string[];
   };
   projects: {
+    entryId?: string;
     name: string;
     variant?: string;
     before: string[];
@@ -318,7 +320,7 @@ export type ResumeBuildOpts = {
   profileSnapshot?: string;
   jdText?: string;
   instructions?: string;
-  overrides?: { name: string; bullets: string[] }[];
+  overrides?: { entryId?: string; name: string; bullets: string[] }[];
   variant?: string;
 };
 

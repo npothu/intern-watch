@@ -1,5 +1,6 @@
 "use server";
 
+import { MAX_PROFILE_BYTES } from "../../../../shared/resume-compose";
 import { resolveTrackerUser } from "@/lib/user";
 import {
   claimResumeImportUpload,
@@ -21,25 +22,26 @@ import { toV2 } from "../../../../convex/profile_schema";
  * The user is re-resolved server-side on every call.
  */
 
-const MAX_PROFILE_BYTES = 768 * 1024; // Keep aligned with shared/resume-compose.
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
 function importContentType(filename: string): string {
   const lower = filename.trim().toLowerCase();
   if (lower.endsWith(".pdf")) {
-    throw new Error("PDF import is not supported yet. Upload a DOCX, TXT, or Markdown file.");
+    throw new Error(
+      "PDF import is not supported yet. Upload a DOCX, TXT, or Markdown file.",
+    );
   }
   if (lower.endsWith(".docx")) {
     return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   }
   if (lower.endsWith(".txt")) return "text/plain";
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown"))
+    return "text/markdown";
   throw new Error("Upload a DOCX, TXT, or Markdown file.");
 }
 
 export type FetchProfileResult =
-  | { ok: true; data?: string }
-  | { ok: false; error: string };
+  { ok: true; data?: string } | { ok: false; error: string };
 
 /** Read the user's saved resume profile JSON. */
 export async function fetchProfile(): Promise<FetchProfileResult> {
@@ -54,7 +56,10 @@ export async function fetchProfile(): Promise<FetchProfileResult> {
     const { data } = await getProfile(user);
     return { ok: true, data: data ?? undefined };
   } catch (err) {
-    return { ok: false, error: (err as Error).message || "Couldn't load the profile." };
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't load the profile.",
+    };
   }
 }
 
@@ -65,8 +70,7 @@ export type BeginResumeImportResult =
   | { ok: false; error: string };
 
 export type StartResumeImportResult =
-  | { ok: true }
-  | { ok: false; error: string };
+  { ok: true } | { ok: false; error: string };
 
 export type PollResumeImportResult =
   | { status: "none" }
@@ -76,7 +80,7 @@ export type PollResumeImportResult =
 
 export async function beginResumeImport(
   filename: string,
-  size: number
+  size: number,
 ): Promise<BeginResumeImportResult> {
   if (typeof filename !== "string" || !filename.trim()) {
     return { ok: false, error: "Choose a DOCX, TXT, or Markdown resume." };
@@ -130,7 +134,7 @@ export async function beginResumeImport(
  */
 export async function startResumeImport(
   storageId: string,
-  filename: string
+  filename: string,
 ): Promise<StartResumeImportResult> {
   if (
     typeof storageId !== "string" ||
@@ -138,7 +142,10 @@ export async function startResumeImport(
     typeof filename !== "string" ||
     !filename.trim()
   ) {
-    return { ok: false, error: "The resume upload was incomplete. Upload it again." };
+    return {
+      ok: false,
+      error: "The resume upload was incomplete. Upload it again.",
+    };
   }
   let contentType: string;
   try {
@@ -171,7 +178,10 @@ export async function startResumeImport(
 export async function pollResumeImport(): Promise<PollResumeImportResult> {
   const user = await resolveTrackerUser();
   if (!user) {
-    return { status: "failed", error: "Not signed in, or this account isn't provisioned." };
+    return {
+      status: "failed",
+      error: "Not signed in, or this account isn't provisioned.",
+    };
   }
   const row = await getResumeImportStatus(user);
   if (!row) return { status: "none" };
@@ -202,7 +212,9 @@ export async function discardResumeImport(): Promise<void> {
  * profileBackups before overwriting, so a confirmed import is recoverable
  * even after the client-side Undo toast is gone.
  */
-export async function confirmResumeImport(data: string): Promise<SaveProfileResult> {
+export async function confirmResumeImport(
+  data: string,
+): Promise<SaveProfileResult> {
   if (typeof data !== "string") {
     return { ok: false, error: "Profile data must be a string." };
   }
@@ -225,7 +237,10 @@ export async function confirmResumeImport(data: string): Promise<SaveProfileResu
     await importProfile(user, data);
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message || "Couldn't apply the import." };
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't apply the import.",
+    };
   }
 }
 
@@ -253,7 +268,10 @@ export async function saveProfile(data: string): Promise<SaveProfileResult> {
     await putProfile(user, data);
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message || "Couldn't save the profile." };
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't save the profile.",
+    };
   }
 }
 
@@ -283,19 +301,27 @@ export async function upgradeProfile(): Promise<SaveProfileResult> {
     }
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message || "Couldn't upgrade the profile." };
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't upgrade the profile.",
+    };
   }
 }
 
 export async function suggestCuts(data: string, variant: string) {
   const user = await resolveTrackerUser();
   if (!user) throw new Error("Sign in to suggest cuts.");
-  if (new Blob([data]).size > MAX_PROFILE_BYTES) throw new Error("Profile is too large.");
+  if (new Blob([data]).size > MAX_PROFILE_BYTES)
+    throw new Error("Profile is too large.");
   return await suggestProfileCuts(data, variant);
 }
 
 export async function listTailoringJobs() {
   const user = await resolveTrackerUser();
   if (!user) throw new Error("Sign in to choose a job.");
-  return (await getMatches(user)).map(job => ({ short: job.short, company: job.company, title: job.title }));
+  return (await getMatches(user)).map((job) => ({
+    short: job.short,
+    company: job.company,
+    title: job.title,
+  }));
 }
