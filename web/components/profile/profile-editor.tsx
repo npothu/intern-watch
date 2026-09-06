@@ -1,34 +1,11 @@
 "use client";
 
-// The resume editor, rebuilt around the v2 profile shape. It owns the working
-// copy of the profile (header, skills blob, and the ordered sections list) and
-// only talks to the server through the profile server actions.
-//
-// 1) THE VARIANT-WRITE RULE
-// -------------------------
-// Bullets live at `entry.bullets[variant]`, falling back to "base". The rule
-// that makes targeted (non-base) resumes safe is enforced in entry-card.tsx's
-// `bulletsForEdit`: on the FIRST edit of a variant that has no array yet, it
-// seeds `bullets[variant]` by COPYING `bullets.base` into a brand-new array,
-// and every bullet writeback is `{ ...e.bullets, [variant]: next }`, which
-// never touches `bullets.base` unless variant === "base". This file owns the
-// `variant` state and passes it down to every EntryCard, so a brand-new
-// variant only "exists" (appears in variantsOf) once some entry actually owns
-// a bullets key for it - exactly what the "+" variant button relies on.
-//
-// 2) THE AUTOSAVE RULE
-// --------------------
-// There is no manual Save button and no broad "unsaved changes" beforeunload
-// warning. Every edit schedules a save debounced 1200ms after the LAST edit;
-// the indicator only shows "Saving..." once a network call is actually in
-// flight. On failure it retries the same save once, then gives up with a
-// toast. A beforeunload guard still exists but only fires while a save is
-// genuinely in flight (between "Saving..." starting and it resolving), not
-// for generic unsaved keystrokes.
+// One working profile and one serialized autosave queue serve both modes.
+// Library edits source content; Compose owns independent saved variants.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { Eye, EyeOff, Plus, X } from "lucide-react";
+import { Eye, EyeOff, Plus } from "lucide-react";
 import type { Variant } from "@/lib/profile";
 import {
   blankEntry,
@@ -38,7 +15,6 @@ import {
   profileCounts,
   SECTION_KINDS,
   normalizeProfile,
-  variantsOf,
   type Entry,
   type ProfileCounts,
   type ProfileV2,
@@ -59,6 +35,8 @@ import { SectionRail, PERSONAL_INFO_ID } from "@/components/profile/section-rail
 import { HeaderEditor } from "@/components/profile/header-editor";
 import { EntryCard } from "@/components/profile/entry-card";
 import { SkillsEditor } from "@/components/profile/skills-editor";
+import { savedResumes } from "../../../shared/resume-compose";
+import { ComposeEditor } from "./compose-editor";
 import { ResumePreview } from "@/components/profile/resume-preview";
 import { DownloadMenu } from "@/components/profile/download-menu";
 import { Button } from "@/components/ui/button";
@@ -81,16 +59,7 @@ const CHIP =
 // max-w + truncate: variant names are free-text (the "+" prompt has no length
 // limit), so a pathologically long name must not force the pill row wider
 // than the viewport.
-const VAR_PILL =
-  "max-w-[110px] min-w-0 truncate border-r border-line px-2.5 py-1 text-[11.5px] font-medium text-ink-2 transition-colors last:border-r-0 hover:text-ink";
-const VAR_PILL_ACTIVE = "bg-accent text-accent-ink font-semibold";
-// Same height and border as the pill group it sits beside; the icon is the
-// only content, so it reads as "this variant, downloaded".
-const ICON_BUTTON =
-  "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2 transition-colors hover:text-ink disabled:opacity-60";
-
-const BUILD_BUTTON_TITLE =
-  "Start a build from a specific match instead - a resume is built per job, not from this page";
+const ICON_BUTTON = "inline-flex items-center justify-center rounded-md border border-line bg-surface px-2 py-1 text-ink-2";
 
 const ADD_LABEL: Record<SectionKind, string> = {
   education: "Add school",
@@ -145,7 +114,7 @@ function parseV2(data: string | null): ParseOutcome {
       parsed !== null &&
       (parsed as { version?: unknown }).version === 2
     ) {
-      return { status: "ok", profile: normalizeProfile(parsed as ProfileV2) };
+      return { status: "ok", profile: normalizeProfile({ ...(parsed as ProfileV2), savedResumes: savedResumes(parsed as ProfileV2) }) };
     }
     return { status: "upgrade" };
   } catch {
@@ -206,9 +175,8 @@ export function ProfileEditor(props: {
     );
   });
   const [openEntries, setOpenEntries] = useState<Record<string, boolean>>({});
-  const [addingVariant, setAddingVariant] = useState(false);
-  const [variantDraft, setVariantDraft] = useState("");
-  const [variant, setVariant] = useState<Variant>("base");
+  const [mode, setMode] = useState<"library" | "compose">("compose");
+  const variant: Variant = "base";
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "retrying" | "not-saved"
   >("idle");
@@ -532,7 +500,7 @@ export function ProfileEditor(props: {
         null
     );
     setOpenEntries({});
-    setVariant("base");
+    setMode("library");
     setImportState({ status: "idle" });
     setLastSavedAt(Date.now());
     setSaveState("idle");
@@ -570,7 +538,6 @@ export function ProfileEditor(props: {
     }
   };
 
-  const variants = profile ? variantsOf(profile) : ["base"];
   const activeIndex = profile
     ? profile.sections.findIndex((s) => s.id === activeId)
     : -1;
@@ -729,60 +696,6 @@ export function ProfileEditor(props: {
     });
   };
 
-  // Adding a variant PERSISTS it on profile.variants rather than only flipping
-  // local state. Before this, a variant existed solely as a bullets key, so a
-  // newly named one was invisible until some entry happened to get a bullet
-  // under it - it looked like "adding a variant does nothing", and then one
-  // would appear later out of nowhere.
-  const commitVariant = () => {
-    const name = variantDraft.trim();
-    setVariantDraft("");
-    setAddingVariant(false);
-    if (!name) return;
-    if (name.toLowerCase() === "base") {
-      toast.error("base always exists - pick another name.");
-      return;
-    }
-    if (variants.some((v) => v.toLowerCase() === name.toLowerCase())) {
-      toast.error(`"${name}" already exists.`);
-      return;
-    }
-    setProfile((p) =>
-      p ? { ...p, variants: [...(p.variants ?? []), name] } : p
-    );
-    setVariant(name);
-  };
-
-  // Removing a variant drops it from the stored list AND from every entry's
-  // bullets, so it stops being resurrected by variantsOf's derived half.
-  const handleDeleteVariant = (name: string) => {
-    if (name === "base") return;
-    const snapshot = profile;
-    setProfile((p) => {
-      if (!p) return p;
-      return {
-        ...p,
-        variants: (p.variants ?? []).filter((v) => v !== name),
-        sections: p.sections.map((s) => ({
-          ...s,
-          entries: s.entries.map((e) => {
-            if (!(name in e.bullets)) return e;
-            const bullets = { ...e.bullets };
-            delete bullets[name];
-            return { ...e, bullets };
-          }),
-        })),
-      };
-    });
-    if (variant === name) setVariant("base");
-    toast(`Variant "${name}" deleted`, {
-      action: {
-        label: "Undo",
-        onClick: () => setProfile(snapshot),
-      },
-    });
-  };
-
   // ---- rendering ---------------------------------------------------------
 
   if (outcome.status === "invalid" && profile === null) {
@@ -842,74 +755,10 @@ export function ProfileEditor(props: {
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <h3 className="text-[15px] font-semibold text-ink">Resume</h3>
 
-        {/* Labelled so the pill row is self-describing - unlabelled pills gave
-            no clue what they switched. */}
-        <span className="text-[11px] font-medium uppercase tracking-wider text-ink-2">
-          Variant
-        </span>
-
-        <div className="inline-flex overflow-hidden rounded-md border border-line bg-surface">
-          {variants.map((v) => (
-            <span key={v} className="group/var inline-flex items-center">
-              <button
-                type="button"
-                aria-current={variant === v ? "page" : undefined}
-                onClick={() => setVariant(v)}
-                className={cn(VAR_PILL, variant === v && VAR_PILL_ACTIVE)}
-              >
-                {v}
-              </button>
-              {v !== "base" && variant === v && (
-                <button
-                  type="button"
-                  onClick={() => handleDeleteVariant(v)}
-                  aria-label={`Delete variant ${v}`}
-                  title={`Delete variant ${v}`}
-                  className="border-r border-line bg-accent px-1.5 py-1 text-accent-ink/70 transition-colors last:border-r-0 hover:text-accent-ink"
-                >
-                  <X className="size-3" />
-                </button>
-              )}
-            </span>
-          ))}
-          {addingVariant ? (
-            <input
-              autoFocus
-              value={variantDraft}
-              placeholder="Name"
-              aria-label="New variant name"
-              className="w-24 min-w-0 bg-bg px-2 py-1 text-[11.5px] text-ink outline-none placeholder:text-ink-2"
-              onChange={(e) => setVariantDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitVariant();
-                }
-                if (e.key === "Escape") {
-                  setAddingVariant(false);
-                  setVariantDraft("");
-                }
-              }}
-              onBlur={commitVariant}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setVariantDraft("");
-                setAddingVariant(true);
-              }}
-              aria-label="Add variant"
-              className={cn(VAR_PILL, "font-semibold")}
-            >
-              +
-            </button>
-          )}
+        <div className="inline-flex rounded-md border border-line bg-surface p-1" aria-label="Resume workspace">
+          {(["library", "compose"] as const).map(tab => <button key={tab} type="button" aria-pressed={mode === tab} onClick={() => setMode(tab)} className={cn("rounded px-4 py-1.5 text-xs capitalize", mode === tab ? "bg-accent text-accent-ink" : "text-ink-2")}>{tab}</button>)}
         </div>
-
-        {/* Downloads the selected variant whole - it sits right after the
-            pills so the two read as one control. */}
-        <DownloadMenu profile={profile} variant={variant} className={ICON_BUTTON} />
+        {mode === "library" && <DownloadMenu profile={profile} variant="base" className={ICON_BUTTON} />}
 
         <span
           className={cn(
@@ -949,9 +798,7 @@ export function ProfileEditor(props: {
           onSelect={handleImportFile}
         />
 
-        <Button disabled title={BUILD_BUTTON_TITLE}>
-          Build resume
-        </Button>
+
       </div>
 
       <ResumeImportStatus
@@ -961,7 +808,7 @@ export function ProfileEditor(props: {
         onCancel={handleCancelImport}
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
+      {mode === "compose" ? <ComposeEditor profile={profile} onChange={setProfile} /> : <div className="grid grid-cols-1 gap-4 lg:grid-cols-[186px_minmax(0,1fr)_232px]">
         <div className="min-w-0">
           <SectionRail
             sections={profile.sections}
@@ -1022,7 +869,7 @@ export function ProfileEditor(props: {
             <ResumePreview profile={profile} variant={variant} />
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

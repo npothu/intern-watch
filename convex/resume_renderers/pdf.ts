@@ -6,7 +6,7 @@ import PDFDocument from "pdfkit/js/pdfkit.standalone.js";
 import { PDFDocument as ParsedPdf } from "pdf-lib";
 import { bulletsFor, toV2, visibleEntries } from "../profile_schema";
 import type { Entry, ProfileV2, Section, SkillItem } from "../profile_schema";
-import { filenameStem, fullResumeContent, type TailoredContent } from "./docx";
+import { projectsForSection, filenameStem, fullResumeContent, type TailoredContent } from "./docx";
 
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
@@ -404,7 +404,7 @@ function sectionHasContent(
   content: TailoredContent,
   variant: string,
 ): boolean {
-  if (section.kind === "projects") return content.projects.length > 0;
+  if (section.kind === "projects") return projectsForSection(section, content).length > 0;
   if (section.kind === "skills") {
     return Boolean(
       profile.skills.languages?.length ||
@@ -462,7 +462,7 @@ function layout(
     if (section.kind === "education") {
       y = renderEducation(c, profile, section, variant, y);
     } else if (section.kind === "projects") {
-      y = renderProjects(c, content.projects, y);
+      y = renderProjects(c, projectsForSection(section, content), y);
     } else if (section.kind === "skills") {
       y = renderSkills(c, profile, y);
     } else {
@@ -683,4 +683,12 @@ export async function renderFullResumePdf(
 export function pdfFilename(profileArg: ProfileV2, company: string): string {
   const companySlug = company.replace(/[^A-Za-z0-9]+/g, "") || "Tailored";
   return `${filenameStem(profileArg)}_${companySlug}.pdf`;
+}
+
+/** Exact selected content, paginated without the one-page fitter. */
+export async function buildExactResumePdf(profile: ProfileV2, content: TailoredContent): Promise<PdfBuildResult> {
+  const bytes = await renderBytes(profile, content, { title: "Resume", variant: "base", paginate: true });
+  const parsed = await ParsedPdf.load(bytes);
+  return { bytes, pages: parsed.getPageCount(), heightPt: measureResumePdf(profile, content),
+    safeHeightPt: SAFE_HEIGHT, profile, content, notes: [] };
 }

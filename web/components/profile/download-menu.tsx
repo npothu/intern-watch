@@ -33,6 +33,7 @@ export function DownloadMenu(props: {
   profile: ProfileV2;
   variant: Variant;
   className?: string;
+  label?: string;
 }) {
   const { profile, variant, className } = props;
   const [busy, setBusy] = useState<Format | null>(null);
@@ -86,6 +87,7 @@ export function DownloadMenu(props: {
           ) : (
             <Download className="size-3.5" />
           )}
+          {props.label}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">

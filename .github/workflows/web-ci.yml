@@ -6,11 +6,11 @@ name: web CI
 
 on:
   pull_request:
-    paths: ["web/**"]
+    paths: ["web/**", "shared/**"]
     branches: ["**"]
   push:
     branches: ["main"]
-    paths: ["web/**"]
+    paths: ["web/**", "shared/**"]
 
 env:
   # Dummy values (documented in web/.env.example) - enough for `next build`.

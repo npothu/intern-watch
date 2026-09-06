@@ -15,6 +15,8 @@
 // JD fetch -> model call -> PDF/DOCX generation -> storage - runs here under
 // the Node runtime instead of risking a runtime-only failure in the isolate.
 
+import { getResume, resolveResume } from "../shared/resume-compose";
+import { suggestResumeCuts } from "./resume_cuts";
 import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
@@ -30,11 +32,12 @@ import {
 import { acquireJdFromUrl, llmExtractJd } from "./jd_acquire";
 import {
   composeResumeDoc,
+  fullResumeContent,
   projectEntries,
   resumeFilename,
   resumeOutline,
 } from "./resume_renderers/docx";
-import { buildResumePdf, pdfFilename, endsInWidow } from "./resume_renderers/pdf";
+import { buildExactResumePdf, buildResumePdf, pdfFilename, endsInWidow } from "./resume_renderers/pdf";
 import {
   callModel,
   chooseLlm,
@@ -63,7 +66,7 @@ function checkSecret(secret: string) {
 
 // saveProfile's cap (web/app/(app)/profile/profile-actions.ts), so any profile
 // the editor could save also exports; the route re-checks it before calling.
-const EXPORT_MAX_BYTES = 256 * 1024;
+const EXPORT_MAX_BYTES = 768 * 1024;
 const EXPORT_VARIANT_MAX = 40;
 
 const JD_MIN_CHARS = 200; // src/resume/jd_source.py MIN_JD_CHARS
@@ -170,7 +173,7 @@ type BuildReport = {
   scores: Record<string, number>;
   notes: string[];
   format: "pdf";
-  pageCount: 1;
+  pageCount: number;
   fit: {
     heightPt: number;
     safeHeightPt: number;
@@ -200,6 +203,7 @@ async function performBuild(
     instructions?: string;
     overrides?: BuildOverride[];
     variant?: string;
+    profileSnapshot?: string;
   } = {},
 ): Promise<void> {
   const match = await ctx.runQuery(internal.resume.getMatchInternal, { user, short });
@@ -218,9 +222,12 @@ async function performBuild(
   if (!profileRow) throw new Error("profile not found");
   // `data` is a JSON string (putProfile's contract - object storage rejects
   // non-ASCII dict keys); tolerate legacy rows written as a raw object.
-  const profile: ProfileV2 = toV2(
-    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data,
-  );
+  const bank = toV2(opts.profileSnapshot ? JSON.parse(opts.profileSnapshot) :
+    typeof profileRow.data === "string" ? JSON.parse(profileRow.data) : profileRow.data);
+  const composition = opts.variant ? getResume(bank, opts.variant) : undefined;
+  const profile: ProfileV2 = composition ? resolveResume(composition) : bank;
+  const composedProjects = composition?.sections.filter(s => s.kind === "projects").flatMap(s => s.entries).filter(e => e.included);
+
 
   // JD text, most trustworthy source first: user-pasted (a rebuild after the
   // report said acquisition failed, or an override of a bad fetch), then the
@@ -245,11 +252,15 @@ async function performBuild(
 
   // Tailor the selected project bullets with the LLM (all failures fall back
   // to the deterministic bank text, exactly like tailor.py never raising).
-  const { payload: selected, scores, variants } = selectForBuild(
-    profile,
-    jdText,
-    opts.variant,
-  );
+  const { payload: selected, scores, variants } = composedProjects ? {
+    payload: buildProjectPayload(composedProjects.map(e => ({ name: e.id, tech: (e.tech ?? []).join(", "), bullets: e.bullets.filter(b => b.included).map(b => b.text) }))),
+    scores: {} as Record<string, number>, variants: Object.fromEntries(composedProjects.map(e => [e.id, bank.savedResumes || bank.sections.some(s => s.entries.some(original => original.id === e.id && original.bullets[opts.variant!])) ? opts.variant! : "base"])),
+  } : selectForBuild(profile, jdText);
+  // Protected text never enters the rewrite payload. IDs distinguish identical headings.
+  const rewritePayload = composedProjects ? buildProjectPayload(composedProjects.map(e => ({ name: e.id, tech: (e.tech ?? []).join(", "),
+    bullets: e.locked ? [] : e.bullets.filter(b => b.included && !b.locked).map(b => b.text),
+  })).filter(e => e.bullets.length)) : selected;
+
   const projectDates = new Map(
     projectEntries(profile).map((e) => [e.heading, e.date]),
   );
@@ -306,7 +317,7 @@ async function performBuild(
   });
 
   const apiKey = choice.apiKey;
-  if (apiKey) {
+  if (apiKey && rewritePayload.length) {
     try {
       // Free-form user guidance rides into the prompt alongside the JD, so
       // "emphasize the Go work" steers the same rewrite pass a plain build
@@ -314,7 +325,7 @@ async function performBuild(
       const jdForPrompt = opts.instructions
         ? `Additional instructions from the candidate (follow these):\n${opts.instructions.slice(0, 1000)}\n\n${jdText}`
         : jdText;
-      const { system, user: userMsg } = assemblePrompt(jdForPrompt, selected);
+      const { system, user: userMsg } = assemblePrompt(jdForPrompt, rewritePayload);
       const text = await callModel(choice.provider, {
         model: choice.model,
         system,
@@ -323,7 +334,7 @@ async function performBuild(
       });
       const rewrites = parseRewrites(text);
       const applied = applyRewrites(
-        selected.map((p) => ({ name: p.name, bullets: p.bullets.map((b) => b.text) })),
+        rewritePayload.map((p) => ({ name: p.name, bullets: p.bullets.map((b) => b.text) })),
         rewrites,
         endsInWidow,
       );
@@ -335,7 +346,13 @@ async function performBuild(
       content = {
         projects: content.projects.map((p) => ({
           ...p,
-          bullets: bulletsByName.get(p.name) ?? p.bullets,
+          bullets: (() => {
+            const entry = composedProjects?.find(e => e.id === p.name);
+            const rewrites = bulletsByName.get(p.name);
+            if (!entry) return rewrites ?? p.bullets;
+            let index = 0;
+            return entry.bullets.filter(b => b.included).map(b => entry.locked || b.locked ? b.text : rewrites?.[index++] ?? b.text);
+          })(),
         })),
       };
       usedLlm = true;
@@ -361,9 +378,11 @@ async function performBuild(
   // words, applied after the LLM pass per project name.
   const overridden = new Set<string>();
   for (const o of opts.overrides ?? []) {
-    const target = content.projects.find((p) => p.name === o.name);
+    const matching = content.projects.filter(p => (composedProjects?.find(e => e.id === p.name)?.heading ?? p.name) === o.name);
+    const target = matching.length === 1 ? matching[0] : undefined;
     if (target && o.bullets.length) {
-      target.bullets = o.bullets;
+      const entry = composedProjects?.find(e => e.id === target.name);
+      target.bullets = entry ? entry.bullets.filter(b => b.included).map((b, i) => entry.locked || b.locked ? b.text : o.bullets[i] ?? b.text) : o.bullets;
       overridden.add(o.name);
     }
   }
@@ -372,9 +391,21 @@ async function performBuild(
   // owns pagination and may deterministically condense or remove the least
   // relevant optional content. DOCX is composed from that exact fitted plan,
   // so both downloads contain the same selected projects and bullets.
-  const pdf = await buildResumePdf(profile, content, {
-    scores,
-  });
+  const composedById = new Map(composedProjects?.map(e => [e.id, e]) ?? []);
+  const reportProjects = content.projects.map(p => ({
+    name: composedById.get(p.name)?.heading ?? p.name,
+    variant: variants[p.name] ?? "base", before: before.get(p.name) ?? [], after: p.bullets,
+    llmRewritten: rewritten.has(p.name), overridden: overridden.has(p.name),
+  }));
+  if (composition) {
+    for (const section of profile.sections) for (const entry of section.entries) {
+      const tailored = content.projects.find(p => p.name === entry.id);
+      if (tailored) entry.bullets = { base: tailored.bullets };
+    }
+    content = fullResumeContent(profile, "base");
+    notes.push("Used the selected resume exactly. Exclusions, order, and locked wording were preserved; no automatic cuts were made.");
+  }
+  const pdf = composition ? await buildExactResumePdf(profile, content) : await buildResumePdf(profile, content, { scores });
   content = pdf.content;
   notes.push(...pdf.notes.map((note) => note.message));
 
@@ -401,19 +432,15 @@ async function performBuild(
     scores,
     notes,
     format: "pdf",
-    pageCount: 1,
+    pageCount: pdf.pages,
     fit: {
       heightPt: pdf.heightPt,
       safeHeightPt: pdf.safeHeightPt,
       adjustments: pdf.notes.map((note) => note.message),
     },
-    projects: content.projects.map((p) => ({
-      name: p.name,
-      variant: variants[p.name] ?? "base",
-      before: before.get(p.name) ?? [],
-      after: p.bullets,
-      llmRewritten: rewritten.has(p.name),
-      overridden: overridden.has(p.name),
+    projects: composition ? reportProjects : content.projects.map(p => ({
+      name: p.name, variant: variants[p.name] ?? "base", before: before.get(p.name) ?? [], after: p.bullets,
+      llmRewritten: rewritten.has(p.name), overridden: overridden.has(p.name),
     })),
     outline: resumeOutline(pdf.profile, content),
   };
@@ -458,14 +485,16 @@ export const runBuild = internalAction({
       v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
     ),
     variant: v.optional(v.string()),
+    profileSnapshot: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, jdText, instructions, overrides, variant }) => {
+  handler: async (ctx, { user, short, jdText, instructions, overrides, variant, profileSnapshot }) => {
     try {
       await performBuild(ctx, user, short, {
         jdText,
         instructions,
         overrides,
         variant,
+        profileSnapshot,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -621,5 +650,14 @@ export const exportProfile = action({
       contentType: exported.contentType,
       base64: Buffer.from(exported.bytes).toString("base64"),
     };
+  },
+});
+
+export const suggestCuts = action({
+  args: { data: v.string(), variant: v.string(), secret: v.string() },
+  handler: async (_ctx, { data, variant, secret }) => {
+    checkSecret(secret);
+    if (Buffer.byteLength(data) > EXPORT_MAX_BYTES) throw new Error("Profile is too large.");
+    return await suggestResumeCuts(getResume(parseExportProfile(data), variant));
   },
 });

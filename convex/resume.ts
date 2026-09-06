@@ -1,3 +1,5 @@
+import { MAX_PROFILE_BYTES, getResume } from "../shared/resume-compose";
+import { toV2 } from "./profile_schema";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -116,8 +118,9 @@ export const requestBuild = mutation({
       v.array(v.object({ name: v.string(), bullets: v.array(v.string()) })),
     ),
     variant: v.optional(v.string()),
+    profileSnapshot: v.optional(v.string()),
   },
-  handler: async (ctx, { user, short, secret, jdText, instructions, overrides, variant }) => {
+  handler: async (ctx, { user, short, secret, jdText, instructions, overrides, variant, profileSnapshot }) => {
     checkSecret(secret);
     // Validate the preconditions before spending a scheduler slot: the user
     // must have a resume profile AND a matching match row to build from.
@@ -137,6 +140,11 @@ export const requestBuild = mutation({
     if (!match) {
       return { ok: false as const, error: "Match not found." };
     }
+    // Capture the request's selected source before scheduling any asynchronous work.
+    const captured = profileSnapshot ?? (typeof profile.data === "string" ? profile.data : JSON.stringify(profile.data));
+    if (new TextEncoder().encode(captured).byteLength > MAX_PROFILE_BYTES) return { ok: false as const, error: "Profile is too large." };
+    try { if (variant) getResume(toV2(JSON.parse(captured)), variant); else JSON.parse(captured); }
+    catch { return { ok: false as const, error: "The selected resume is invalid or no longer exists." }; }
     const suppliedJd = jdText?.trim().slice(0, JD_MAX);
     if (suppliedJd) {
       await ctx.db.patch(match._id, {
@@ -170,6 +178,7 @@ export const requestBuild = mutation({
       instructions,
       overrides,
       variant,
+      profileSnapshot: captured,
     });
     return { ok: true as const };
   },

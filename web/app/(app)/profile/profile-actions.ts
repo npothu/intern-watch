@@ -9,6 +9,8 @@ import {
   getProfile,
   importProfile,
   putProfile,
+  suggestProfileCuts,
+  getMatches,
   type ResumeImportPreview,
 } from "@/lib/convex";
 import { toV2 } from "../../../../convex/profile_schema";
@@ -19,7 +21,7 @@ import { toV2 } from "../../../../convex/profile_schema";
  * The user is re-resolved server-side on every call.
  */
 
-const MAX_PROFILE_BYTES = 256 * 1024; // 256KB
+const MAX_PROFILE_BYTES = 768 * 1024; // Keep aligned with shared/resume-compose.
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
 function importContentType(filename: string): string {
@@ -205,7 +207,7 @@ export async function confirmResumeImport(data: string): Promise<SaveProfileResu
     return { ok: false, error: "Profile data must be a string." };
   }
   if (new Blob([data]).size > MAX_PROFILE_BYTES) {
-    return { ok: false, error: "Profile is too large (max 256KB)." };
+    return { ok: false, error: "Profile is too large (max 768KB)." };
   }
   try {
     JSON.parse(data);
@@ -227,13 +229,13 @@ export async function confirmResumeImport(data: string): Promise<SaveProfileResu
   }
 }
 
-/** Save the user's resume profile JSON (must parse and stay under 256KB). */
+/** Save the user's resume profile JSON (must parse and stay under 768KB). */
 export async function saveProfile(data: string): Promise<SaveProfileResult> {
   if (typeof data !== "string") {
     return { ok: false, error: "Profile data must be a string." };
   }
   if (new Blob([data]).size > MAX_PROFILE_BYTES) {
-    return { ok: false, error: "Profile is too large (max 256KB)." };
+    return { ok: false, error: "Profile is too large (max 768KB)." };
   }
   try {
     JSON.parse(data);
@@ -283,4 +285,17 @@ export async function upgradeProfile(): Promise<SaveProfileResult> {
   } catch (err) {
     return { ok: false, error: (err as Error).message || "Couldn't upgrade the profile." };
   }
+}
+
+export async function suggestCuts(data: string, variant: string) {
+  const user = await resolveTrackerUser();
+  if (!user) throw new Error("Sign in to suggest cuts.");
+  if (new Blob([data]).size > MAX_PROFILE_BYTES) throw new Error("Profile is too large.");
+  return await suggestProfileCuts(data, variant);
+}
+
+export async function listTailoringJobs() {
+  const user = await resolveTrackerUser();
+  if (!user) throw new Error("Sign in to choose a job.");
+  return (await getMatches(user)).map(job => ({ short: job.short, company: job.company, title: job.title }));
 }

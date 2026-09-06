@@ -136,7 +136,7 @@ export type ResumeReport = {
   scores: Record<string, number>;
   notes: string[];
   format?: "pdf";
-  pageCount?: 1;
+  pageCount?: number;
   fit?: {
     heightPt: number;
     safeHeightPt: number;
@@ -315,6 +315,7 @@ export type ResumeBuildResponse = { ok: boolean; error?: string };
 
 /** Optional rebuild refinements forwarded to resume:requestBuild. */
 export type ResumeBuildOpts = {
+  profileSnapshot?: string;
   jdText?: string;
   instructions?: string;
   overrides?: { name: string; bullets: string[] }[];
@@ -872,4 +873,8 @@ export async function setResumeLlm(
     { user, provider: provider ?? undefined, model: model ?? undefined },
     "settings"
   );
+}
+
+export async function suggestProfileCuts(data: string, variant: string) {
+  return await post("action", "suggestCuts", { data, variant }, "resume_node") as import("../../shared/resume-compose").CutProposal;
 }

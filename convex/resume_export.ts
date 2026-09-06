@@ -7,6 +7,7 @@
 // yields a Node Buffer, so it is only ever CALLED from the Node action
 // (resume_node.exportProfile) - never from the isolate runtime.
 
+import { getResume, resolveResume } from "../shared/resume-compose";
 import { Packer } from "docx";
 import { toV2, type ProfileV2 } from "./profile_schema";
 import {
@@ -49,13 +50,13 @@ export async function exportResume(
   variant: string,
   format: ExportFormat,
 ): Promise<ExportedResume> {
-  const profile = toV2(profileArg);
+  const profile = resolveResume(getResume(toV2(profileArg), variant));
   const filename = fullResumeFilename(profile, variant, format);
   const contentType = EXPORT_CONTENT_TYPE[format];
   if (format === "pdf") {
-    return { filename, contentType, bytes: await renderFullResumePdf(profile, variant) };
+    return { filename, contentType, bytes: await renderFullResumePdf(profile, "base") };
   }
-  const doc = composeResumeDoc(profile, fullResumeContent(profile, variant), variant);
+  const doc = composeResumeDoc(profile, fullResumeContent(profile, "base"), "base");
   const buf = await Packer.toBuffer(doc);
   return { filename, contentType, bytes: new Uint8Array(buf) };
 }

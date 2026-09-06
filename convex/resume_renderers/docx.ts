@@ -89,7 +89,7 @@ const LINE_SINGLE = 240;
  * each with the bullets that will render (post-LLM rewrite / base variant).
  */
 export type TailoredContent = {
-  projects: { name: string; tech: string; date: string; bullets: string[] }[];
+  projects: { entryId?: string; name: string; tech: string; date: string; bullets: string[] }[];
 };
 
 // --- intermediate render nodes -------------------------------------------------
@@ -223,7 +223,7 @@ function sectionHasContent(
         (profile.skills.certifications ?? []).length > 0
       );
     case "projects":
-      return content.projects.length > 0;
+      return projectsForSection(section, content).length > 0;
     default:
       return visibleEntries(section, variant).length > 0;
   }
@@ -309,7 +309,8 @@ function renderSection(
       break;
     }
     case "projects": {
-      content.projects.forEach((p, i) => {
+      const projects = projectsForSection(section, content);
+      projects.forEach((p, i) => {
         nodes.push(
           datedLineSpec(
             [
@@ -321,7 +322,7 @@ function renderSection(
           ),
         );
         for (const b of p.bullets) nodes.push(bulletSpec(b));
-        if (i < content.projects.length - 1) nodes.push(separatorSpec());
+        if (i < projects.length - 1) nodes.push(separatorSpec());
       });
       break;
     }
@@ -423,8 +424,7 @@ export function resumeOutline(
 
 /** Entries of the projects section (or [] if the profile has none). */
 export function projectEntries(p: ProfileV2): Entry[] {
-  const section = p.sections.find((s) => s.kind === "projects");
-  return section ? section.entries : [];
+  return p.sections.filter(s => s.kind === "projects").flatMap(s => s.entries);
 }
 
 /**
@@ -434,10 +434,10 @@ export function projectEntries(p: ProfileV2): Entry[] {
  */
 export function fullResumeContent(profileArg: ProfileV2, variant: string): TailoredContent {
   const p = toV2(profileArg);
-  const section = p.sections.find((s) => s.kind === "projects");
-  const entries = section ? visibleEntries(section, variant) : [];
+  const entries = p.sections.filter(s => s.kind === "projects").flatMap(s => visibleEntries(s, variant));
   return {
     projects: entries.map((e) => ({
+      entryId: e.id,
       name: e.heading,
       tech: (e.tech ?? []).join(", "),
       date: e.date,
@@ -570,4 +570,8 @@ export function composeResumeDoc(
       },
     ],
   });
+}
+
+export function projectsForSection(section: Section, content: TailoredContent): TailoredContent["projects"] {
+  return content.projects.filter(p => section.entries.some(e => p.entryId ? e.id === p.entryId : e.heading === p.name));
 }

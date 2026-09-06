@@ -177,6 +177,7 @@ export async function requestResumeRebuild(
     instructions?: string;
     overrides?: { name: string; bullets: string[] }[];
     variant?: string;
+    profileSnapshot?: string;
   }
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await resolveTrackerUser();
@@ -205,12 +206,14 @@ export async function requestResumeRebuild(
     typeof opts.variant === "string" && opts.variant.trim()
       ? opts.variant.trim().slice(0, 40)
       : undefined;
+  if (opts.profileSnapshot && new Blob([opts.profileSnapshot]).size > 768 * 1024) return { ok: false, error: "Profile is too large." };
   try {
     return await convexRequestBuild(user, short, {
       jdText,
       instructions,
       overrides,
       variant,
+      profileSnapshot: opts.profileSnapshot,
     });
   } catch (err) {
     return { ok: false, error: (err as Error).message };

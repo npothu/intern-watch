@@ -5,6 +5,7 @@ import { convexTest } from "convex-test";
 import { PDFDocument } from "pdf-lib";
 import PDFKitDocument from "pdfkit/js/pdfkit.standalone.js";
 import JSZip from "jszip";
+import { copyResume, getResume, putResume } from "../shared/resume-compose";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { ProfileV2 } from "./profile_schema";
@@ -60,6 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("PDF-first resume build", () => {
@@ -274,4 +276,54 @@ describe("PDF-first resume build", () => {
     expect(report.projects[0].name).toBe("Job Finder");
     expect(report.projects[0].variant).toBe("base");
   }, 20_000);
+});
+
+
+test("saved variant builds capture the draft and protect locked text from adversarial rewrites", async () => {
+  const t = convexTest(schema);
+  let bank = copyResume(PROFILE, "base", "Platform");
+  const resume = structuredClone(getResume(bank, "Platform"));
+  resume.sections[0].entries[0].bullets = [
+    { id: "locked", text: "Protected original evidence", included: true, locked: true },
+    { id: "open", text: "Built reliable software", included: true, locked: false },
+    { id: "excluded", text: "Excluded secret evidence", included: false, locked: false },
+  ];
+  resume.sections[0].entries.push({ ...structuredClone(resume.sections[0].entries[0]), id: "duplicate", locked: true,
+    bullets: [{ id: "second", text: "Second protected project", included: true, locked: false }] });
+  bank = putResume(bank, resume);
+  await t.mutation(api.resume.putProfile, { user: "alice", data: JSON.stringify(bank), secret: SECRET });
+  await t.mutation(api.tracker.pushMatches, { user: "alice", items: [{ short: "composed-role", company: "Acme" }], secret: SECRET });
+  await t.mutation(api.resume.requestBuild, { user: "alice", short: "composed-role", secret: SECRET, variant: "Platform", profileSnapshot: JSON.stringify(bank), jdText: "TypeScript software engineering" });
+  const scheduled = await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
+  const args = scheduled[0].args[0];
+  // Later saves must not change an already queued build.
+  await t.mutation(api.resume.putProfile, { user: "alice", data: JSON.stringify({ ...PROFILE, sections: [] }), secret: SECRET });
+  expect(args.profileSnapshot).toBe(JSON.stringify(bank));
+  vi.stubEnv("GEMINI_API_KEY", "fake-key");
+  const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const request = String(init?.body);
+    expect(request).not.toContain("Protected original evidence");
+    expect(request).not.toContain("Second protected project");
+    expect(request).not.toContain("Excluded secret evidence");
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify([
+      { name: "project-1", bullets: ["Shipped reliable software"] },
+      { name: "duplicate", bullets: ["Replaced locked evidence"] },
+    ]) }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  vi.useRealTimers();
+  await t.action(internal.resume_node.runBuild, args);
+  const stored = await t.run(ctx => ctx.db.query("resumes").first());
+  expect(stored).not.toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const report = JSON.parse(stored!.report as string);
+  expect(report.projects.map((p: { after: string[] }) => p.after)).toEqual([
+    ["Protected original evidence", "Shipped reliable software"], ["Second protected project"],
+  ]);
+  const bytes = await t.run(async ctx => (await ctx.storage.get(stored!.docxStorageId!))!.arrayBuffer());
+  const xml = await (await JSZip.loadAsync(bytes)).file("word/document.xml")!.async("string");
+  expect(xml).toContain("Protected original evidence");
+  expect(xml).toContain("Second protected project");
+  expect(xml).not.toContain("Excluded secret evidence");
+  expect(xml).not.toContain("Replaced locked evidence");
 });
