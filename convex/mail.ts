@@ -10,7 +10,7 @@ import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { classifyReply, decideTransition, scoreCandidates, stripHtml } from "./classify";
+import { classifyReply, decideTransition, decisiveCandidate, scoreCandidates, stripHtml } from "./classify";
 import { credentialsKey, decryptJson, encryptJson } from "./credentials_crypto";
 import { applyStatus } from "./ledger";
 
@@ -361,20 +361,37 @@ export const getActions = query({
       .query("inboxActions")
       .withIndex("by_user_state", (q) => q.eq("user", user).eq("state", "pending"))
       .collect();
-    const actions = rows.map((r) => ({
-      id: r._id,
-      gmailMessageId: r.gmailMessageId,
-      threadId: r.threadId,
-      accountEmail: r.accountEmail,
-      from: r.from,
-      subject: r.subject,
-      receivedAt: r.receivedAt,
-      signal: r.signal,
-      evidence: r.evidence,
-      source: r.source,
-      candidates: r.candidates,
-      createdAt: r.createdAt,
-    }));
+    const applications = rows.length ? (await ctx.db.query("applications")
+      .withIndex("by_user", (q) => q.eq("user", user)).collect()).map(applicationCandidate) : [];
+    const actions = rows.map((r) => {
+      const sender = fromParts(r.from);
+      const fresh = scoreCandidates({
+        fromAddr: sender.addr, fromName: sender.name, subject: r.subject, body: r.evidence,
+      }, applications);
+      // Old queue rows only retained scores, not message bodies. Keep their
+      // body-derived evidence while adding/ranking against the current ledger.
+      const scores = new Map(r.candidates.map((c) => [c.short, c.score]));
+      for (const c of fresh) scores.set(c.short, Math.max(c.score, scores.get(c.short) ?? 0));
+      const candidates = applications.map(({ short, company, title }) => ({
+        short, company, title, score: scores.get(short) ?? 0,
+      })).filter((c) => c.score > 0)
+        .sort((a, b) => b.score - a.score || a.company.localeCompare(b.company) ||
+          a.title.localeCompare(b.title) || a.short.localeCompare(b.short));
+      return {
+        id: r._id,
+        gmailMessageId: r.gmailMessageId,
+        threadId: r.threadId,
+        accountEmail: r.accountEmail,
+        from: r.from,
+        subject: r.subject,
+        receivedAt: r.receivedAt,
+        signal: r.signal,
+        evidence: r.evidence,
+        source: r.source,
+        candidates,
+        createdAt: r.createdAt,
+      };
+    });
     const account = await ctx.db
       .query("mailAccounts")
       .withIndex("by_user", (q) => q.eq("user", user))
@@ -477,6 +494,14 @@ export const listMessageIds = internalQuery({
 // The user's tracked applications shaped for the candidate scorer: display
 // fields from the snapshot plus the live status. `sync` runs the scorer in
 // the action; recordOutcome re-reads the chosen row transactionally.
+function applicationCandidate(r: Doc<"applications">) {
+  const snap = (r.snapshot ?? {}) as { company?: string; title?: string; url?: string };
+  return {
+    short: r.short, company: snap.company ?? "", title: snap.title ?? "",
+    url: snap.url ?? "", status: r.status,
+  };
+}
+
 export const listApplications = internalQuery({
   args: { user: v.string() },
   handler: async (ctx, { user }) => {
@@ -484,20 +509,7 @@ export const listApplications = internalQuery({
       .query("applications")
       .withIndex("by_user", (q) => q.eq("user", user))
       .collect();
-    return rows.map((r) => {
-      const snap = (r.snapshot ?? {}) as {
-        company?: string;
-        title?: string;
-        url?: string;
-      };
-      return {
-        short: r.short,
-        company: snap.company ?? "",
-        title: snap.title ?? "",
-        url: snap.url ?? "",
-        status: r.status,
-      };
-    });
+    return rows.map(applicationCandidate);
   },
 });
 
@@ -605,17 +617,6 @@ function gmailLink(accountEmail: string, gmailMessageId: string): string {
     "#all/" +
     encodeURIComponent(gmailMessageId)
   );
-}
-
-// Auto-apply bar: exactly one candidate decisively ahead of the runner-up.
-// The webui preselects the top candidate with the SAME rule, so what the
-// backend would have auto-applied is what the human sees preselected.
-function decisiveCandidate(
-  cands: Array<{ short: string; score: number }>,
-): string | null {
-  if (cands.length === 0 || cands[0].score < 3) return null;
-  if (cands.length > 1 && cands[1].score * 2 > cands[0].score) return null;
-  return cands[0].short;
 }
 
 // RFC 2822 Date header -> ISO string (webui rows slice(0, 10) it). Falls back

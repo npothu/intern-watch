@@ -128,6 +128,34 @@ function syncRouter(message: unknown): (url: string) => Response {
 
 const REJECTION = "We have decided not to move forward with your application.";
 
+test.each([
+  ["130787", "Power Backend Developer Intern - Rochester, MN & Austin, TX - 2027"],
+  ["129220", "Application Developer Intern – Strategy & Transformation 2027"],
+])("Gmail sync applies OA to requisition %s beyond the former candidate cutoff", async (id, title) => {
+  const t = convexTest(schema);
+  await seedAccount(t);
+  for (let i = 0; i < 6; i++) {
+    await seedApp(t, `other${i}`, "applied", {
+      company: "IBM", title: `Other Intern ${i}`,
+      url: `https://careers.ibm.com/en_US/careers/JobDetail?jobId=${140000 + i}`,
+    });
+  }
+  await seedApp(t, "target", "applied", {
+    company: "IBM", title,
+    url: `https://careers.ibm.com/en_US/careers/JobDetail?jobId=${id}`,
+  });
+  stub(syncRouter(plainMessage(
+    "gm1", "oa-thread", "IBM Talent Acquisition <talent@ibm.com>",
+    `Action Required:IBM Coding Assessment for completion Candidate - ${id} - ${title}`,
+    "Please complete the assessment. IBM assessment instructions. ".repeat(40),
+  )));
+  await t.action(internal.mail.sync, { user: "u1" });
+  expect((await getApp(t, "target"))?.status).toBe("oa");
+  expect((await getApp(t, "other0"))?.status).toBe("applied");
+  expect(await pendingActions(t)).toHaveLength(0);
+  expect(await messageRows(t)).toMatchObject([{ outcome: "auto", short: "target" }]);
+});
+
 // -- auto path ---------------------------------------------------------------
 
 test("decisive regex rejection auto-applies with an evidence + deep-link note", async () => {

@@ -98,7 +98,7 @@ describe("scoreCandidates", () => {
     expect(res[0].score).toBe(3);
   });
 
-  test("caps results at 5", () => {
+  test("keeps every matching application available for manual resolution", () => {
     const email = {
       fromAddr: "hiring@acme.com",
       fromName: "Acme",
@@ -112,7 +112,7 @@ describe("scoreCandidates", () => {
       url: `https://acme.com/careers/${i}`,
     }));
     const res = scoreCandidates(email, many);
-    expect(res.length).toBe(5);
+    expect(res.length).toBe(7);
   });
 
   test("empty on no hits", () => {
