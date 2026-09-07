@@ -50,3 +50,14 @@ Vercel settings, Clerk configuration, Google Cloud configuration, GitHub secrets
 Keep the domain, identity, OAuth, webhook, and watcher setup procedures with the instance configuration.
 After a real recovery, reconcile interrupted resume imports and builds and recreate required scheduled work.
 An export is not proof of recovery until the isolated restore and file-integrity checks pass.
+
+## Invalidate legacy resume URLs
+
+The manual backup workflow has an optional `rotate_legacy_resume_links` input.
+Use it after deploying the authenticated file routes to invalidate previously issued public storage URLs.
+The operation runs only after a successful encrypted backup upload.
+It replaces file IDs for at most ten legacy resume records per run and reports whether more remain.
+Repeat while `remaining` is true.
+The file bytes, versions, and owner references stay intact, and stable authenticated app URLs continue to work.
+A concurrent rebuild wins over the migration; retry that row rather than overwriting it.
+A restore of a pre-migration snapshot can revive legacy IDs, so repeat this operation after such a recovery.

@@ -180,6 +180,7 @@ export default defineSchema({
   // and keep a DOCX companion; legacy builds may still contain DOCX only.
   resumes: defineTable({
     user: v.string(),
+    privateLinksVersion: v.optional(v.number()),
     short: v.string(),
     filename: v.string(),
     storageId: v.id("_storage"),

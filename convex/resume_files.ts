@@ -1,6 +1,69 @@
 import { v } from "convex/values";
-import { internalQuery, httpAction } from "./_generated/server";
+import { internalQuery, internalMutation, internalAction, httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+
+const fileFields = ["storageId", "docxStorageId", "prevStorageId", "prevDocxStorageId"] as const;
+
+export const legacyRows = internalQuery({
+  args: {},
+  handler: ctx => ctx.db.query("resumes").filter(q => q.neq(q.field("privateLinksVersion"), 1)).take(10),
+});
+
+export const replaceLegacyFiles = internalMutation({
+  args: {
+    rowId: v.id("resumes"),
+    files: v.array(v.object({ field: v.union(v.literal("storageId"), v.literal("docxStorageId"), v.literal("prevStorageId"), v.literal("prevDocxStorageId")), oldId: v.id("_storage"), newId: v.id("_storage") })),
+  },
+  handler: async (ctx, { rowId, files }) => {
+    const row = await ctx.db.get(rowId);
+    if (!row || row.privateLinksVersion === 1 || files.some(f => row[f.field] !== f.oldId) || fileFields.some(field => row[field] && !files.some(f => f.field === field))) {
+      for (const id of new Set(files.map(f => f.newId))) await ctx.storage.delete(id);
+      return false;
+    }
+    await ctx.db.patch(rowId, { ...Object.fromEntries(files.map(f => [f.field, f.newId])), privateLinksVersion: 1 });
+    // Operator-uploaded files may have been reused across jobs. Keep each old
+    // object until all resume references have moved, including concurrent builds.
+    for (const id of new Set(files.map(f => f.oldId))) {
+      const reference = await ctx.db.query("resumes").filter(q => q.or(...fileFields.map(field => q.eq(q.field(field), id)))).first();
+      if (!reference) await ctx.storage.delete(id);
+    }
+    return true;
+  },
+});
+
+/** Operator-only, run after a verified backup to invalidate old bearer URLs. */
+export const rotateLegacyLinks = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ rotated: number; remaining: boolean }> => {
+    const rows = await ctx.runQuery(internal.resume_files.legacyRows, {});
+    let rotated = 0;
+    for (const row of rows) {
+      const copies = new Map<typeof row.storageId, typeof row.storageId>();
+      const files = [];
+      try {
+        for (const field of fileFields) {
+          const oldId = row[field];
+          if (!oldId) continue;
+          let newId = copies.get(oldId);
+          if (!newId) {
+            const blob = await ctx.storage.get(oldId);
+            if (!blob) throw new Error("A resume file is missing; investigate before rotating links.");
+            newId = await ctx.storage.store(blob);
+            copies.set(oldId, newId);
+          }
+          files.push({ field, oldId, newId });
+        }
+      } catch (error) {
+        for (const id of copies.values()) await ctx.storage.delete(id);
+        throw error;
+      }
+      // A mutation response can be lost after commit. Leave copies intact after
+      // dispatch because they may already be the live resume.
+      if (await ctx.runMutation(internal.resume_files.replaceLegacyFiles, { rowId: row._id, files })) rotated++;
+    }
+    return { rotated, remaining: (await ctx.runQuery(internal.resume_files.legacyRows, {})).length > 0 };
+  },
+});
 
 export const lookup = internalQuery({
   args: { user: v.string(), short: v.string(), slot: v.string() },
