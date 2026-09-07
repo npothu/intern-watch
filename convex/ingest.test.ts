@@ -32,9 +32,9 @@ describe("ingest: canonicalUrl", () => {
     // keep=b? Actually tracking keys: gh_src, ref, utm_medium - should be stripped, keep a, b, keep
     expect(canonicalUrl(url)).toBe("https://example.com/job?a=1&b=2&keep=yes");
   });
-  test("strips gh_jid etc and fragment", () => {
+  test("preserves gh_jid requisition identity and strips fragment", () => {
     expect(canonicalUrl("https://example.com/job?gh_jid=123&x=1#frag")).toBe(
-      "https://example.com/job?x=1"
+      "https://example.com/job?gh_jid=123&x=1"
     );
   });
   test("handles trailing slash on root vs path", () => {
@@ -149,6 +149,34 @@ describe("ingest: requestIngest", () => {
     });
     expect(res.status).toBe("already_exists");
     expect(res.short).toBe("abc123456789");
+  });
+
+  test("Greenhouse query requisitions do not collide with existing matches", async () => {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("matches", {
+        user: "u1", short: "abc123456789",
+        item: { url: "https://stripe.com/jobs/search?gh_jid=8031833", company: "Stripe", title: "Intern" },
+        pushedAt: Date.now(),
+      });
+    });
+    const res = await t.mutation(api.ingest.requestIngest, {
+      user: "u1", url: "https://stripe.com/jobs/search?gh_jid=8128745", secret: SECRET,
+    });
+    expect(res.status).toBe("fetching");
+    expect(res.short).not.toBe("abc123456789");
+    const again = await t.mutation(api.ingest.requestIngest, {
+      user: "u1", url: "https://stripe.com/jobs/search?gh_jid=8128745&gh_src=tracking", secret: SECRET,
+    });
+    expect(again.ingestId).toBe(res.ingestId);
+    const existing = await t.mutation(api.ingest.requestIngest, {
+      user: "u1", url: "https://stripe.com/jobs/search?gh_jid=8031833", secret: SECRET,
+    });
+    expect(existing.status).toBe("already_exists");
+    expect(existing.short).toBe("abc123456789");
+    const matches = await t.run(async (ctx) => ctx.db.query("matches").collect());
+    expect(matches).toHaveLength(1);
+    expect(matches[0].item.url).toBe("https://stripe.com/jobs/search?gh_jid=8031833");
   });
 
   test("different user not considered duplicate", async () => {

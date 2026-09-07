@@ -19,7 +19,7 @@ const TRACKING_KEYS = new Set([
 
 /**
  * Canonicalize a URL for dedup: lower host+sheme, strip www., drop fragment,
- * strip utm_* and gh_* and known tracking params, remove trailing slash, sort
+ * strip utm_* and gh_* tracking params except gh_jid, remove trailing slash, sort
  * remaining query params.
  */
 export function canonicalUrl(raw: string): string {
@@ -56,7 +56,7 @@ export function canonicalUrl(raw: string): string {
   for (const [k, v] of u.searchParams.entries()) {
     const kl = k.toLowerCase();
     if (kl.startsWith("utm_")) continue;
-    if (kl.startsWith("gh_")) continue;
+    if (kl.startsWith("gh_") && kl !== "gh_jid") continue;
     if (TRACKING_KEYS.has(kl)) continue;
     params.push([k, v]);
   }
