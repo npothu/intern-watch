@@ -34,3 +34,15 @@ test("rotating legacy bearer links preserves shared file bytes and invalidates o
   }
   expect(await t.action(internal.resume_files.rotateLegacyLinks, {})).toEqual({ rotated: 0, remaining: false });
 });
+
+test("replaying a completed rotation does not delete its live replacement", async () => {
+  const t = convexTest(schema);
+  const oldId = await t.run(ctx => ctx.storage.store(new Blob(["old"])));
+  const newId = await t.run(ctx => ctx.storage.store(new Blob(["replacement"])));
+  await t.mutation(api.tracker.attachResume, { user: "alice", short: "0123456789ab", filename: "resume.docx", storageId: oldId, secret: "file-test-secret" });
+  const row = (await t.run(ctx => ctx.db.query("resumes").first()))!;
+  const args = { rowId: row._id, files: [{ field: "storageId" as const, oldId, newId }] };
+  expect(await t.mutation(internal.resume_files.replaceLegacyFiles, args)).toBe(true);
+  expect(await t.mutation(internal.resume_files.replaceLegacyFiles, args)).toBe(true);
+  expect(await t.run(async ctx => (await ctx.storage.get(newId))?.text())).toBe("replacement");
+});

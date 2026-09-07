@@ -1,8 +1,16 @@
 import { v } from "convex/values";
 import { internalQuery, internalMutation, internalAction, httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 const fileFields = ["storageId", "docxStorageId", "prevStorageId", "prevDocxStorageId"] as const;
+
+async function deleteUnreferenced(ctx: MutationCtx, id: Id<"_storage">) {
+  const reference = await ctx.db.query("resumes").filter(q => q.or(...fileFields.map(field => q.eq(q.field(field), id)))).first();
+  if (!reference) await ctx.storage.delete(id);
+}
+
 
 export const legacyRows = internalQuery({
   args: {},
@@ -16,16 +24,16 @@ export const replaceLegacyFiles = internalMutation({
   },
   handler: async (ctx, { rowId, files }) => {
     const row = await ctx.db.get(rowId);
+    if (row?.privateLinksVersion === 1 && files.every(f => row[f.field] === f.newId)) return true;
     if (!row || row.privateLinksVersion === 1 || files.some(f => row[f.field] !== f.oldId) || fileFields.some(field => row[field] && !files.some(f => f.field === field))) {
-      for (const id of new Set(files.map(f => f.newId))) await ctx.storage.delete(id);
+      for (const id of new Set(files.map(f => f.newId))) await deleteUnreferenced(ctx, id);
       return false;
     }
     await ctx.db.patch(rowId, { ...Object.fromEntries(files.map(f => [f.field, f.newId])), privateLinksVersion: 1 });
     // Operator-uploaded files may have been reused across jobs. Keep each old
     // object until all resume references have moved, including concurrent builds.
     for (const id of new Set(files.map(f => f.oldId))) {
-      const reference = await ctx.db.query("resumes").filter(q => q.or(...fileFields.map(field => q.eq(q.field(field), id)))).first();
-      if (!reference) await ctx.storage.delete(id);
+      await deleteUnreferenced(ctx, id);
     }
     return true;
   },
