@@ -84,7 +84,8 @@ export async function updateDueAt(
     };
   }
   try {
-    await setDueAt(user, short, dueAt);
+    const result = await setDueAt(user, short, dueAt);
+    if (!result.ok) return { ok: false, error: result.error ?? "Couldn't save the due date." };
   } catch (err) {
     return {
       ok: false,
@@ -120,7 +121,8 @@ export async function updateSnooze(
     };
   }
   try {
-    await setSnooze(user, short, snoozedUntil);
+    const result = await setSnooze(user, short, snoozedUntil);
+    if (!result.ok) return { ok: false, error: result.error ?? "Couldn't save the snooze." };
   } catch (err) {
     return {
       ok: false,

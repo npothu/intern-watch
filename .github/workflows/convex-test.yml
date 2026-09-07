@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "shared/**"
+      - "web/**"
+      - "scripts/create-api-key.mjs"
       - "convex/**"
       - "package.json"
       - "vitest.config.mts"
@@ -11,6 +13,8 @@ on:
   pull_request:
     paths:
       - "shared/**"
+      - "web/**"
+      - "scripts/create-api-key.mjs"
       - "convex/**"
       - "package.json"
       - "vitest.config.mts"
@@ -25,6 +29,8 @@ jobs:
         with:
           node-version: "20"
       - run: npm ci
+      # HTTP API tests exercise the web client against the in-memory backend.
+      - run: npm ci --prefix web
       # Code generation needs a deployment to inspect, but CI must not use a
       # cloud deployment. A single bounded anonymous local run starts the
       # backend, generates the bindings, pushes the functions, and shuts the

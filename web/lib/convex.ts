@@ -277,9 +277,10 @@ export async function restoreResume(
 ): Promise<{ ok: boolean; error?: string }> {
   const value = await post("mutation", "restoreResume", { user, short });
   const res = value as { ok?: boolean; error?: string } | null;
-  return res && typeof res.ok === "boolean"
-    ? { ok: res.ok, error: res.error }
-    : { ok: true };
+  if (!res || typeof res.ok !== "boolean") {
+    throw new ConvexError("convex mutation restoreResume returned an invalid result");
+  }
+  return { ok: res.ok, error: res.error };
 }
 
 /** Delete a built resume for one match via `resume:deleteResume`. The
@@ -337,7 +338,10 @@ export async function requestResumeBuild(
     "resume"
   );
   const res = value as ResumeBuildResponse | null;
-  return res && typeof res.ok === "boolean" ? res : { ok: true };
+  if (!res || typeof res.ok !== "boolean") {
+    throw new ConvexError("convex mutation requestBuild returned an invalid result");
+  }
+  return res;
 }
 
 export async function getJobDescription(
@@ -637,8 +641,8 @@ export async function setDueAt(
   user: string,
   short: string,
   dueAt: string | null
-): Promise<void> {
-  await post("mutation", "setDueAt", { user, short, dueAt }, "tracker");
+): Promise<{ ok: boolean; error?: string }> {
+  return await post("mutation", "setDueAt", { user, short, dueAt }, "tracker") as { ok: boolean; error?: string };
 }
 
 /** Set (or clear) a match's snooze. */
@@ -646,8 +650,8 @@ export async function setSnooze(
   user: string,
   short: string,
   snoozedUntil: string | null
-): Promise<void> {
-  await post("mutation", "setSnooze", { user, short, snoozedUntil }, "tracker");
+): Promise<{ ok: boolean; error?: string }> {
+  return await post("mutation", "setSnooze", { user, short, snoozedUntil }, "tracker") as { ok: boolean; error?: string };
 }
 
 /** The per-account health half of `tracker:getHealth`. */
