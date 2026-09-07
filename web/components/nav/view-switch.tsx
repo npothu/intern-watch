@@ -1,10 +1,7 @@
 "use client";
 
-// The three-way switch between the app's surfaces that change without the
-// user asking - Matches (2h cron), Tracker (an employer reply), Inbox (a
-// Gmail push). Resume deliberately has no cell: it only ever changes when the
-// user edits it, so it moved to the command palette instead (see the "Open
-// Resume" palette action in triage.tsx / tracker.tsx).
+// The switch between Matches, Tracker, Inbox, and Referrals.
+// Resume is available through the command palette.
 //
 // Replaces the header's old four-tab nav (site-header.tsx used to own this
 // sliding-chip indicator); the switch now travels with each surface instead,
@@ -90,7 +87,7 @@ export function ViewSwitch({
               // Inbox is a real navigation - let Link do its thing. Matches
               // and Tracker switch in place while already on "/"; anywhere
               // else, and on any modified click, a real navigation is right.
-              if (v.id === "inbox") return;
+              if (v.id === "inbox" || v.id === "referrals") return;
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
               if (pathname !== "/") return;
               e.preventDefault();

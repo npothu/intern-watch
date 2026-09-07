@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { watchValidator } from "./watch_schema";
+import { referralTables } from "./referral_schema";
 
 // Convex backend for the optional STORE=convex TrackerStore driver.
 //
@@ -25,6 +26,7 @@ import { watchValidator } from "./watch_schema";
 // lookups/upserts. The mail-sync feature's tables (mailAccounts,
 // mailMessages, inboxActions) follow below in their own section.
 export default defineSchema({
+  ...referralTables,
   ticks: defineTable({
     user: v.string(),
     short: v.string(),

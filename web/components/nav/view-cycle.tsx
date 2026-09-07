@@ -2,10 +2,10 @@
 
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useAppView, nextViewId, type ViewId } from "@/lib/view";
+import { useAppView, nextViewId, viewHref, type ViewId } from "@/lib/view";
 
 /**
- * `t` cycles Matches -> Tracker -> Inbox -> Matches from anywhere in the app.
+ * `t` cycles Matches -> Tracker -> Inbox -> Referrals from anywhere in the app.
  * Mounted once in app/(app)/layout.tsx rather than in triage.tsx: only one
  * surface is ever mounted at a time (app-views.tsx), so a surface-local
  * handler would go dead the moment the user left it, and Inbox/Resume don't
@@ -31,9 +31,9 @@ export function ViewCycle() {
       e.preventDefault();
 
       const current: ViewId | null =
-        pathname === "/inbox" ? "inbox" : pathname === "/" ? view : null;
+        pathname === "/referrals" ? "referrals" : pathname === "/inbox" ? "inbox" : pathname === "/" ? view : null;
       const next = nextViewId(current);
-      if (next === "inbox") router.push("/inbox");
+      if (next === "inbox" || next === "referrals") router.push(viewHref(next));
       else show(next);
     };
     window.addEventListener("keydown", onKey);

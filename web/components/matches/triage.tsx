@@ -39,6 +39,7 @@ import {
   Search,
   Mail,
   AlertTriangle,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -78,6 +79,7 @@ import { ResumeJdPrompt } from "./resume-jd-prompt";
 import { useRouter } from "next/navigation";
 import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
+import { ReferralLink } from "@/components/referrals/referral-link";
 import type { TriageRow } from "@/app/(app)/page";
 import { sortTerms } from "@/lib/terms";
 import { isKnownTerm } from "@/lib/preferences";
@@ -384,6 +386,7 @@ export function Triage({
   rows: initialRows,
   demo = false,
   initialFilter,
+  initialSelected,
   wantedTerms = null,
 }: {
   rows: TriageRow[];
@@ -407,6 +410,7 @@ export function Triage({
    * tracker page, which has no filter state of its own to set.
    */
   initialFilter?: string;
+  initialSelected?: string;
 }) {
   const { show } = useAppView();
   const router = useRouter();
@@ -425,9 +429,9 @@ export function Triage({
   }
 
   const [filter, setFilter] = useState<Filter>(() =>
-    isFilter(initialFilter) ? initialFilter : "all"
+    initialRows.find(r => r.short === initialSelected)?.dismissed ? "hidden" : isFilter(initialFilter) ? initialFilter : "all"
   );
-  const [showUnwatched, setShowUnwatched] = useState(false);
+  const [showUnwatched, setShowUnwatched] = useState(!!initialSelected);
   /* Rows in terms the preferences don't want, and the rows the surface
      works from. Unwatched rows are set aside before every count and filter,
      so "11 matches" and the pills describe what is actually on screen. */
@@ -447,7 +451,7 @@ export function Triage({
   );
   const [termFilter, setTermFilter] = useState<string>(ALL_TERMS);
   const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<string | null>(initialSelected ?? null);
   const [burst, setBurst] = useState<{ visible: boolean; count: number }>({
     visible: false,
     count: 0,
@@ -1134,6 +1138,12 @@ export function Triage({
   );
 
   const paletteActions: PaletteAction[] = [
+    {
+      id: "referrals",
+      label: "Go to Referrals",
+      icon: <Users className="size-4" />,
+      run: () => router.push("/referrals"),
+    },
     {
       id: "matches",
       label: "Go to Matches",
@@ -1922,6 +1932,7 @@ function RowView({
 
       {/* actions — resume docker */}
       <div className="flex items-center gap-1.5 self-center">
+        <ReferralLink short={row.short} />
         <ResumeButton
           state={buildState}
           href={row.resumeUrl}
@@ -2176,7 +2187,8 @@ function MobileCard({
 
         {/* expanded actions */}
         {expanded && (
-          <div className="flex items-center gap-2 border-t border-line px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
+            <ReferralLink short={row.short} />
             <button
               type="button"
               onClick={(e) => {

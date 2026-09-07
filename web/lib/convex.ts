@@ -6,6 +6,7 @@ import type { ProfileV2, SectionKind } from "../../convex/profile_schema";
 import type { Preset, WatchPrefs } from "../../convex/watch_types";
 
 export type { Preset, WatchPrefs };
+import type { ReferralData } from "../../convex/referral_types";
 
 /**
  * Server-only Convex client.
@@ -77,6 +78,18 @@ async function post(
     );
   }
   return data.value;
+}
+
+export async function getReferrals(user: string): Promise<ReferralData> {
+  return await post("query", "getOverview", { user }, "referrals") as ReferralData;
+}
+
+export async function mutateReferrals(
+  user: string,
+  operation: "saveContact" | "saveReferral" | "setStatus" | "setFollowUp" | "setArchived" | "addNote",
+  args: Record<string, unknown>
+): Promise<unknown> {
+  return post("mutation", operation, { ...args, user }, "referrals");
 }
 
 /** A match row, shaped like the Convex `getMatches` snapshot items. */
