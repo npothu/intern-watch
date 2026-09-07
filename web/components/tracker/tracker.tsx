@@ -165,6 +165,7 @@ function DueChip({ row }: { row: TrackerRow }) {
  * simple; the open/closed choice sticks in localStorage. The strip renders
  * nothing at all when nothing needs attention.
  */
+const SHOW_NEEDS_ATTENTION = false;
 const NA_COLLAPSED_KEY = "iw:na-collapsed";
 const NA_EVENT = "iw:na-collapsed-change";
 
@@ -886,18 +887,21 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
         <RefreshControl className="ml-auto" />
       </div>
 
-      <NeedsAttention
-        rows={rows}
-        onOpenRow={(r) => setDrawerShort(r.short)}
-        onFollowUp={(short) => commitNote(short, "followed up", "Follow-up logged")}
-        onSnooze={(short) =>
-          commitSnooze(
-            short,
-            new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10)
-          )
-        }
-        onClearDue={(short) => commitDueAt(short, null)}
-      />
+      {/* Keep the section available in code, but omit it from the tracker UI. */}
+      {SHOW_NEEDS_ATTENTION && (
+        <NeedsAttention
+          rows={rows}
+          onOpenRow={(r) => setDrawerShort(r.short)}
+          onFollowUp={(short) => commitNote(short, "followed up", "Follow-up logged")}
+          onSnooze={(short) =>
+            commitSnooze(
+              short,
+              new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10)
+            )
+          }
+          onClearDue={(short) => commitDueAt(short, null)}
+        />
+      )}
 
       <Funnel rows={rows} />
 
