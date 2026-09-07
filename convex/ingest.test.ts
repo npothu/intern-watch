@@ -78,6 +78,102 @@ describe("ingest: validateUrl", () => {
 // requestIngest duplicate detection
 // ---------------------------------------------------------------------------
 describe("ingest: requestIngest", () => {
+  test("hiding a duplicate initializes ticks from its snapshot without changing the ledger", async () => {
+    const t = convexTest(schema);
+    await t.mutation(api.tracker.pushMatches, {
+      user: "u1", secret: SECRET,
+      items: [{ key: "url:duplicate", short: "duplicate-key", applied: true, saved: true }],
+    });
+    await t.mutation(api.tracker.recordStatus, {
+      user: "u1", short: "duplicate-key", status: "interview", secret: SECRET,
+    });
+    const before = await t.query(api.tracker.getLedger, { user: "u1", secret: SECRET });
+    await t.mutation(api.tracker.setTicks, {
+      user: "u1", secret: SECRET,
+      writes: [{ short: "duplicate-key", field: "dismissed", value: true }],
+    });
+    const ticks = await t.query(api.tracker.getTicks, { user: "u1", secret: SECRET });
+    expect(ticks).toEqual([{ short: "duplicate-key", applied: true, saved: true, dismissed: true }]);
+    expect(await t.query(api.tracker.getLedger, { user: "u1", secret: SECRET })).toEqual(before);
+  });
+
+  test("completion dedupes a watcher match that arrived while the manual fetch was running", async () => {
+    const t = convexTest(schema);
+    const wrapper = "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224";
+    const direct = "https://boards.greenhouse.io/embed/job_app?token=8106224";
+    await t.mutation(api.tracker.pushMatches, {
+      user: "u1", secret: SECRET,
+      items: [{ key: "url:watcher", short: "watcher-key", url: wrapper, company: "Dropbox" }],
+    });
+    const result = await t.mutation(internal.ingest.upsertMatchInternal, {
+      user: "u1", short: "manual-key",
+      item: { key: "manual:form", short: "manual-key", url: direct, source: "manual" },
+      jobDescription: "The full Dropbox internship description",
+    });
+    expect(result.short).toBe("watcher-key");
+    const matches = await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET });
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ key: "url:watcher", url: direct, hasJobDescription: true });
+  });
+
+  test.each([false, true])("same-key completion preserves watcher state and the best URL, direct first: %s", async (directFirst) => {
+    const t = convexTest(schema);
+    const wrapper = "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224";
+    const direct = "https://boards.greenhouse.io/embed/job_app?token=8106224";
+    const key = "jr:6a75372837da8525e8cdcbb9";
+    const original = {
+      key, short: "shared-key", url: directFirst ? direct : wrapper,
+      company: "Dropbox", title: "Software Engineering Intern", source: "ats-boards",
+      applied: true, saved: true, resume: "existing.docx", added: "2026-09-07",
+    };
+    await t.mutation(api.tracker.pushMatches, { user: "u1", secret: SECRET, items: [original] });
+    const result = await t.mutation(internal.ingest.upsertMatchInternal, {
+      user: "u1", short: "shared-key",
+      item: { key, short: "shared-key", url: directFirst ? wrapper : direct, source: "manual" },
+      jobDescription: "The full Dropbox internship description",
+    });
+    expect(result).toEqual({ short: "shared-key", dedupKey: key, url: direct });
+    const matches = await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET });
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ ...original, url: direct, hasJobDescription: true });
+  });
+
+  test("joins a careers page to its Greenhouse form and upgrades the existing link", async () => {
+    const t = convexTest(schema);
+    const wrapper = "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224";
+    const direct = "https://boards.greenhouse.io/embed/job_app?token=8106224";
+    await t.mutation(api.tracker.pushMatches, {
+      user: "u1", secret: SECRET,
+      items: [{ key: `url:${wrapper}`, short: "existing-key", url: wrapper, company: "Dropbox" }],
+    });
+    const res = await t.mutation(api.ingest.requestIngest, { user: "u1", url: direct, secret: SECRET });
+    expect(res.status).toBe("already_exists");
+    expect(res.short).toBe("existing-key");
+    const matches = await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET });
+    expect(matches).toHaveLength(1);
+    expect(matches[0].url).toBe(direct);
+    expect(matches[0].key).toBe(`url:${wrapper}`);
+    await t.mutation(api.tracker.pushMatches, {
+      user: "u1", secret: SECRET,
+      items: [{ key: `url:${wrapper}`, short: "existing-key", url: wrapper, company: "Dropbox" }],
+    });
+    const refreshed = await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET });
+    expect(refreshed[0].url).toBe(direct);
+  });
+
+  test("different Greenhouse jobs on one careers page stay distinct", async () => {
+    const t = convexTest(schema);
+    const first = await t.mutation(api.ingest.requestIngest, {
+      user: "u1", url: "https://stripe.com/jobs/search?gh_jid=8130805", secret: SECRET,
+    });
+    const second = await t.mutation(api.ingest.requestIngest, {
+      user: "u1", url: "https://stripe.com/jobs/search?gh_jid=8130806", secret: SECRET,
+    });
+    expect(first.status).toBe("fetching");
+    expect(second.status).toBe("fetching");
+    expect(first.short).not.toBe(second.short);
+  });
+
   test("creates fetching row and returns short", async () => {
     const t = convexTest(schema);
     const res = await t.mutation(api.ingest.requestIngest, {

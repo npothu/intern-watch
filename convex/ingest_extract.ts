@@ -66,6 +66,83 @@ export function canonicalUrl(raw: string): string {
   return `${scheme}://${host}${portPart}${path}${query}`;
 }
 
+const GH_HOSTS = new Set([
+  "boards.greenhouse.io", "job-boards.greenhouse.io",
+  "boards.eu.greenhouse.io", "job-boards.eu.greenhouse.io",
+]);
+const GH_API_HOSTS = new Set(["boards-api.greenhouse.io", "boards-api.eu.greenhouse.io"]);
+const LEVER_HOSTS = new Set(["jobs.lever.co", "jobs.eu.lever.co"]);
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** Same cross-source identities as src/normalize.py; never use these tokens
+ * as fetch URLs or replace an existing row's key with one. */
+export function postingIdentity(raw: string): string | null {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return null; }
+  if (!["http:", "https:"].includes(u.protocol)) return null;
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  if (host === "jobright.ai" || host.endsWith(".jobright.ai")) return null;
+  const path = u.pathname.replace(/^\/[a-z]{2}[-_][a-z]{2}(?=\/)/i, "").replace(/\/+$/, "");
+  const params = [...u.searchParams.entries()];
+  if (GH_HOSTS.has(host) || GH_API_HOSTS.has(host)) {
+    const id = path.match(/\/jobs\/(\d+)/)?.[1];
+    if (id) return `ats:gh:${id}`;
+    if (GH_HOSTS.has(host) && path === "/embed/job_app") {
+      const token = params.find(([k, v]) => k.toLowerCase() === "token" && /^\d+$/.test(v));
+      if (token) return `ats:gh:${token[1]}`;
+    }
+  }
+  const gh = params.find(([k, v]) => k.toLowerCase() === "gh_jid" && /^\d+$/.test(v));
+  if (gh) return `ats:gh:${gh[1]}`;
+  const custom = path.match(/\/jobs\/(\d{7,})-[\w-]+\/?$/)?.[1];
+  if (custom) return `ats:gh:${custom}`;
+  if (LEVER_HOSTS.has(host)) {
+    const match = path.match(/^\/([^/]+)\/([^/]+)/);
+    if (match && UUID.test(match[2])) return `ats:lever:${match[1].toLowerCase()}:${match[2].toLowerCase()}`;
+  }
+  if (host === "jobs.ashbyhq.com") {
+    const id = path.match(UUID)?.[0];
+    if (id) return `ats:ashby:${id.toLowerCase()}`;
+  }
+  if (host.endsWith(".myworkdayjobs.com")) {
+    const id = path.split("/").at(-1)?.match(/_(R[-\w]*\d{3,}|JR[-\w]*\d{3,})/i)?.[1];
+    if (id) return `ats:wd:${host.split(".")[0]}:${id.toUpperCase()}`;
+  }
+  if (host === "apply.workable.com") {
+    const match = path.match(/^\/([^/]+)\/j\/([^/]+)/);
+    if (match) return `ats:workable:${match[1].toLowerCase()}:${match[2].toUpperCase()}`;
+  }
+  if (host === "amazon.jobs") {
+    const id = path.match(/^(?:\/[a-z]{2})?\/jobs\/(\d+)(?:\/.*)?$/i)?.[1];
+    if (id) return `ats:amazon:${id}`;
+  }
+  const ashby = params.find(([k, v]) => k.toLowerCase() === "ashby_jid" && UUID.test(v));
+  if (ashby) return `ats:ashby:${ashby[1].match(UUID)![0].toLowerCase()}`;
+  const segments = new Set(path.toLowerCase().split("/"));
+  const kept = params.filter(([k, v]) => !k.toLowerCase().startsWith("utm_")
+    && !TRACKING_KEYS.has(k.toLowerCase()) && !segments.has(v.toLowerCase()));
+  kept.sort(([ak, av], [bk, bv]) => ak < bk ? -1 : ak > bk ? 1 : av < bv ? -1 : av > bv ? 1 : 0);
+  const query = new URLSearchParams(kept).toString();
+  return `https://${host}${u.port ? `:${u.port}` : ""}${path}${query ? `?${query}` : ""}`;
+}
+
+export function applyUrlRank(raw: string): number {
+  if (!postingIdentity(raw)) return 0;
+  const u = new URL(raw);
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  const path = u.pathname.replace(/\/+$/, "");
+  if (GH_API_HOSTS.has(host)) return 0;
+  if (GH_HOSTS.has(host) || LEVER_HOSTS.has(host) || host === "jobs.ashbyhq.com"
+      || host === "apply.workable.com" || host.endsWith(".myworkdayjobs.com")) {
+    return path === "/embed/job_app" || /\/(apply|application)$/.test(path) ? 3 : 2;
+  }
+  return 1;
+}
+
+export function preferredApplyUrl(current: string, candidate: string): string {
+  return applyUrlRank(candidate) > applyUrlRank(current) ? candidate : current;
+}
+
 /**
  * Validate a URL string. Throws with a descriptive message if invalid.
  * Blocks: localhost, private IPs, file://, no-dot hosts.

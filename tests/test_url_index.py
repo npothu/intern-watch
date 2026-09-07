@@ -68,6 +68,17 @@ def test_migrate_rekeys_url_canon_to_ats_token_and_backrefs():
     assert s["_meta"]["url_index_version"] == st.CANON_VERSION
 
 
+def test_migrate_v2_greenhouse_embed_index_without_changing_job_keys():
+    s = st.empty_state()
+    s["_meta"]["url_index_version"] = 2
+    st.touch(s, "url:embed", ["vanshb03"], TODAY)
+    s["url_index"] = {"https://boards.greenhouse.io/embed/job_app?token=8106224": "url:embed"}
+    assert st.migrate_url_index(s) == 1
+    assert s["url_index"] == {"ats:gh:8106224": "url:embed"}
+    assert set(s["jobs"]) == {"url:embed"}
+    assert st.migrate_url_index(s) == 0
+
+
 def test_migrate_collision_keeps_earliest_first_seen():
     s = st.empty_state()
     st.touch(s, "url:old", ["ats-boards"], TODAY)

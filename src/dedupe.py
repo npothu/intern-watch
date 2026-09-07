@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from .models import Job
-from .normalize import norm_company, normalize_url
+from .normalize import norm_company, normalize_url, preferred_apply_url
 
 _CONF_RANK = {"explicit": 2, "inferred": 1, "unknown": 0}
 
@@ -25,6 +25,7 @@ def dedup_key(job: Job) -> str:
 def _merge_pair(base: Job, other: Job) -> Job:
     """Fold `other` into `base` (base assumed the richer/preferred record)."""
     base.sources = sorted(set(base.sources) | set(other.sources))
+    base.url = preferred_apply_url(base.url, other.url)
     if not base.terms and other.terms:
         base.terms, base.term_confidence = other.terms, other.term_confidence
     base.jobright_id = base.jobright_id or other.jobright_id

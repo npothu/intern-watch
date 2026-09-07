@@ -24,7 +24,7 @@ import httpx
 
 from . import content_dedup
 from . import state as st
-from .normalize import canonical_url
+from .normalize import apply_url_rank, canonical_url, preferred_apply_url
 from .notify import _group_items, _rank_tag
 from .paths import DATA_ROOT as DATA_ROOT
 
@@ -322,44 +322,71 @@ def _same_posting(a: dict, b: dict) -> bool:
                                     content_dedup.signature_from_item(b))
 
 
-def dedup_existing_matches(state: dict, user: str) -> int:
-    """One-time cleanup: cross-source duplicate rows already on the dashboard
-    (the same posting delivered as both a jr: and a url: match before the
-    url-index existed) are collapsed by hiding all but one per group. Rows are
-    grouped by _same_posting -- shared canonical url, or compatible content
-    signature for the historical jr: rows whose stored url is still the
-    (uncanonicalizable) jobright link. Survivor: an applied/saved row if any,
-    else the earliest-added. A group with more than one acted-on row is left
-    fully intact -- never risk hiding a row the user acted on. Rows already
-    dismissed/restored are left as-is (symmetric with auto_dismiss_stale).
-    Idempotent via a _meta flag. Returns how many rows were newly hidden."""
+def dedup_existing_matches(state: dict, user: str,
+                           resume_shorts: set[str] | None = None) -> int:
+    """Reconcile exact URL duplicates on every dashboard sync.
+
+    Upgrade links separately from row keys so ticks, resumes and application
+    history stay attached. Prefer a visible row with user state or a resume,
+    then the direct application URL. Hidden rows cannot hide the only visible
+    copy. Explicit restores remain protected, and hiding a duplicate never
+    deletes its application history or artifacts.
+    Historical fuzzy matching still runs only once; new cleanup requires a
+    shared posting identity. Returns the number of newly hidden rows.
+    """
     flag = state.setdefault("_meta", {}).setdefault("crossdedup_done", [])
-    if user in flag:
-        return 0
+    fuzzy = user not in flag
+    resume_shorts = resume_shorts or set()
     items = state["matches"].get(user, [])
-    # Greedy grouping: each row joins the first group it matches (order-stable,
-    # so the earliest row anchors each group).
-    groups: list[list[dict]] = []
+    by_url: dict[str, list[dict]] = {}
+    unresolved: list[dict] = []
     for item in items:
-        for grp in groups:
-            if _same_posting(grp[0], item):
-                grp.append(item)
-                break
+        cached = st.apply_url_get(state, item.get("key", "")) or ""
+        item["url"] = preferred_apply_url(item.get("url") or "", cached)
+        canon = canonical_url(item["url"])
+        if canon:
+            by_url.setdefault(canon, []).append(item)
         else:
-            groups.append([item])
+            unresolved.append(item)
+    groups = [(rows, True) for rows in by_url.values()]
+    if fuzzy and unresolved:
+        # Reconcile exact groups first. Fuzzy additions must not prevent an
+        # established identity from upgrading its URL or become exact just
+        # because every member has an unresolved URL.
+        fuzzy_groups = [rows.copy() for rows in by_url.values()]
+        for item in unresolved:
+            for group in fuzzy_groups:
+                if _same_posting(group[0], item):
+                    group.append(item)
+                    break
+            else:
+                fuzzy_groups.append([item])
+        groups.extend((rows, False) for rows in fuzzy_groups)
     n = 0
-    for rows in groups:
+    for rows, exact in groups:
         if len(rows) < 2:
             continue
-        acted = [r for r in rows if r.get("applied") or r.get("saved")]
-        if len(acted) > 1:
-            continue  # more than one acted-on row -- don't choose, keep all
-        survivor = acted[0] if acted else min(
-            rows, key=lambda r: r.get("added", ""))
+        visible = [r for r in rows if not r.get("dismissed")]
+        if not visible:
+            continue
+        acted = [r for r in visible if r.get("applied") or r.get("saved")]
+        survivor = min(visible, key=lambda r: (
+            not r.get("applied"),
+            not (r.get("resume") or short_key(r["key"]) in resume_shorts),
+            not r.get("saved"),
+            -apply_url_rank(r.get("url") or ""), r.get("added", "")))
+        if exact:
+            best_url = preferred_apply_url(survivor["url"], *(r["url"] for r in rows))
+            for r in visible:
+                r["url"] = best_url
+        if len(acted) > 1 and not exact:
+            continue  # similar titles cannot justify merging acted-on jobs
+        if any(r.get("saved") for r in visible):
+            survivor["saved"] = True
         for r in rows:
             if r is survivor or r.get("dismissed") or r.get("restored"):
                 continue
-            if r.get("applied") or r.get("saved"):
+            if not exact and (r.get("applied") or r.get("saved")):
                 continue
             # Set the flag directly (like auto_dismiss_stale) rather than via
             # matches_set_dismissed, which would un-dismiss every other row.
@@ -370,7 +397,8 @@ def dedup_existing_matches(state: dict, user: str) -> int:
     if n:
         log.info("user %s: hid %d cross-source duplicate row(s) [layer=retro]",
                  user, n)
-    flag.append(user)
+    if fuzzy:
+        flag.append(user)
     return n
 
 
@@ -464,7 +492,20 @@ def sync_user(state: dict, user: str, terms_order: list[str],
         # after read-back (so a manual restore this cycle wins first), sweep
         # long-gone postings and existing cross-source duplicates into Hidden
         auto_dismiss_stale(state, user, now.date())
-        dedup_existing_matches(state, user)
+        before_dedup = {m["key"]: (bool(m.get("dismissed")), bool(m.get("saved")))
+                        for m in matches}
+        dedup_existing_matches(state, user, resume_shorts=set(resume_urls))
+        # Convex ticks override snapshot flags in the web app. Persist new
+        # duplicate hides there too, otherwise an old false tick resurrects
+        # the duplicate on every render and sync.
+        if store is not None and not interactive:
+            from .store import TickWrite
+
+            writes = [TickWrite(short_key(m["key"]), field, True)
+                      for m in matches for i, field in enumerate(("dismissed", "saved"))
+                      if m.get(field) and not before_dedup[m["key"]][i]]
+            if writes:
+                store.set_ticks(user, writes)
 
         branch = os.environ.get("GITHUB_REF_NAME") or "main"
         body = build_body(st.matches_items(state, user), terms_order, now,
