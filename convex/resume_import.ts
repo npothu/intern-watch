@@ -1516,25 +1516,17 @@ export function buildImportPrompt(
 
 export type ImportModelPrompt = { system: string; user: string };
 
-// Meter model calls without ever letting the meter decide the outcome. Each
-// call that actually returned text is charged - the repair call too, and calls
-// whose output later fails validation - because the tokens are spent either
-// way; charging anything less lets a resume the model cannot map burn calls
-// forever while the cap counter never moves. A charge failure is logged and
-// swallowed (the runBuild precedent): the allowance is bookkeeping, and
-// bookkeeping must never turn already-paid-for work into an error.
+// Reserve atomically before issuing a paid request, including repair attempts.
+// Failed requests count because a lost response can still have incurred cost.
 export function meteredInvoke(
   invoke: (prompt: ImportModelPrompt) => Promise<string>,
-  charge: () => Promise<unknown>,
+  reserve: () => Promise<{ allowed: boolean }>,
 ): (prompt: ImportModelPrompt) => Promise<string> {
   return async (prompt) => {
-    const text = await invoke(prompt);
-    try {
-      await charge();
-    } catch (error) {
-      console.warn("resume import allowance charge failed", error);
+    if (!(await reserve()).allowed) {
+      throw new Error("Shared model daily allowance reached. Add your own API key or try tomorrow.");
     }
-    return text;
+    return invoke(prompt);
   };
 }
 

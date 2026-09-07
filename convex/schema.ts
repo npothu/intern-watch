@@ -25,6 +25,13 @@ import { watchValidator } from "./watch_schema";
 // lookups/upserts. The mail-sync feature's tables (mailAccounts,
 // mailMessages, inboxActions) follow below in their own section.
 export default defineSchema({
+  profileUploads: defineTable({
+    user: v.string(),
+    tokenHash: v.string(),
+    state: v.union(v.literal("issued"), v.literal("uploading"), v.literal("uploaded")),
+    expiresAt: v.number(),
+    storageId: v.optional(v.id("_storage")),
+  }).index("by_user", ["user"]).index("by_token", ["tokenHash"]).index("by_storage", ["storageId"]),
   ticks: defineTable({
     user: v.string(),
     short: v.string(),
@@ -173,6 +180,7 @@ export default defineSchema({
   // and keep a DOCX companion; legacy builds may still contain DOCX only.
   resumes: defineTable({
     user: v.string(),
+    privateLinksVersion: v.optional(v.number()),
     short: v.string(),
     filename: v.string(),
     storageId: v.id("_storage"),
@@ -322,7 +330,9 @@ export default defineSchema({
     resumeProvider: v.optional(v.string()),
     resumeModel: v.optional(v.string()),
     llmDay: v.optional(v.string()),    // "YYYY-MM-DD" (UTC)
-    llmCount: v.optional(v.number()),  // operator-key builds used that day
+    llmCount: v.optional(v.number()),  // operator-key requests used that day
+    mailLlmDay: v.optional(v.string()),
+    mailLlmCount: v.optional(v.number()),
     watch: v.optional(watchValidator),
     watchUpdatedAt: v.optional(v.number()),
     watchReport: v.optional(v.any()),

@@ -175,7 +175,7 @@ export function ResumeModelCard({
 
         {!usingOwn && llm.sharedAvailable && (
           <p className="mt-2 text-[11.5px] text-ink-2">
-            {remaining} of {llm.dailyCap} tailored builds left today on the shared
+            {remaining} of {llm.dailyCap} model calls left today on the shared
             model. Bring your own key to lift the limit and pick a different model.
           </p>
         )}

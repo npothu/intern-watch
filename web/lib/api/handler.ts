@@ -13,9 +13,6 @@ async function readBody(request: Request): Promise<unknown> {
     throw new ApiError(413, "payload_too_large", "Request body must be 2 MiB or smaller.");
   }
   if (!request.body) return {};
-  if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
-    throw new ApiError(415, "unsupported_media_type", "Use Content-Type: application/json.");
-  }
   const reader = request.body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let size = 0;
@@ -29,8 +26,13 @@ async function readBody(request: Request): Promise<unknown> {
         await reader.cancel();
         throw new ApiError(413, "payload_too_large", "Request body must be 2 MiB or smaller.");
       }
+      if (size && request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
+        await reader.cancel();
+        throw new ApiError(415, "unsupported_media_type", "Use Content-Type: application/json.");
+      }
       text += decoder.decode(value, { stream: true });
     }
+    if (!size) return {}; // Hosting adapters may supply a non-null, empty body stream.
     text += decoder.decode();
     return JSON.parse(text);
   } catch (error) {

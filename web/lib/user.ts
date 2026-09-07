@@ -1,5 +1,6 @@
 import "server-only";
 import { currentUser } from "@clerk/nextjs/server";
+import { approvedUsers } from "./access-config";
 
 /**
  * Resolve the signed-in Clerk user to a tracker user key, or null.
@@ -10,20 +11,6 @@ import { currentUser } from "@clerk/nextjs/server";
  * server-side only. A signed-in email absent from the map resolves to null,
  * which callers render as the "not provisioned" screen.
  */
-
-function trackerUserMap(): Record<string, string> {
-  const raw = process.env.TRACKER_USER_MAP;
-  if (!raw) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, string>;
-    }
-  } catch {
-    // malformed env -> treat as empty (no users provisioned)
-  }
-  return {};
-}
 
 function clerkConfigured(): boolean {
   return Boolean(
@@ -46,7 +33,8 @@ export async function resolveTrackerUser(): Promise<string | null> {
   } catch {
     return null;
   }
-  const email = user?.primaryEmailAddress?.emailAddress?.toLowerCase();
+  if (user?.primaryEmailAddress?.verification?.status !== "verified") return null;
+  const email = user.primaryEmailAddress.emailAddress.toLowerCase();
   if (!email) return null;
-  return trackerUserMap()[email] ?? null;
+  return approvedUsers(process.env.TRACKER_USER_MAP).get(email) ?? null;
 }

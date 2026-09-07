@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { approvedUsers } from "../access-config";
 
 const keysSchema = z.array(z.strictObject({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -32,5 +33,8 @@ export function authenticate(request: Request): ApiPrincipal {
   const digest = createHash("sha256").update(match[1]).digest();
   const key = keys.find((entry) => timingSafeEqual(digest, Buffer.from(entry.sha256, "hex")));
   if (!key) throw new ApiError(401, "unauthorized", "Invalid or revoked API key.");
+  if (![...approvedUsers(process.env.TRACKER_USER_MAP).values()].includes(key.user)) {
+    throw new ApiError(403, "forbidden", "This account no longer has access.");
+  }
   return { user: key.user, access: key.access };
 }

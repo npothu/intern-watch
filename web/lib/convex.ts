@@ -22,6 +22,20 @@ export type { Preset, WatchPrefs };
 const CONVEX_URL = process.env.CONVEX_URL?.replace(/\/+$/, "") ?? "";
 const CONVEX_SECRET = process.env.CONVEX_SECRET ?? "";
 
+export async function downloadResumeFile(user: string, short: string, slot: string): Promise<Response> {
+  const site = process.env.CONVEX_SITE_URL ?? CONVEX_URL.replace(".convex.cloud", ".convex.site");
+  if (!site || !CONVEX_SECRET) throw new ConvexError("File service is not configured.");
+  const url = new URL("/resume/file", site);
+  url.search = new URLSearchParams({ user, short, slot }).toString();
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${CONVEX_SECRET}` }, cache: "no-store", signal: AbortSignal.timeout(20_000) });
+  const headers = new Headers({ "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+  for (const name of ["Content-Type", "Content-Disposition"]) {
+    const value = response.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return new Response(response.ok ? response.body : null, { status: response.status, headers });
+}
+
 export class ConvexError extends Error {
   constructor(message: string) {
     super(message);
@@ -245,15 +259,15 @@ export async function getResumeUrls(user: string): Promise<ResumeUrls> {
         report = row.report as ResumeReport;
       }
       out[short] = {
-        url,
+        url: `/api/resume/files/${encodeURIComponent(short)}/current`,
         filename: typeof row.filename === "string" ? row.filename : "resume.docx",
         format: row.format === "pdf" ? "pdf" : "docx",
-        docxUrl: typeof row.docxUrl === "string" ? row.docxUrl : null,
+        docxUrl: typeof row.docxUrl === "string" ? `/api/resume/files/${encodeURIComponent(short)}/docx` : null,
         docxFilename:
           typeof row.docxFilename === "string" ? row.docxFilename : null,
         updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : undefined,
         report,
-        prevUrl: typeof row.prevUrl === "string" ? row.prevUrl : null,
+        prevUrl: typeof row.prevUrl === "string" ? `/api/resume/files/${encodeURIComponent(short)}/previous` : null,
         prevFilename:
           typeof row.prevFilename === "string" ? row.prevFilename : null,
         prevFormat:
@@ -261,7 +275,7 @@ export async function getResumeUrls(user: string): Promise<ResumeUrls> {
             ? row.prevFormat
             : null,
         prevDocxUrl:
-          typeof row.prevDocxUrl === "string" ? row.prevDocxUrl : null,
+          typeof row.prevDocxUrl === "string" ? `/api/resume/files/${encodeURIComponent(short)}/previous-docx` : null,
         prevDocxFilename:
           typeof row.prevDocxFilename === "string" ? row.prevDocxFilename : null,
       };
@@ -562,10 +576,10 @@ export type ResumeImportPreview = {
 
 export async function getResumeImportUploadUrl(user: string): Promise<string> {
   const value = await post(
-    "mutation",
-    "generateProfileImportUploadUrl",
+    "action",
+    "prepare",
     { user },
-    "resume"
+    "uploads"
   );
   if (typeof value !== "string" || !value) {
     throw new ConvexError("Convex did not return a resume upload URL.");
@@ -883,4 +897,9 @@ export async function setResumeLlm(
 
 export async function suggestProfileCuts(data: string, variant: string) {
   return await post("action", "suggestCuts", { data, variant }, "resume_node") as import("../../shared/resume-compose").CutProposal;
+}
+
+/** Remove only the authenticated user's local mailbox grant. */
+export async function disconnectMailAccount(user: string): Promise<void> {
+  await post("mutation", "disconnect", { user }, "mail");
 }

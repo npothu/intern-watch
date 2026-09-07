@@ -40,6 +40,9 @@ async function blobExists(t: T, id: Id<"_storage">): Promise<boolean> {
 }
 
 async function claim(t: T, user: string, storageId: Id<"_storage">) {
+  await t.run(async (ctx) => ctx.db.insert("profileUploads", {
+    user, storageId, tokenHash: `test-${storageId}`, state: "uploaded", expiresAt: Date.now() + 30 * 60_000,
+  }));
   return await t.mutation(api.resume.claimProfileImportUpload, {
     user,
     storageId,

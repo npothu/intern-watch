@@ -1957,34 +1957,26 @@ describe("resume import operator metering (meteredInvoke)", () => {
     expect(charge).toHaveBeenCalledTimes(2);
   });
 
-  test("a model transport failure is never charged", async () => {
-    const charge = vi.fn();
-    const invoke = vi.fn().mockRejectedValue(new Error("network unavailable"));
-
-    await expect(
-      mapExtractionWithModel(extracted("Alex Example"), meteredInvoke(invoke, charge)),
-    ).rejects.toThrow("network unavailable");
-
-    expect(charge).not.toHaveBeenCalled();
+  test("a denied reservation never calls the model", async () => {
+    const reserve = vi.fn().mockResolvedValue({ allowed: false });
+    const invoke = vi.fn().mockResolvedValue("text");
+    await expect(meteredInvoke(invoke, reserve)({ system: "", user: "" })).rejects.toThrow("daily allowance");
+    expect(invoke).not.toHaveBeenCalled();
   });
 
-  test("a charge failure never fails the import (cap-race safety)", async () => {
-    // The charge blowing up stands in for both a real mutation failure and the
-    // cap racing shut between the pre-read and the charge: in either case the
-    // model call already happened, so the finished work must be returned.
-    const charge = vi.fn().mockRejectedValue(new Error("charge unavailable"));
-    const invoke = vi
-      .fn<(prompt: { system: string; user: string }) => Promise<string>>()
-      .mockResolvedValue(
-        modelResponse([{ lineId: "line-0001", targetPaths: ["/header/name"] }]),
-      );
+  test("a reservation failure never calls the model", async () => {
+    const reserve = vi.fn().mockRejectedValue(new Error("meter unavailable"));
+    const invoke = vi.fn();
+    await expect(meteredInvoke(invoke, reserve)({ system: "", user: "" })).rejects.toThrow("meter unavailable");
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
-    const result = await mapExtractionWithModel(
-      extracted("Alex Example"),
-      meteredInvoke(invoke, charge),
-    );
-
-    expect(result.profile.header.name).toBe("Alex Example");
-    expect(charge).toHaveBeenCalledTimes(1);
+  test("reserves before transport and counts failed attempts conservatively", async () => {
+    const reserve = vi.fn().mockResolvedValue({ allowed: true });
+    const invoke = vi.fn().mockImplementation(async () => {
+      expect(reserve).toHaveBeenCalledOnce();
+      throw new Error("network unavailable");
+    });
+    await expect(meteredInvoke(invoke, reserve)({ system: "", user: "" })).rejects.toThrow("network unavailable");
   });
 });

@@ -1,0 +1,60 @@
+name: backup
+on:
+  schedule:
+    - cron: '15 7 * * *'
+  workflow_dispatch:
+    inputs:
+      rotate_legacy_resume_links:
+        description: 'After backing up, invalidate legacy public resume URLs (at most 10 records per run)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: convex-backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  backup:
+    if: vars.BACKUP_PUBLIC_KEY != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Export and encrypt
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          BACKUP_PUBLIC_KEY: ${{ vars.BACKUP_PUBLIC_KEY }}
+        run: node scripts/backup.mjs backup.iwbackup
+      - uses: actions/upload-artifact@v4
+        with:
+          name: convex-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backup.iwbackup
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Retain seven completed backups
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              ...context.repo, per_page: 100,
+            });
+            const backups = artifacts.filter(a => a.name.startsWith('convex-backup-') && !a.expired)
+              .sort((a, b) => b.id - a.id);
+            for (const artifact of backups.slice(7)) {
+              await github.rest.actions.deleteArtifact({ ...context.repo, artifact_id: artifact.id });
+            }
+      - name: Rotate legacy resume links after backup
+        if: inputs.rotate_legacy_resume_links == true
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: npx convex run resume_files:rotateLegacyLinks --prod
