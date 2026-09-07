@@ -29,7 +29,7 @@ try {
     excludes: ['Vercel configuration', 'Clerk configuration', 'Google Cloud configuration', 'scheduled functions', 'GitHub secrets'],
   }, null, 2), { mode: 0o600 });
   const archive = join(scratch, 'bundle.tar.gz');
-  execFileSync('tar', ['-czf', archive, '-C', scratch, 'manifest.json', 'snapshot.zip', 'convex.env.txt'], { stdio: 'pipe' });
+  execFileSync('tar', ['-czf', archive, '-C', scratch, 'manifest.json', 'snapshot.zip', 'convex.env.txt'], { stdio: 'pipe', env: { ...process.env, COPYFILE_DISABLE: '1' } });
   await encryptBackup(archive, destination, process.env.BACKUP_PUBLIC_KEY);
   console.log('Encrypted database, files, and Convex environment backup created.');
 } finally {

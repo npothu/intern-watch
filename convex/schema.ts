@@ -329,7 +329,9 @@ export default defineSchema({
     resumeProvider: v.optional(v.string()),
     resumeModel: v.optional(v.string()),
     llmDay: v.optional(v.string()),    // "YYYY-MM-DD" (UTC)
-    llmCount: v.optional(v.number()),  // operator-key builds used that day
+    llmCount: v.optional(v.number()),  // operator-key requests used that day
+    mailLlmDay: v.optional(v.string()),
+    mailLlmCount: v.optional(v.number()),
     watch: v.optional(watchValidator),
     watchUpdatedAt: v.optional(v.number()),
     watchReport: v.optional(v.any()),

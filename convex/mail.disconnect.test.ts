@@ -36,3 +36,14 @@ test("disconnect invalidates in-flight writes and cannot affect another user", a
   expect(await t.run(ctx => ctx.db.query("mailMessages").collect())).toHaveLength(0);
   expect((await t.query(internal.mail.getAccount, { user: "alice" }))?.lastError).toBeUndefined();
 });
+
+test("disconnect and reconnect cannot reset paid classification usage, including legacy counters", async () => {
+  const t = convexTest(schema);
+  await t.mutation(internal.mail.storeMailAccount, connection);
+  const old = (await t.query(internal.mail.getAccount, { user: "alice" }))!;
+  await t.run(ctx => ctx.db.patch(old._id, { llmCapDate: new Date().toISOString().slice(0, 10), llmCallsToday: 20 }));
+  await t.mutation(api.mail.disconnect, { user: "alice", secret: "disconnect-test" });
+  await t.mutation(internal.mail.storeMailAccount, { ...connection, email: "different@gmail.com" });
+  const current = (await t.query(internal.mail.getAccount, { user: "alice" }))!;
+  expect(await t.mutation(internal.mail.bumpLlmCap, { rowId: current._id })).toBe(false);
+});

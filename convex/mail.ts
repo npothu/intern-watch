@@ -346,6 +346,15 @@ export const disconnect = mutation({
   handler: async (ctx, { user, secret }) => {
     checkSecret(secret);
     const rows = await ctx.db.query("mailAccounts").withIndex("by_user", q => q.eq("user", user)).collect();
+    const today = new Date().toISOString().slice(0, 10);
+    const legacyUsed = Math.max(0, ...rows.map(row => row.llmCapDate === today ? row.llmCallsToday ?? 0 : 0));
+    const settings = await ctx.db.query("settings").withIndex("by_user", q => q.eq("user", user)).first();
+    const used = Math.max(legacyUsed, settings?.mailLlmDay === today ? settings.mailLlmCount ?? 0 : 0);
+    if (used) {
+      const patch = { mailLlmDay: today, mailLlmCount: used, updatedAt: Date.now() };
+      if (settings) await ctx.db.patch(settings._id, patch);
+      else await ctx.db.insert("settings", { user, ...patch });
+    }
     for (const row of rows) await ctx.db.delete(row._id);
     // Keep existing tracker history and reviewed mail outcomes.
     return { ok: true as const };
@@ -783,7 +792,15 @@ export const bumpLlmCap = internalMutation({
     const row = await ctx.db.get(rowId);
     if (!row) return false;
     const today = new Date().toISOString().slice(0, 10);
-    const used = row.llmCapDate === today ? (row.llmCallsToday ?? 0) : 0;
+    const settings = await ctx.db.query("settings").withIndex("by_user", q => q.eq("user", row.user)).first();
+    // Migrate legacy usage without letting disconnect or mailbox switching reset it.
+    const used = Math.max(
+      row.llmCapDate === today ? (row.llmCallsToday ?? 0) : 0,
+      settings?.mailLlmDay === today ? (settings.mailLlmCount ?? 0) : 0,
+    );
+    const patch = { mailLlmDay: today, mailLlmCount: Math.min(used + 1, LLM_DAILY_CAP), updatedAt: Date.now() };
+    if (settings) await ctx.db.patch(settings._id, patch);
+    else await ctx.db.insert("settings", { user: row.user, ...patch });
     if (used >= LLM_DAILY_CAP) return false;
     await ctx.db.patch(rowId, { llmCallsToday: used + 1, llmCapDate: today });
     return true;
