@@ -1,4 +1,4 @@
-import type { LedgerRecord, MatchItem } from "./convex";
+import type { MatchItem } from "./convex";
 import { buildTrackerRows } from "@/components/tracker/build-rows";
 import { shortKey } from "./shortkey";
 import type { ReferralJob } from "../../convex/referral_types";
@@ -6,7 +6,7 @@ import type { ReferralJob } from "../../convex/referral_types";
 /** Includes saved ledger snapshots after a job leaves Matches. */
 export function buildReferralJobs(
   matches: MatchItem[],
-  ledger: Record<string, LedgerRecord>,
+  ledger: Parameters<typeof buildTrackerRows>[0],
 ): ReferralJob[] {
   const jobs = new Map<string, ReferralJob>();
   for (const match of matches) {
@@ -17,7 +17,9 @@ export function buildReferralJobs(
       title: match.title,
       url: match.url,
       term: match.term,
-      applicationStatus: match.applied ? "applied" : "",
+      // The watcher snapshot can retain Applied after a live untick.
+      // Only ledger rows below establish a current Tracker status and link.
+      applicationStatus: "",
       inMatches: true,
     });
   }
@@ -28,7 +30,7 @@ export function buildReferralJobs(
       company: row.company,
       title: row.title,
       url: row.url,
-      term: match?.term ?? "",
+      term: row.term || match?.term || "",
       inMatches: !!match,
       applicationStatus: row.status,
     });

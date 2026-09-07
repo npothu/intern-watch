@@ -1,5 +1,8 @@
 import { buildReferralJobs } from "./referral-jobs";
 import { describe, expect, test } from "vitest";
+import { convexTest } from "convex-test";
+import { api } from "../../convex/_generated/api";
+import schema from "../../convex/schema";
 import {
   followUpDue,
   followUpLabel,
@@ -7,7 +10,33 @@ import {
   safeReferralUrl,
 } from "./referrals";
 
+const modules = import.meta.glob("../../convex/**/*.ts");
+
 describe("referral job picker and calendar dates", () => {
+  test("reflects an Applied untick immediately even while the watcher snapshot is stale", async () => {
+    const auth = { user: "alice", secret: "referral-picker-test" };
+    process.env.TRACKER_SECRET = auth.secret;
+    const backend = convexTest(schema, modules);
+    await backend.mutation(api.tracker.pushMatches, {
+      ...auth,
+      items: [{
+        key: "job", short: "123456abcdef", company: "Stripe", title: "Intern",
+        url: "https://example.com", term: "Summer 2027", applied: true,
+        location: "", added: "", tag: "", salary: "",
+      }],
+    });
+    for (const value of [true, false]) {
+      await backend.mutation(api.tracker.setTicks, {
+        ...auth, writes: [{ short: "123456abcdef", field: "applied", value }],
+      });
+      const matches = await backend.query(api.tracker.getMatches, auth);
+      const ledger = await backend.query(api.tracker.getLedger, auth);
+      expect(matches[0].applied).toBe(true);
+      expect(buildReferralJobs(matches, ledger)[0]).toMatchObject({
+        applicationStatus: value ? "applied" : "", inMatches: true,
+      });
+    }
+  });
   test("keeps Tracker-only jobs and merges live matches by short key", () => {
     const jobs = buildReferralJobs(
       [
@@ -39,6 +68,7 @@ describe("referral job picker and calendar dates", () => {
             company: "Microsoft",
             title: "Old posting",
             url: "https://example.com/old",
+            term: "Summer 2027",
           },
         },
       },
@@ -53,7 +83,14 @@ describe("referral job picker and calendar dates", () => {
       title: "Old posting",
       applicationStatus: "applied",
       inMatches: false,
+      term: "Summer 2027",
     });
+  });
+  test("retains the term in the Convex array-shaped ledger after a match is pruned", () => {
+    expect(buildReferralJobs([], [{
+      short: "abcdef123456", status: "applied",
+      snapshot: { company: "Microsoft", title: "Intern", term: "Summer 2027" },
+    }])[0]).toMatchObject({ term: "Summer 2027", inMatches: false });
   });
   test("treats a date as due for the whole local day and supports leap days", () => {
     expect(
