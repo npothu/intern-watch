@@ -302,6 +302,31 @@ function jaccard(a: string[], b: string[]): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/** Requisition identifiers from job URL fields, never tracking parameters or years. */
+function requisitionIds(url: string): string[] {
+  try {
+    const parsed = new URL(url);
+    const ids: string[] = [];
+    for (const [key, value] of parsed.searchParams) {
+      if (/^(?:job_?id|req(?:uisition)?_?id|gh_jid|pid)$/i.test(key)) ids.push(value);
+    }
+    const path = decodeURIComponent(parsed.pathname);
+    for (const match of path.matchAll(/(?:\/(?:jobs?|JobDetail)\/|_)((?:[a-z]{0,3}[-_]?)?\d{5,})(?=[/\-]|$)/gi)) {
+      ids.push(match[1]);
+    }
+    return ids.filter((id) => /\d{5}/.test(id)).map(normText);
+  } catch {
+    return [];
+  }
+}
+
+/** Shared auto-apply and default-selection bar. Ties always need a choice. */
+export function decisiveCandidate(cands: Array<{ short: string; score: number }>): string | null {
+  if (cands.length === 0 || cands[0].score < 3) return null;
+  if (cands.length > 1 && cands[1].score * 2 > cands[0].score) return null;
+  return cands[0].short;
+}
+
 /**
  * Port of the (Python-side) candidate-scoring logic for a recruiter-reply email.
  *
@@ -310,13 +335,14 @@ function jaccard(a: string[], b: string[]): number {
  *   +3 sender-domain match (see below)
  *   +2 normCompany(company) as a whole-token phrase in the subject
  *   +1 normCompany(company) as a whole-token phrase in the body
- *   +1 title-token Jaccard(normTitle(title), subject+body tokens) >= 0.5
+ *   +40 exact requisition ID with employer evidence
+ *   +8 exact title phrase with employer evidence, otherwise +1 title overlap
  * The +3 is awarded when the sender DOMAIN (part after @) or its registrable
  * base appears in the application's url host, OR the domain's base name equals
  * a whole token of normCompany(company). For GENERIC ATS sender domains the
  * domain identifies the platform, not the employer, so fromName is used
  * instead. Results are sorted by score desc then company asc, returning only
- * score > 0, capped at 5.
+ * score > 0. All matches remain available for manual resolution.
  */
 export function scoreCandidates(
   email: { fromAddr: string; fromName: string; subject: string; body: string },
@@ -336,7 +362,10 @@ export function scoreCandidates(
 
   const subjectText = normText(email.subject);
   const bodyText = normText(email.body);
-  const combinedTokens = tokens(`${subjectText} ${bodyText}`);
+  // Unlabelled numbers in a signature can be ZIP codes, phone numbers, etc.
+  const bodyReqIds = new Set(Array.from(email.body.matchAll(
+    /\b(?:job|requisition|req|position)(?:\s*(?:id|number|no\.?))?\s*[:#-]?\s*([a-z]{0,3}[-_]?\d{5,})\b/gi,
+  ), (match) => normText(match[1])));
 
   const scored = apps.map((app) => {
     const company = normCompany(app.company);
@@ -369,10 +398,27 @@ export function scoreCandidates(
       score += 1;
     }
 
-    // +1 title-token Jaccard >= 0.5 against subject+body tokens.
+    // A title phrase in a long email is still exact. Preserve years/seasons
+    // here so different internship terms do not become identical matches.
+    const title = normText(app.title);
     const titleTokens = tokens(normTitle(app.title));
-    if (jaccard(titleTokens, combinedTokens) >= 0.5) {
+    const employerMatch = score > 0;
+    if (employerMatch && titleTokens.length >= 2 &&
+        (phraseIn(title, subjectText) || phraseIn(title, bodyText))) {
+      score += 8;
+    } else if (titleTokens.length > 0 && (
+      phraseIn(title, bodyText) ||
+      jaccard(titleTokens, tokens(normTitle(email.subject))) >= 0.5 ||
+      jaccard(titleTokens, tokens(normTitle(email.body))) >= 0.5
+    )) {
       score += 1;
+    }
+
+    // Numeric IDs are only meaningful within the employer. Token boundaries
+    // prevent 130787 matching 1307870 or an unrelated URL tracking value.
+    if (employerMatch && requisitionIds(app.url).some((id) =>
+      phraseIn(id, subjectText) || bodyReqIds.has(id))) {
+      score += 40;
     }
 
     return { short: app.short, company: app.company, title: app.title, score };
@@ -380,8 +426,8 @@ export function scoreCandidates(
 
   return scored
     .filter((c) => c.score > 0)
-    .sort((a, b) => b.score - a.score || a.company.localeCompare(b.company))
-    .slice(0, 5);
+    .sort((a, b) => b.score - a.score || a.company.localeCompare(b.company) ||
+      a.title.localeCompare(b.title) || a.short.localeCompare(b.short));
 }
 
 // --------------------------------------------------------------------------

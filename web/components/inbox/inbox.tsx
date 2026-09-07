@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { resolveAction } from "@/app/(app)/inbox/inbox-actions";
 import type { InboxAction, MailHealth } from "@/lib/convex";
+import { decisiveCandidate } from "../../../convex/classify";
 import {
   STATUS_LABELS,
   STATUS_ORDER,
@@ -83,7 +84,8 @@ function ActionRow({
     () => [...action.candidates].sort((a, b) => b.score - a.score),
     [action.candidates],
   );
-  const [short, setShort] = useState<string>(candidates[0]?.short ?? NONE);
+  const [chosenShort, setShort] = useState<string | null>(null);
+  const short = chosenShort ?? decisiveCandidate(candidates) ?? "";
   const [status, setStatus] = useState<string>(
     isTrackerStatus(action.signal) ? action.signal : "applied",
   );
@@ -144,8 +146,8 @@ function ActionRow({
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Select value={short} onValueChange={setShort}>
-              <SelectTrigger className="h-7 max-w-[280px] rounded-full border border-line-2 bg-surface px-3 text-[12px] text-ink">
-                <SelectValue />
+              <SelectTrigger aria-label="Application" className="h-7 max-w-[280px] rounded-full border border-line-2 bg-surface px-3 text-[12px] text-ink">
+                <SelectValue placeholder="Choose application" />
               </SelectTrigger>
               <SelectContent>
                 {candidates.map((c) => (
@@ -176,7 +178,8 @@ function ActionRow({
             <button
               type="button"
               onClick={() => (noMatch ? onDismiss() : onResolve(short, status))}
-              className="inline-flex h-7 items-center rounded-full bg-accent px-3.5 text-[12px] font-medium text-accent-ink transition-[filter,transform] hover:brightness-105 active:scale-95"
+              disabled={!short}
+              className="inline-flex h-7 items-center rounded-full bg-accent px-3.5 text-[12px] font-medium text-accent-ink transition-[filter,transform] hover:brightness-105 active:scale-95 disabled:opacity-40"
             >
               {noMatch ? "Dismiss" : "Resolve"}
             </button>

@@ -186,6 +186,10 @@ test("getActions returns pending action + account health", async () => {
       lastPushAt: 111,
       lastSyncAt: 222,
     });
+    await ctx.db.insert("applications", {
+      user: "u1", short: pendingAction.candidates[0].short, status: "applied",
+      snapshot: pendingAction.candidates[0], history: [], createdAt: "2026-08-06",
+    });
     await ctx.db.insert("inboxActions", { ...pendingAction });
   });
   const res = await t.query(api.mail.getActions, { user: "u1", secret: SECRET });
@@ -212,7 +216,9 @@ test("getActions returns pending action + account health", async () => {
     evidence: "mentions HackerRank and a next step",
     source: "regex",
   });
-  expect(action.candidates).toEqual(pendingAction.candidates);
+  expect(action.candidates).toEqual([expect.objectContaining({
+    short: "ab12cd34ef56", company: "Acme", title: "SWE Intern",
+  })]);
   expect(typeof action.id).toBe("string");
 });
 
