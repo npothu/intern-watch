@@ -12,7 +12,7 @@ to the browser.
 - Tailwind CSS v4 (CSS-first config in `app/globals.css`)
 - shadcn/ui (radix base) for primitives: button, dialog, dropdown-menu, select,
   sonner toast, skeleton
-- Clerk (middleware protects everything except sign-in/sign-up)
+- Clerk for browser authentication; per-user bearer keys for `/api/v1`
 - Convex reached server-side only via `lib/convex.ts` (`CONVEX_URL` +
   `CONVEX_SECRET`), using the same HTTP protocol as the Python `ConvexStore`
 
@@ -82,3 +82,8 @@ and does not need GitHub access.
   and instant (see `lib/view.ts`). `/tracker` redirects to `/?view=tracker` so
   old links keep working. The `app/(app)` route group is where the
   auth/provision gate lives.
+
+## Script API
+
+Scripts can use the versioned `/api/v1` HTTP API with per-user bearer keys.
+See [the API guide](../docs/api.md) for setup, endpoint coverage, examples, and OpenAPI discovery.
