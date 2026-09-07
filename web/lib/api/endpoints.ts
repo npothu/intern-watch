@@ -89,7 +89,10 @@ export const endpoints: Endpoint[] = [
     async (user, { short }, { jdText }) => requireSuccess(await store.saveJobDescription(user, short, jdText))),
   endpoint("GET", "/resumes", "List built resumes, download URLs and reports", s.empty, (user) => store.getResumeUrls(user)),
   endpoint("GET", "/resumes/{short}", "Poll build status and read resume metadata", s.empty, async (user, { short }) => {
-    const [build, resumes] = await Promise.all([store.fetchBuildStatus(user, short), store.getResumeUrls(user)]);
+    // Read metadata after status so a completed rebuild cannot pair a cleared
+    // build marker with an older snapshot of the download URLs.
+    const build = await store.fetchBuildStatus(user, short);
+    const resumes = await store.getResumeUrls(user);
     return { build, resume: resumes[short] ?? null };
   }),
   endpoint("POST", "/resumes/{short}/build", "Start a resume build or rebuild with optional refinements", s.build,

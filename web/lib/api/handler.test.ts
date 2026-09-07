@@ -230,6 +230,30 @@ test("profile export returns downloadable bytes instead of a JSON envelope", asy
   expect(await response.text()).toBe("%PDF-test");
 });
 
+test("resume polling reads download metadata after build status to avoid stale completed builds", async () => {
+  let releaseStatus!: () => void;
+  let statusStarted!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseStatus = resolve; });
+  const started = new Promise<void>((resolve) => { statusStarted = resolve; });
+  upstream.mockImplementation(async (_url: string, init: RequestInit) => {
+    const { path } = JSON.parse(String(init.body));
+    if (path === "resume:getBuildStatus") {
+      statusStarted();
+      await gate;
+      return Response.json({ status: "success", value: null });
+    }
+    expect(path).toBe("tracker:getResumeUrls");
+    return Response.json({ status: "success", value: [{ short, url: "https://example.com/new-resume.pdf", filename: "new-resume.pdf", format: "pdf" }] });
+  });
+  const pending = request(`/resumes/${short}`);
+  await started;
+  const callsBeforeStatus = upstream.mock.calls.length;
+  releaseStatus();
+  const response = await pending;
+  expect(callsBeforeStatus).toBe(1);
+  expect((await response.json()).data).toMatchObject({ build: null, resume: { url: "https://example.com/new-resume.pdf" } });
+});
+
 test("OpenAPI covers all operations and HEAD returns no body", async () => {
   const doc = openApiDocument();
   expect(Object.values(doc.paths).reduce((count, methods) => count + Object.keys(methods).length, 0)).toBe(endpoints.length);
