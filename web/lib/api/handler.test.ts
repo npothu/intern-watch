@@ -281,3 +281,13 @@ test("removing a user's approved identity also disables their existing API key",
   expect((await request("/me", "GET", undefined, otherKey)).status).toBe(200);
   expect(upstream).not.toHaveBeenCalled();
 });
+
+test("an empty DELETE stream from the hosting adapter does not require JSON", async () => {
+  const response = await handleApiRequest(new Request("https://app.test/api/v1/connections/gemini", {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${key}` },
+    body: new ReadableStream({ start(controller) { controller.close(); } }),
+    duplex: "half",
+  } as RequestInit), ["connections", "gemini"]);
+  expect(response.status).toBe(200);
+});
