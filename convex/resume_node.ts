@@ -376,9 +376,7 @@ async function performBuild(
   });
 
   const operatorKey = process.env.GEMINI_API_KEY ?? null;
-  // Read the allowance, but do not spend it yet: a build that never reaches a
-  // successful model call must not cost the user a slot, or a broken operator
-  // key would burn the whole day and then blame their usage for it.
+  // This read selects the fallback; the mutation below reserves before spending.
   const capReached =
     !userKey && operatorKey
       ? await ctx.runQuery(internal.settings.operatorCapReached, { user })
@@ -403,6 +401,10 @@ async function performBuild(
         jdForPrompt,
         rewritePayload,
       );
+      if (choice.source === "operator") {
+        const reservation = await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
+        if (!reservation.allowed) throw new Error("Shared model daily allowance reached.");
+      }
       const text = await callModel(choice.provider, {
         model: choice.model,
         system,
@@ -445,10 +447,6 @@ async function performBuild(
       };
       usedLlm = true;
       notes.push(llmNote(choice));
-      // Charged only now, on a call that actually produced tailored text.
-      if (choice.source === "operator") {
-        await ctx.runMutation(internal.settings.consumeOperatorLlm, { user });
-      }
     } catch (err) {
       llmError = err instanceof Error ? err.message : String(err);
       // Name the model that failed - "the LLM broke" is unactionable when the
@@ -753,12 +751,7 @@ export const runProfileImport = internalAction({
           );
         }
       };
-      // Operator-key runs are metered per productive call (see meteredInvoke
-      // for the whole policy). consumeOperatorLlm can answer {allowed: false}
-      // when a concurrent build took the last slot between the cap read above
-      // and this charge; the result is deliberately ignored - the call already
-      // happened, and failing now would discard work the operator was billed
-      // for. The cap read is what gates the NEXT run.
+      // Every paid request reserves a slot before contacting the provider.
       const invoke =
         choice.source === "operator"
           ? meteredInvoke(invokeModel, () =>

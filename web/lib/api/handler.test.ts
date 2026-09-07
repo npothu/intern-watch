@@ -41,6 +41,7 @@ async function request(path: string, method = "GET", body?: unknown, token = key
 beforeEach(async () => {
   vi.useFakeTimers();
   vi.stubEnv("TRACKER_SECRET", secret);
+  vi.stubEnv("TRACKER_USER_MAP", JSON.stringify({ "alice@example.com": "alice", "bob@example.com": "bob" }));
   vi.stubEnv("TRACKER_API_KEYS", JSON.stringify([
     { sha256: hash(key), user: "alice", access: "write" },
     { sha256: hash(readKey), user: "alice", access: "read" },
@@ -251,7 +252,7 @@ test("resume polling reads download metadata after build status to avoid stale c
   releaseStatus();
   const response = await pending;
   expect(callsBeforeStatus).toBe(1);
-  expect((await response.json()).data).toMatchObject({ build: null, resume: { url: "https://example.com/new-resume.pdf" } });
+  expect((await response.json()).data).toMatchObject({ build: null, resume: { url: `/api/resume/files/${short}/current` } });
 });
 
 test("OpenAPI covers all operations and HEAD returns no body", async () => {
@@ -262,4 +263,21 @@ test("OpenAPI covers all operations and HEAD returns no body", async () => {
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect((await response.json()).openapi).toBe("3.1.0");
   expect(await (await request("/me", "HEAD")).text()).toBe("");
+});
+
+
+test("a user cannot claim or delete another user's stored resume", async () => {
+  const storageId = await backend.run(async (ctx) => ctx.storage.store(new Blob(["Alice synthetic resume"], { type: "text/plain" })));
+  await backend.mutation(api.tracker.attachResume, { user: "alice", short, filename: "alice.txt", storageId, secret });
+  const response = await request("/profile/import", "POST", { storageId, filename: "borrowed.txt" }, otherKey);
+  expect(response.status).toBe(404);
+  await request("/profile/import", "DELETE", undefined, otherKey);
+  expect(await backend.run(async (ctx) => (await ctx.storage.get(storageId)) !== null)).toBe(true);
+});
+
+test("removing a user's approved identity also disables their existing API key", async () => {
+  vi.stubEnv("TRACKER_USER_MAP", JSON.stringify({ "bob@example.com": "bob" }));
+  expect((await request("/me")).status).toBe(403);
+  expect((await request("/me", "GET", undefined, otherKey)).status).toBe(200);
+  expect(upstream).not.toHaveBeenCalled();
 });

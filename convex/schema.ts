@@ -25,6 +25,13 @@ import { watchValidator } from "./watch_schema";
 // lookups/upserts. The mail-sync feature's tables (mailAccounts,
 // mailMessages, inboxActions) follow below in their own section.
 export default defineSchema({
+  profileUploads: defineTable({
+    user: v.string(),
+    tokenHash: v.string(),
+    state: v.union(v.literal("issued"), v.literal("uploading"), v.literal("uploaded")),
+    expiresAt: v.number(),
+    storageId: v.optional(v.id("_storage")),
+  }).index("by_user", ["user"]).index("by_token", ["tokenHash"]).index("by_storage", ["storageId"]),
   ticks: defineTable({
     user: v.string(),
     short: v.string(),

@@ -21,7 +21,7 @@ async function rowFor(ctx: QueryCtx, user: string) {
 }
 
 /**
- * Operator-key resume builds allowed per user per day.
+ * Operator-key model requests allowed per user per UTC day.
  *
  * This is the guard that replaced the old "deliberately NO fallback" rule in
  * credentials.ts. The concern there was real - one user should not be able to
@@ -79,8 +79,7 @@ export const getResumeLlm = query({
 });
 
 /** Read-only view of today's allowance, so a build can check before spending.
- *  Kept separate from consumeOperatorLlm: charging happens only after a model
- *  call has actually produced text. */
+ *  Advisory only: consumeOperatorLlm atomically reserves before each request. */
 export const operatorCapReached = internalQuery({
   args: { user: v.string() },
   handler: async (ctx, { user }) => {

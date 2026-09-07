@@ -248,7 +248,10 @@ test("sync token refresh failure stamps lastError and does not throw", async () 
 
 test("recordOutcome second call with the same gmailMessageId is a no-op", async () => {
   const t = convexTest(schema);
+  await seedAccount(t);
+  const accountId = (await getAccountRow(t))!._id;
   const args = {
+    accountId,
     user: "u1",
     gmailMessageId: "gm1",
     threadId: "th-1",

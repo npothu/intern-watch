@@ -309,32 +309,19 @@ export const storeMailAccount = internalMutation({
       .query("mailAccounts")
       .withIndex("by_user", (q) => q.eq("user", user))
       .first();
-    if (existing) {
-      // Switching to a DIFFERENT mailbox must not inherit the previous one's
-      // sync cursor. historyId is meaningless across accounts, and a stale
-      // watchExpiration would make the renewal sweep skip the new mailbox as
-      // already-armed. The wizard actively invites this switch ("Signing in
-      // again replaces it with whichever account you choose"), so it is a
-      // normal path, not an edge case.
-      const switched = existing.email !== email;
-      await ctx.db.patch(existing._id, {
-        email,
-        refreshToken,
-        refreshTokenIv,
-        lastError: undefined,
-        lastErrorAt: undefined,
-        ...(switched
-          ? {
-              historyId: undefined,
-              watchExpiration: undefined,
-              lastSyncAt: undefined,
-              lastPushAt: undefined,
-            }
-          : {}),
-      });
-    } else {
-      await ctx.db.insert("mailAccounts", { user, email, refreshToken, refreshTokenIv });
-    }
+    email = email.trim().toLowerCase();
+    const claimed = await ctx.db.query("mailAccounts").withIndex("by_email", q => q.eq("email", email)).collect();
+    if (claimed.some(row => row.user !== user)) throw new Error("This mailbox is already connected to another account.");
+    // A new row ID invalidates every in-flight operation from the old connection.
+    if (existing) await ctx.db.delete(existing._id);
+    await ctx.db.insert("mailAccounts", {
+      user, email, refreshToken, refreshTokenIv,
+      llmCapDate: existing?.llmCapDate, llmCallsToday: existing?.llmCallsToday,
+      ...(existing?.email === email ? {
+        historyId: existing.historyId,
+        lastSyncAt: existing.lastSyncAt,
+      } : {}),
+    });
     // Kick the (idempotent) watch setup right away so a freshly configured
     // account starts receiving pushes without waiting for the daily cron -
     // but only once there is a topic to point it at. The deployment operator
@@ -350,6 +337,18 @@ export const storeMailAccount = internalMutation({
         "mailbox connected but MAIL_PUBSUB_TOPIC is not set - watch deferred until push is configured",
       );
     }
+  },
+});
+
+/** Delete the local grant first; future pushes and queued syncs become no-ops. */
+export const disconnect = mutation({
+  args: { user: v.string(), secret: v.string() },
+  handler: async (ctx, { user, secret }) => {
+    checkSecret(secret);
+    const rows = await ctx.db.query("mailAccounts").withIndex("by_user", q => q.eq("user", user)).collect();
+    for (const row of rows) await ctx.db.delete(row._id);
+    // Keep existing tracker history and reviewed mail outcomes.
+    return { ok: true as const };
   },
 });
 
@@ -524,6 +523,7 @@ export const listApplications = internalQuery({
 export const clearCachedAccessToken = internalMutation({
   args: { rowId: v.id("mailAccounts") },
   handler: async (ctx, { rowId }) => {
+    if (!(await ctx.db.get(rowId))) return;
     await ctx.db.patch(rowId, {
       accessToken: undefined,
       accessTokenExpiry: undefined,
@@ -537,6 +537,7 @@ export const clearCachedAccessToken = internalMutation({
 export const stampError = internalMutation({
   args: { rowId: v.id("mailAccounts"), message: v.string() },
   handler: async (ctx, { rowId, message }) => {
+    if (!(await ctx.db.get(rowId))) return;
     await ctx.db.patch(rowId, { lastError: message, lastErrorAt: Date.now() });
   },
 });
@@ -546,6 +547,7 @@ export const stampError = internalMutation({
 export const stampSyncOk = internalMutation({
   args: { rowId: v.id("mailAccounts"), lastSyncAt: v.number() },
   handler: async (ctx, { rowId, lastSyncAt }) => {
+    if (!(await ctx.db.get(rowId))) return;
     await ctx.db.patch(rowId, {
       lastSyncAt,
       lastError: undefined,
@@ -658,6 +660,7 @@ const CANDIDATE = v.object({
 //    yields one queue entry.
 export const recordOutcome = internalMutation({
   args: {
+    accountId: v.id("mailAccounts"),
     user: v.string(),
     gmailMessageId: v.string(),
     threadId: v.string(),
@@ -673,8 +676,10 @@ export const recordOutcome = internalMutation({
   },
   handler: async (
     ctx,
-    { user, gmailMessageId, threadId, headers, accountEmail, classification, candidates },
+    { accountId, user, gmailMessageId, threadId, headers, accountEmail, classification, candidates },
   ) => {
+    const account = await ctx.db.get(accountId);
+    if (!account || account.user !== user || account.email !== accountEmail) return;
     const existing = await ctx.db
       .query("mailMessages")
       .withIndex("by_user_message", (q) =>
@@ -1236,6 +1241,9 @@ export const sync = internalAction({
         await ctx.runQuery(internal.mail.listMessageIds, { user }),
       );
       for (const id of candidateIds) {
+        const current = await ctx.runQuery(internal.mail.getAccount, { user });
+        if (current?._id !== account._id) return;
+
         if (recorded.has(id)) continue;
         const msg = await fetchMessage(token, id);
         if (!msg) continue;
@@ -1274,6 +1282,7 @@ export const sync = internalAction({
           );
         }
         await ctx.runMutation(internal.mail.recordOutcome, {
+          accountId: account._id,
           user,
           gmailMessageId: id,
           threadId: msg?.threadId ?? "",
