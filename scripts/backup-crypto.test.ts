@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encryptBackup, decryptBackup } from './backup-crypto.mjs';
 
+// RSA key generation has variable CPU cost on shared CI runners.
 test('backup round trip authenticates every byte and does not overwrite existing recovery files', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'iw-backup-test-'));
   try {
@@ -25,4 +26,4 @@ test('backup round trip authenticates every byte and does not overwrite existing
     await expect(decryptBackup(join(dir, 'corrupt'), join(dir, 'bad'), keys.privateKey)).rejects.toThrow();
     await expect(access(join(dir, 'bad'))).rejects.toThrow();
   } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 30_000);

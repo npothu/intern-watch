@@ -216,7 +216,9 @@ The optional [script API](docs/api.md) lets authenticated scripts manage matches
 Access uses per-user API keys and stays disabled until configured.
 
 For Vercel, set the project root to `web` and the build command to `bash ../scripts/vercel-build.sh`.
-The [build script](scripts/vercel-build.sh) documents the preview secrets and optional seed snapshot; configured previews get a separate Convex backend per branch.
+The [build script](scripts/vercel-build.sh) documents preview secrets; each push recreates an empty Convex backend for that branch.
+Production snapshots are never imported into previews.
+See the [private-access onboarding](docs/operations/private-access.md) and [encrypted backup procedure](docs/operations/backups.md) before inviting users.
 Production Convex deployment runs through [deploy-convex.yml](.github/workflows/deploy-convex.yml) when `CONVEX_DEPLOY_KEY` is set.
 
 ### Database backend
