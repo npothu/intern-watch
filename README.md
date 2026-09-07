@@ -1,443 +1,375 @@
-# intern-watch
+<p align="center">
+  <img src="docs/assets/readme-banner.svg" alt="Intern Watch. Find internships. Keep track of what happens next." width="1200" />
+</p>
 
-Automated internship discovery. A GitHub Actions cron polls public GitHub
-internship lists every 2 hours, normalizes and dedupes the postings, applies
-your filter rules (with a small LLM assist for ambiguous cases), and delivers
-**only new matching jobs** — as a batched email digest ~3x/day and/or an
-instant Discord webhook message. Multi-user by design: each user is one YAML
-file plus a secret or two.
+<p align="center">
+  <a href="#setup">Get started</a> ·
+  <a href="#hosted-web-app-optional">Run the web app</a> ·
+  <a href="#how-filtering-works">Configure your search</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
 
-No servers, no database — state is a JSON file committed back to the repo.
+Intern Watch watches public internship lists and employer job boards, filters postings to your preferences, and sends you new matches.
+The optional web app keeps your shortlist, applications, resumes, and follow-ups together.
 
-New here? `docs/quickstart.md` takes a fresh fork to a working watcher end to
-end, with auto-apply and mail-sync as clearly-marked appendices. The README
-below is the full reference; setup is tiered into REQUIRED (the minimum for a
-working watcher) and OPTIONAL (everything else).
+Start with a GitHub Actions watcher and email digests.
+Add the hosted app when you want a place to manage the rest of the search.
 
-## Sources
+## What you can do
 
-| Source | What |
-|---|---|
-| [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) | `listings.json` — all terms (Summer/Fall/Spring/Winter), ~17k entries |
-| [jobright-ai/2026-Software-Engineer-Internship](https://github.com/jobright-ai/2026-Software-Engineer-Internship) | README table, 7-day rolling window |
-| [jobright-ai/2026-Engineer-Internship](https://github.com/jobright-ai/2026-Engineer-Internship) | README table |
-| [jobright-ai/2026-Product-Management-Internship](https://github.com/jobright-ai/2026-Product-Management-Internship) | README table |
-| [vanshb03/Summer2027-Internships](https://github.com/vanshb03/Summer2027-Internships) | README + OFFSEASON_README |
-| [speedyapply/2026-SWE-College-Jobs](https://github.com/speedyapply/2026-SWE-College-Jobs) | README, FAANG+/Quant/Other tables |
-| ATS boards (Greenhouse / Lever / Ashby) | official public JSON APIs for ~90 boards of companies in your lists — catches postings the moment they go up; regenerate with `python scripts/discover_ats_boards.py` |
+| Capability | What it does |
+| --- | --- |
+| Discover internships | Poll multiple sources, deduplicate listings, and filter by role, season, company, location, and eligibility. |
+| Get useful alerts | Receive scheduled email digests, immediate Discord notifications, and priority-company emails on the run that finds them. |
+| Work through matches | Save, dismiss, or mark jobs applied in the hosted app or local UI. |
+| Track applications | Keep statuses, notes, and application history after a posting leaves the match list. |
+| Prepare resumes | Edit your profile, compose resume variants, export PDF or DOCX, and build a tailored resume for a job. |
+| Follow up | Connect Gmail for application updates and review uncertain messages in Inbox. |
 
-Sources live in `sources.yaml` — adding one is config, not code (pick an
-existing adapter, or add a new one under `src/adapters/`).
+Browser-assisted applications are available separately through the [auto-apply CLI](docs/apply.md).
+Autofill pauses before submission; submit mode requires an approved match.
+The watcher does not submit applications.
 
-## Database backend (optional)
+## Choose your setup
 
-Human state — the applied/saved/dismissed ticks, the applications ledger, and
-the current match snapshot — is stored in the GitHub issue plus committed
-`state/` files by default. You can instead serve it from a **Convex**
-deployment so the watcher and the local webui read and write one hosted store
-with no GitHub-issue plumbing. This is optional; it is off unless you set
-`STORE=convex`.
+| | GitHub watcher | Hosted app |
+| --- | --- | --- |
+| Best for | Alerts and a GitHub issue dashboard | Managing the full search in a browser |
+| Runs on | GitHub Actions + Python | The watcher, plus Next.js + Convex + Clerk |
+| Tracker storage | GitHub issue + committed JSON | Convex |
+| Interface | Email, optional Discord, issue checkboxes, local Python UI | Matches, Tracker, Profile, Inbox, Settings |
+| Start here | [Setup below](#setup) | [Local web development](docs/local-web-development.md) |
 
-The client is thin: `src/store.py`'s `ConvexStore` POSTs to Convex's HTTP
-public API (`/api/query` and `/api/mutation`), so no Python package or OAuth
-is involved. The server side lives in `convex/` in this repo — four tables
-(`ticks`, `applications`, `matches`, `resumes`, each indexed by
-`(user, short)`) and ten functions (`tracker.ts`), deployed with
-`convex deploy`. These files are
-inert in CI; there is no Node/npm step in any workflow.
-
-Who needs what:
-
-- **The watcher cron** picks the driver from `STORE`; with `convex` it reads
-  and writes state through the API instead of the issue + `dashboard-write`
-  workflow, and paints a read-only digest issue body (no checkboxes, since
-  ticks are no longer read from it).
-- **The local webui** (`python -m src.webui`) already talks to the store via
-  the same seam; with `STORE=convex` tick and status writes go to the
-  deployment instead of the issue/workflow.
-- **Backfill existing state** with `python scripts/migrate_tracker_to_convex.py
-  --dry-run` (prints what it would write), then without the flag to copy your
-  current ticks, ledger, and match snapshot in. Safe to re-run (idempotent
-  upserts).
-
-Built resumes follow the same seam: with `convex`, a tailored `.docx` is
-stored in Convex file storage (a `resumes` table keyed by `(user, short)`),
-so nothing gets committed and the workflow's `git add resumes/` step finds
-nothing new. On the default `github` backend the file is written under
-`resumes/` and the existing commit step picks it up exactly as before.
-Legacy committed resumes remain served from the repo on either backend.
-
-Both the cron and the workflow repaints (the `dashboard-write` / resume
-steps) read the driver from the repo **Actions variable** `STORE` (Settings →
-Secrets and variables → Actions → Variables), defaulting to `github` when
-unset; `CONVEX_URL` and `CONVEX_SECRET` are set as repo **Actions secrets**,
-fed to the workflow env like any other secret. So flipping the backend is a
-repo-settings change, not a code change.
-
-Setting it up:
-
-1. `npx convex dev` (or `npx convex deploy`) in this repo to create the
-   deployment and push `convex/`.
-2. Set a `TRACKER_SECRET` env var on the deployment (required — every
-   mutation checks it against `TRACKER_SECRET`).
-3. Set `STORE=convex`, `CONVEX_URL`, and `CONVEX_SECRET` (the secret, equal
-   to `TRACKER_SECRET`) on the matching `env:` block of the workflow that
-   runs you, plus `.env` for the local webui. See `.env.example`.
-
-With `convex`, the dashboard issue still gets painted each run (a read-only
-digest) so you keep the GitHub-native view, but it is no longer the source of
-truth — edits there are overwritten.
-
-## Hosted web app (optional)
-
-`web/` is a hosted, multi-user Next.js sibling of the local Python webui:
-Clerk sign-in, Tailwind/shadcn UI, and the same Convex store. It is a separate
-Vercel deployment, never part of the watcher cron, and strictly optional. Its
-secrets (`CLERK_SECRET_KEY`, `CONVEX_URL`, `CONVEX_SECRET`, and a
-`TRACKER_USER_MAP` bridging Clerk emails to tracker users) live on Vercel and
-the Convex deployment, not in this repo's `.env`.
-Its backend functions live under `convex/` and share the deployment with the Python pipeline.
-See `web/README.md` for the web reference and `docs/local-web-development.md` for complete local setup instructions.
-
-Every pull request gets its own Convex backend.
-`scripts/vercel-build.sh` is the Vercel build command: a preview build creates a Convex preview deployment named after the branch (the branch's schema and functions), seeds it from a snapshot, and builds the web app against it; a production build is a plain `next build`.
-The snapshot is the `convex-seed.zip` asset on the `convex-seed` release of the private data repo; refresh it with `scripts/publish-convex-seed.sh <owner/data-repo> [snapshot.zip]`.
-The Preview environment on Vercel needs `CONVEX_DEPLOY_KEY` (a preview deploy key), `PREVIEW_CREDENTIALS_KEY`, `CONVEX_SEED_REPO` and `CONVEX_SEED_TOKEN` (Contents: read on the data repo); the header of `scripts/vercel-build.sh` lists them.
+The default watcher needs no hosted database or web server.
+Each user has a configuration file under `users/`; fetching is shared, while filtering and delivery run per user.
 
 ## Setup
 
-Everything splits into two tiers. **REQUIRED** is the minimum for a working
-watcher: a state store (the default GitHub driver needs no setup), an email
-sender, and an LLM classifier key. Everything else is **OPTIONAL** - mail-sync,
-auto-apply, jobright authenticated resolution, a Discord channel, and the
-hosted web app; a fork that skips all of them still gets a fully working
-watcher. The preflight (`python -m src.config_check`) prints both tiers as a
-per-feature ENABLED/DISABLED table, so it is always obvious what is left to
-set up and whether it is required.
+Use Python 3.12, matching CI, and a GitHub repository with Actions enabled.
+The shipped configuration uses Gmail for delivery and Gemini for ambiguous filtering decisions.
 
-If you are forking this, `docs/quickstart.md` walks the REQUIRED tier start to
-finish and defers the optional features to appendices. The reference for both
-tiers follows.
+### 1. Create your copy
 
-### Required (the minimum for a working watcher)
+Create a repository from this template, or push a copy to your own repository, then clone it locally.
+A private repository is fine.
 
-1. **Create the repo.** Push this directory to a (private is fine) GitHub repo.
-2. **Gmail app password** (the email sender): Google Account → Security →
-   enable 2-Step Verification → then myaccount.google.com/apppasswords →
-   create one named "intern-watch" → copy the 16-character password.
-3. **Repo secrets** (Settings → Secrets and variables → Actions):
-   - `GMAIL_ADDRESS` - the Gmail account that sends (and receives) the digest
-   - `GMAIL_APP_PASSWORD` - the app password from step 2
-   - the API key for your `llm.provider` (`GEMINI_API_KEY` for the shipped
-     config) - the watcher's term / company / Atlanta judgments need it. A
-     fork that genuinely wants no LLM calls can disable `llm.enabled` and set
-     `unknown_term_policy: drop`; the preflight then marks the LLM OFF without
-     failing.
-4. **Tune your config.** Edit `users/example.yaml` (terms, keywords, rules,
-   the prose "top company" definition) and `data/top_companies.txt` /
-   `data/atlanta_companies.txt` (one company per line, `|` separates aliases).
-5. **Validate.** `python -m src.config_check` (per-user PASS/FAIL plus the
-   feature table), then `pytest -q` must stay green.
-6. **First run.** Actions → *watch* → Run workflow. The first run **seeds**:
-   it marks every currently-listed job as seen without notifying, so you don't
-   get a 500-job blast. Every run after that notifies new jobs only.
-   (Run `python -m src.main --backfill` locally instead if you *do* want the
-   initial blast.)
+In **Settings > Actions > General**, allow workflows to read and write repository contents.
+Also enable **Allow GitHub Actions to create and approve pull requests** if you want the monthly board-refresh workflow to open update PRs.
 
-### Optional features
+### 2. Add the watcher secrets
 
-Same wiring as the required ones (a repo secret plus an `env:` line in
-`watch.yml`), each adding one capability. All of them can wait until the
-REQUIRED tier works.
+Add these under **Settings > Secrets and variables > Actions**:
 
-- **Discord (instant channel)** - set `notify.discord_webhook_env` in a user
-  yaml and add `DISCORD_WEBHOOK_<NAME>` to the repo secrets and `watch.yml`.
-- **Jobright authenticated resolution** - `JOBRIGHT_EMAIL` /
-  `JOBRIGHT_PASSWORD`: accepted matches whose link is still a jobright.ai URL
-  get resolved to the real employer apply URL at match time (session cookies
-  persist across runs via an Actions cache). Without them the watcher keeps
-  the jobright link - everything else works. This logs into jobright.ai with
-  your account - enable it only with your own account and your own judgment on
-  their terms of service.
-- **Resume auto-build** - enable `resume_build` in a user yaml; needs
-  `users/<you>_resume.json` (schema: `docs/resume.md`).
-- **Auto-apply** - the gated CLI that fills and submits applications; it never
-  runs in the cron. Needs `users/<you>_apply.yaml` plus
-  `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` for the cloud browser.
-  See `docs/apply.md`.
-- **Mail-sync** - recruiter emails update application statuses automatically.
-  Convex store only (`STORE=convex`), with `GMAIL_CLIENT_ID` /
-  `GMAIL_CLIENT_SECRET` and the push-topic secrets. See `docs/mail-sync.md`.
-- **Convex database backend** - the alternative state store described under
-  "Database backend": `STORE=convex` plus `CONVEX_URL` / `CONVEX_SECRET`.
-- **Hosted web app** - the separate Next.js app in `web/`; see "Hosted web
-  app (optional)".
+| Secret | Value |
+| --- | --- |
+| `GMAIL_ADDRESS` | Gmail account that sends the digest; also the default recipient |
+| `GMAIL_APP_PASSWORD` | An app password for that account, with 2-Step Verification enabled |
+| `GEMINI_API_KEY` | API key for the example configuration's Gemini classifier |
 
-### Fork checklist
+These names are already wired into [watch.yml](.github/workflows/watch.yml).
+For a search without LLM calls, set `llm.enabled: false` and `unknown_term_policy: drop` in your user config.
 
-Everything a fresh copy of this repo needs, in one place. Split into the two
-tiers: do the REQUIRED set first (the watcher alone), then add OPTIONAL
-features one at a time. The step-by-step happy path is `docs/quickstart.md`.
+### 3. Make the search yours
 
-**REQUIRED (the watcher):**
+Edit [users/example.yaml](users/example.yaml), or rename it to `users/<you>.yaml` and change `name` to match.
+Remove the example watcher if you create another file.
 
-1. **Repo**: create your copy (GitHub *Use this template* on the template
-   repo, or push this tree to a new repo - private is fine).
-2. **Secrets** (Settings → Secrets and variables → Actions):
-   `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, and your LLM key
-   (`GEMINI_API_KEY` for the shipped config - see Setup).
-3. **Repo settings**: Settings → Actions → General →
-   *Workflow permissions: Read and write* and
-   *Allow GitHub Actions to create and approve pull requests* (the monthly
-   *refresh-boards* workflow opens a PR).
-4. **Watcher config**: edit `users/example.yaml` (or copy it to
-   `users/<you>.yaml` and delete the example) - terms, keywords, rules, the
-   prose "top company" definition - plus `data/top_companies.txt` /
-   `data/atlanta_companies.txt` (swap in your own metro list).
-5. **Validate**: `python -m src.config_check`, then `pytest -q`.
-6. **First run**: Actions → *watch* → Run workflow (seeds silently - see
-   Setup above).
+The defaults target US software and related roles, with broader summer matching and more selective spring and fall rules.
+Review these before your first run:
 
-**OPTIONAL (after the watcher works):**
+- `role_filter` and `eliminate` for job titles and eligibility requirements.
+- `terms` and `term_rules` for the rolling search window and seasonal rules.
+- `priority` for employers you want to hear about first.
+- `notify.email` for recipients, time zone, and digest hours.
+- `llm.top_company_definition` for how the classifier judges an unfamiliar employer.
 
-7. **Resume builds**: create `users/<you>_resume.json` (schema:
-   `docs/resume.md`; structure reference: `tests/fixtures/resume_bank.json`).
-8. **Auto-apply**: copy `users/apply.example.yaml` →
-   `users/<you>_apply.yaml` and `users/logins.example.yaml` →
-   `users/<you>_logins.yaml` (the latter is gitignored - it holds
-   passwords); see `docs/apply.md`.
-9. **Mail sync** (Convex tracker only): recruiter emails update application
-   statuses automatically, with an Inbox action queue in the webui for
-   ambiguous ones; see `docs/mail-sync.md`.
-10. **Jobright auth**: `JOBRIGHT_EMAIL`/`JOBRIGHT_PASSWORD` - see Setup.
-11. **Convex store / hosted web app**: see "Database backend" and "Hosted
-    web app (optional)".
+The example uses Atlanta-specific rules outside summer.
+Adapt those rules and the [company lists](data/) to your search.
 
-### Separate data repo (recommended for a real instance)
+### 4. Validate locally
 
-The fork checklist above keeps code and private data in one repo.
-The alternative is two repos: this one (public, code only) and a small private DATA repo that holds `users/`, `state/`, the secrets and the dashboard issue.
-Nothing needs syncing between them, and a code branch can be tested end to end against the instance before it merges.
+From the repository root:
 
-1. Create a private repo with `users/` (your config), an empty `state/`, and a copy of `.gitattributes`.
-2. Add the same secrets and variables there that the checklist puts on a single repo.
-3. Add one thin caller per workflow you use. `watch.yml`:
-
-   ```yaml
-   on:
-     schedule: [{cron: "0 */2 * * *"}]
-     workflow_dispatch:
-       inputs:
-         send_now: {type: boolean, default: false}
-         code_ref: {type: string, default: ""}
-         data_ref: {type: string, default: ""}
-         environment: {type: string, default: ""}
-   permissions: {contents: write, issues: write}
-   jobs:
-     watch:
-       uses: <you>/intern-watch/.github/workflows/watch.yml@main
-       with:
-         send_now: ${{ inputs.send_now || false }}
-         code_ref: ${{ inputs.code_ref || '' }}
-         data_ref: ${{ inputs.data_ref || '' }}
-         environment: ${{ inputs.environment || '' }}
-       secrets: inherit
-   ```
-
-   `dashboard-write`, `resume`, `resume-batch` and `resume-ondemand` follow the same shape (keep their own triggers and `if:` guards; the bodies live here).
-   The reusable job checks out the data repo at the workspace root and this repo under `code/`, runs from `code/` with `INTERN_WATCH_DATA_DIR` set, and commits state back to the data repo.
-4. To test a code branch before merging: `gh workflow run watch.yml -f code_ref=<branch> -f data_ref=staging -f environment=staging` in the data repo, where `staging` is a data branch with a test `users/` and a GitHub environment whose `STORE` variable is `github`.
-
-Locally, run every tool from this checkout with `INTERN_WATCH_DATA_DIR=<path to the data repo>`.
-That directory owns `users/`, `state/`, `resumes/`, `out/` and its own `.env`; this checkout keeps `sources.yaml`, `data/` and the web UI.
-When the variable is unset or blank, both live here, which is the single-repo layout above.
-
-### Config & secrets model
-
-The golden rule: **config files name secrets, they never hold secret values.**
-A user yaml says *which env var* a credential lives in; the value lives only in
-GitHub Actions secrets. That's what makes the repo safe to publish/fork.
-
-The chain for any credential is:
-
-```
-secrets.GMAIL_APP_PASSWORD          # real value — GitHub Actions secret
-  → env: GMAIL_APP_PASSWORD         # exposed in .github/workflows/watch.yml
-    → smtp_pass_env: GMAIL_APP_PASSWORD   # referenced (by name) in users/<name>.yaml
-      → os.environ["GMAIL_APP_PASSWORD"]  # read by the code at run time
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m src.config_check
 ```
 
-So there are three kinds of thing, in three places:
+The config check validates YAML and workflow secret wiring.
+Its feature table may show credentials as disabled locally even when you have set them in GitHub.
 
-- **User info & preferences** → `users/<name>.yaml` (one file per person; any
-  `*.yaml` with a `name:` key is picked up automatically — no code change to
-  add a user). The only data here is `name`, your filter rules, and the
-  *env-var names* of your secrets under `notify:` (`smtp_user_env`,
-  `smtp_pass_env`, optional `discord_webhook_env`) and `llm.api_key_env`.
-- **Secret values** → repo secrets (Settings → Secrets and variables →
-  Actions). Never in any tracked file.
-- **The wiring** → the `env:` block of `.github/workflows/watch.yml` maps each
-  `secrets.X` to the env var name `X` your yaml referenced.
+To try the watcher locally, copy [.env.example](.env.example) to `.env`, fill in the required values, then run:
 
-Adding a secret a user references (e.g. a Discord webhook) is therefore two
-edits: create the repo secret, and add one `X: ${{ secrets.X }}` line to
-`watch.yml`'s `env:` block. Locally, just export the same env var names before
-running (`$env:GEMINI_API_KEY="…"` in PowerShell; `export …` in bash) — the
-code only ever reads `os.environ`, so local and CI behave identically.
-
-**Validate your config.** Run `python -m src.config_check` after editing any
-`users/*.yaml`. It checks each user file against an explicit schema (known
-top-level keys, valid `llm.provider` / `unknown_term_policy` / `resume_build.modes`,
-`company_in_file` paths that exist, well-formed env-var names) and cross-checks
-that every `*_env` secret you reference is actually wired into `watch.yml`'s
-`env:` block — for any that aren't, it prints the exact `NAME: ${{ secrets.NAME }}`
-line to add. It prints a per-user PASS/FAIL report and exits nonzero on any
-failure, so CI runs it before pytest.
-
-Alongside the per-user report it prints a per-feature status table: every
-feature tiered REQUIRED (store, email, LLM) or OPTIONAL (discord, jobright,
-auto-apply, mail-sync, the hosted web app) and marked ENABLED or DISABLED,
-with exactly the env vars a disabled one needs. DISABLED optional features are
-fine - the exit code only reflects config validity and secret *wiring*, never
-the presence of secret values in the process (CI's preflight step has none;
-they exist only inside the watch job). The "required features: N/3 ready"
-summary line at the bottom is the self-hoster's checklist.
-
-### Run locally
-
+```bash
+python -m src.main --dry-run
 ```
-pip install -r requirements.txt
-python -m src.config_check     # validate users/*.yaml + wiring; prints the feature table
-python -m src.main --dry-run     # full pipeline, prints the digest, writes nothing
+
+This fetches live sources without sending notifications or saving watcher state.
+On an empty state file, it previews the initial seed; add `--backfill` to preview matching the current listings.
+Configured LLM classification can still make API calls.
+
+### 5. Start the watcher
+
+Open **Actions > watch > Run workflow**.
+The first run records existing listings without notifying you.
+Later runs deliver newly discovered matches.
+
+The schedule polls every two hours, with extra ticks to cover the example's winter email slots.
+The default digest hours are **8am, noon, and 6pm America/New_York**, sent on the first run at or after each slot.
+An empty outbox stays quiet, and failed email sends remain queued for retry.
+
+With `dashboard: true`, the watcher maintains a matches issue.
+Tick a checkbox when you apply; the next run preserves that choice.
+Closing the issue pauses dashboard updates, and reopening it resumes them.
+
+## How filtering works
+
+```mermaid
+flowchart LR
+    A[Public lists & ATS boards] --> B[Normalize & deduplicate]
+    B --> C[Per-user filters]
+    C --> D[New matches]
+    D --> E[Email & Discord]
+    D --> F[Dashboard & tracker]
+```
+
+The watcher checks roles and eligibility before spending API calls on ambiguous jobs.
+
+1. **Role.** Titles must match an included keyword and no excluded keyword.
+   Matching uses case-insensitive substrings; `data science` and `data scientist` need separate entries.
+2. **Eligibility.** Optional eliminations cover country, unpaid work, graduate-only roles, active clearance, veteran-only programs, and posting age.
+   ATS descriptions supply additional evidence when available.
+3. **Term.** A rolling window selects upcoming seasons.
+   You can pin exceptions with `include` and `exclude`, or use a fixed `terms_wanted` list.
+4. **Company and location.** Seasonal presets or explicit rules decide which employers and locations qualify.
+   Priority employers bypass these rules for wanted terms, after role and eligibility checks.
+5. **Ambiguous facts.** Gemini or Anthropic can infer a term or judge company and metro fit.
+   Verdicts are cached, and jobs deferred by the per-run cap are retried later.
+
+For example, these blocks keep a rolling window and prioritize two employers.
+Replace the matching blocks in your user file, keeping its notification and role-filter settings.
+
+```yaml
+terms:
+  rolling: true
+  lead_weeks: 3
+  horizon_months: 14
+  include: []
+  exclude: []
+
+term_rules:
+  Spring: priority_only
+  Summer: anything
+  Fall: priority_only
+
+priority:
+  companies: [Microsoft, Stripe]
+  from_tracker: false
+  email_immediately: true
+  subject_names: true
+```
+
+The hosted app's **Settings > Preferences** edits many of the same controls.
+With the Convex store, saved preferences override the YAML on each watcher run.
+
+> Filter changes apply to new or pending jobs.
+> Previously rejected jobs are not automatically reconsidered, and cached company judgments do not reset when you edit the company definition.
+
+## Sources
+
+The checked-in [source registry](sources.yaml) defines the feeds and adapters used by the watcher.
+Repository years below are the configured names, not a restriction on the terms their listings contain.
+
+| Feed | Configured coverage |
+| --- | --- |
+| SimplifyJobs | `Summer2026-Internships` structured listings, including multiple terms |
+| Jobright | Public 2026 Software Engineer, Engineer, Product Management, and Data Analysis README mirrors |
+| vanshb03 | `Summer2027-Internships`, including the offseason README |
+| speedyapply | `2026-SWE-College-Jobs` internship tables |
+| Employer boards | Public Greenhouse, Lever, and Ashby APIs listed in [ats_boards.yaml](data/ats_boards.yaml) |
+
+Adding a feed supported by an existing adapter is a configuration change.
+New formats need an adapter under [`src/adapters/`](src/adapters/).
+The monthly [refresh-boards workflow](.github/workflows/refresh-boards.yml) proposes updates to the employer-board registry.
+
+Coverage depends on those sources.
+Public mirrors can omit postings, and a short-lived listing can disappear between polls.
+Repeated source failures trigger health warnings in email rather than clearing existing state.
+
+## Hosted web app (optional)
+
+The app in [`web/`](web/) uses Next.js 16, React 19, TypeScript, Tailwind CSS, Clerk sign-in, and Convex.
+It includes keyboard navigation, a command palette, and light and dark themes.
+
+- **Matches and Tracker** manage saved jobs, applications, statuses, notes, and job-specific resume builds.
+  You can also add a job by URL.
+- **Profile** imports resumes, edits your experience bank, composes variants, and exports PDF or DOCX.
+- **Inbox** queues uncertain Gmail matches for review.
+- **Settings** manages search preferences, connections, and resume model choices.
+
+Follow [local web development](docs/local-web-development.md) for the complete setup, including the development Convex backend, Clerk mapping, and optional Gmail callback.
+Hosted resume builds run in Convex; the standalone Python resume tools and Actions workflows remain available separately.
+
+The optional [script API](docs/api.md) lets authenticated scripts manage matches, applications, resumes, and settings through `/api/v1`.
+Access uses per-user API keys and stays disabled until configured.
+
+For Vercel, set the project root to `web` and the build command to `bash ../scripts/vercel-build.sh`.
+The [build script](scripts/vercel-build.sh) documents the preview secrets and optional seed snapshot; configured previews get a separate Convex backend per branch.
+Production Convex deployment runs through [deploy-convex.yml](.github/workflows/deploy-convex.yml) when `CONVEX_DEPLOY_KEY` is set.
+
+### Database backend
+
+`STORE=github` is the default.
+Set `STORE=convex` to share tracker state between the watcher, local UI, and hosted app.
+The watcher still maintains its discovery cache in `state/seen.json`.
+
+| Setting | Where it goes |
+| --- | --- |
+| `TRACKER_SECRET` | Convex deployment environment |
+| `STORE=convex` | GitHub Actions variable and local Python `.env` |
+| `CONVEX_URL` | GitHub Actions secret, local Python `.env`, and web server environment |
+| `CONVEX_SECRET` | Same locations as `CONVEX_URL`; must match `TRACKER_SECRET` |
+
+The web app has additional settings in [web/.env.example](web/.env.example).
+Python, Next.js, and Convex each have their own environment; values do not transfer between them.
+With Convex enabled, the GitHub issue becomes a read-only digest.
+
+<details>
+<summary>Migrate an existing GitHub tracker</summary>
+
+Deploy the Convex backend and make `CONVEX_URL` and `CONVEX_SECRET` available as exported environment variables first.
+Let the watcher fold your latest issue checkboxes into state, then fetch the latest data-repo `origin/main`.
+Before switching `STORE`, preview and run the migration from the code checkout:
+
+```bash
+python scripts/migrate_tracker_to_convex.py --dry-run
+python scripts/migrate_tracker_to_convex.py
+```
+
+The migration copies ticks, application history, and the match snapshot using repeatable upserts.
+For separate code and data repos, also pass `--root /path/to/private-data-repo` to both migration commands.
+This script reads that explicit path rather than `INTERN_WATCH_DATA_DIR`.
+
+</details>
+
+## Keep personal data separate
+
+A single private repository is enough to start.
+For an instance that follows updates to this codebase, use a private data repository for `users/`, `state/`, `resumes/`, secrets, and the dashboard issue.
+
+```text
+intern-watch/                 private data repo/
+  src/                         users/
+  convex/                      state/
+  web/                         resumes/
+  sources.yaml                 .github/workflows/
+  data/                        .env
+```
+
+Run local tools from the code checkout with `INTERN_WATCH_DATA_DIR` pointing to the data repo.
+Without that variable, the tools use this repository for both code and data.
+
+<details>
+<summary>Connect a private data repo with a reusable workflow</summary>
+
+Create `users/`, an empty `state/`, and a copy of [.gitattributes](.gitattributes) in the data repo.
+Add the watcher secrets there, then create `.github/workflows/watch.yml` with the following content.
+Replace `<owner>/intern-watch` with the code repository you use.
+
+```yaml
+name: watch
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+    - cron: "0 13,17,23 * * *"
+  workflow_dispatch:
+    inputs:
+      send_now:
+        type: boolean
+        default: false
+permissions:
+  contents: write
+  issues: write
+jobs:
+  watch:
+    uses: <owner>/intern-watch/.github/workflows/watch.yml@main
+    with:
+      send_now: ${{ inputs.send_now || false }}
+    secrets: inherit
+```
+
+The reusable workflow checks out the data repo and the code repo, sets `INTERN_WATCH_DATA_DIR`, and commits state back to the data repo.
+A private code repo also needs `CODE_REPO_TOKEN` with read access.
+The `dashboard-write`, `resume`, `resume-batch`, and `resume-ondemand` workflows also support reusable calls.
+
+For staging, the reusable workflows accept `code_ref`, `data_ref`, and `environment` inputs to select a code revision, data branch, and GitHub environment.
+
+</details>
+
+Config files reference secret **names**; real credentials belong in Actions secrets, deployment environments, or gitignored local files.
+When adding a user or notification channel, wire any new secret names into the workflow's `env` block and run `python -m src.config_check`.
+
+## Development and troubleshooting
+
+The Python pipeline lives in `src/`, backend functions in `convex/`, the hosted app in `web/`, and shared TypeScript logic and fixtures in `shared/`.
+
+Install Python development dependencies and run the same checks as Python CI:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m ruff check .
+python -m mypy
+python -m src.config_check
 python -m pytest tests -q
 ```
 
-The preflight reads the gitignored `.env` (like the other local tooling), so
-putting `GMAIL_*` and `GEMINI_API_KEY` there flips the REQUIRED rows to
-ENABLED; exported env vars win over the file.
+For TypeScript work, install both dependency sets with `npm ci` and `npm --prefix web ci`.
+After generating Convex bindings through the [development setup](docs/local-web-development.md), run:
 
-## How filtering works (per user)
+```bash
+npm test
+npm --prefix web run lint
+npm --prefix web run typecheck
+npm --prefix web run build
+```
 
-Cost-ordered pipeline: dedupe → drop already-seen → keyword role filter →
-term filter → company/location rules → LLM for the still-ambiguous survivors.
+<details>
+<summary>Watcher commands and state behavior</summary>
 
-- **Role filter**: title must hit an `include_keywords` entry and no
-  `exclude_keywords` entry.
-- **Eliminations** (`eliminate:` block): hard requirements that drop a job
-  even when it's a SWE match — `countries_allowed` (location-country
-  allowlist; unrecognized locations are conservatively kept), `unpaid`,
-  `grad_only` (PhD/Master's-only via Simplify's degrees field + title
-  patterns; "BS/MS" and "Undergraduate" stay), `active_clearance`
-  (already-held TS/SCI/poly/"cleared"; clearance-obtainable roles stay), and
-  `veteran_only` (SkillBridge/active-duty/veteran programs).
-- **Term filter**: the wanted terms vs. the posting's term (taken from
-  Simplify's `terms` field, else regex-inferred from the title: explicit
-  "Fall 2026" / "Summer '27", month patterns like "Jan 2027", a bare "2027"
-  → Summer 2027). The wanted set is **rolling** (`terms:` block): every
-  Spring/Summer/Fall term starting between `lead_weeks` and
-  `horizon_months` from today, plus `include` / minus `exclude`, so the list
-  never needs a manual edit as seasons pass. A static `terms_wanted: [...]`
-  list still works. Unknown terms follow
-  `unknown_term_policy: llm | drop | keep`.
-- **Rules**: what a job needs per **season** (`term_rules:`), as a preset:
-  `top_atl_remote` (a priority or top company, an Atlanta company or
-  location, or a remote role when `location.remote_counts`),
-  `priority_only`, or `anything`. The legacy `rules:` list of per-term
-  `accept_if_any` conditions (`company_in_file`, `location_within`,
-  `location_matches`, `always`) is still honored when `term_rules` is
-  absent.
-- **Priority companies** (`priority.companies`, widened by the alias groups
-  in `data/top_companies.txt`, optionally plus every employer in your
-  applications ledger): accepted for any wanted term, tagged `[PRIORITY]`,
-  sorted first in every digest and on the dashboard, named in the digest
-  subject, and with `email_immediately` emailed on the run that found them
-  instead of at the next digest slot. Rejected jobs stay final: adding a
-  company delivers new postings only.
-- **Settings > Preferences** in the hosted web app edits the same knobs (terms
-  window, presets, priority list, remote, digest time and recipients) and
-  stores them in the Convex `settings` row; each run overlays that object on
-  the yaml (store wins) and reports the resolved config back for the page.
-- **JD deepening (ATS jobs only)**: Lever/Ashby postings carry their full
-  description inline; Greenhouse postings get one extra per-job fetch (new
-  jobs only, capped per run). The eliminations above then also scan the JD
-  body with context-aware patterns — "active TS/SCI" eliminates while
-  "ability to obtain TS/SCI" stays, "Master's required" eliminates only when
-  no undergraduate track is mentioned anywhere, and EEO boilerplate
-  ("veteran status") never triggers. Jobs from the README-table sources have
-  no JD and behave exactly as before.
-- **LLM stage** (one batched call per run, capped by `llm.max_jobs_per_run`):
-  only jobs the rules couldn't decide — unknown term, or Fall/Spring at a
-  company that *might* be "top" / *might* be Atlanta. Provider-agnostic:
-  set `llm.provider` (`gemini` or `anthropic`), `llm.model`, and
-  `llm.api_key_env` per user; new providers are one function in `src/llm.py`.
-  Verdicts are cached in `state/seen.json` (term & Atlanta shared across
-  users; "top company" cached per user) so nothing is billed twice. Jobs the
-  cost guard defers are retried next run, not lost.
-- **Digest tags**: `[TOP]` list match, `[TOP*]` LLM judgment, `[ATL]`/`[ATL*]`
-  Atlanta, `[REMOTE]`.
+| Command | Use |
+| --- | --- |
+| `python -m src.main --dry-run` | Fetch and preview without notifications or watcher-state writes |
+| `python -m src.main --dry-run --backfill` | Preview the current listings on an empty state file |
+| `python -m src.main --explain 'jr:<24-hex>' --user example` | Trace one job's filtering decision without notifying or saving state |
+| `python -m src.main --send-now` | Run the watcher and flush the email outbox immediately |
+| `python -m src.main --seed` | Mark current listings seen without notifying, such as after adding a source |
+| `python -m src.webui` | Open the local Python application manager |
 
-## Delivery channels
+The discovery cache expires entries not seen for 120 days.
+The application ledger is permanent and is never pruned with the cache.
+Actions owns committed state files, so inspect the current data-repo `origin/main` when debugging instead of trusting a stale local copy.
 
-- **Email (batched)**: accepted matches accumulate in an outbox inside
-  `state/seen.json`; the first run after each `send_at_utc` slot flushes them
-  as one HTML digest (grouped by term, `[TOP]`/`[ATL]` tags, clickable links).
-  Slots are honored even when Actions runs late, and nothing is sent when the
-  outbox is empty. Send failures keep the outbox for retry.
-- **Discord (instant)**: every run posts new matches immediately. A message is
-  only marked delivered after the webhook returns 2xx; failures retry next run.
+If a job never appeared in a configured source, filter changes cannot recover it.
+If it was already rejected, changing a rule does not automatically evaluate it again.
+Company judgments are cached per user; changing the prose definition does not invalidate an existing verdict.
 
-Each user enables either or both under `notify:` in their yaml.
+</details>
 
-## Match dashboard (GitHub issue)
+## Documentation
 
-Users with `dashboard: true` in their yaml get a "📋 intern-watch matches"
-issue in this repo, rewritten every run: all matches from the last 120 days,
-grouped by term, newest first, each as a checkbox row. **Tick a box once
-you've applied** — the next run reads the ticks back into `state/seen.json`
-before rewriting, so they persist. Close the issue to pause updates (reopen
-to resume); any other edit to the body is overwritten. Needs the
-`issues: write` permission (already set in `watch.yml`); local runs without
-`GITHUB_TOKEN`/`GITHUB_REPOSITORY` skip the dashboard quietly.
+| Guide | Covers |
+| --- | --- |
+| [Watcher quickstart](docs/quickstart.md) | Step-by-step walkthrough for a fresh instance |
+| [Local web development](docs/local-web-development.md) | Next.js, Clerk, Convex, and development environment setup |
+| [Script API](docs/api.md) | Per-user API keys, endpoints, and OpenAPI discovery |
+| [Resume builder](docs/resume.md) | Python resume bank, selection, tailoring, and DOCX output |
+| [Automatic resume builds](docs/resume-auto.md) | Watcher and Actions delivery modes, with [known limitations](docs/resume-auto-limitations.md) |
+| [Mail sync](docs/mail-sync.md) | Gmail connection, status classification, and Inbox review |
+| [Auto-apply](docs/apply.md) | Answer book, browser filling, approval gates, and supported flows |
+| [Browserbase](docs/browserbase.md) | Cloud browser setup for application tools |
 
-## Source health alerts
+## License
 
-Consecutive fetch/parse failures are counted per source in
-`state/seen.json`. After 3 failed runs (~6h at the 2h cadence) a
-"⚠ Source health" section is appended to every outgoing digest, and —
-because empty digests are normally silent — if a send slot passes with
-nothing in the outbox, a one-off standalone warning email goes out instead
-(once per outage per user; the counter resets when the source recovers).
-
-## Adding a user
-
-1. Copy `users/example.yaml` → `users/<name>.yaml`, set `name:` and pick
-   channels under `notify:` (email `smtp_*_env` names and/or
-   `discord_webhook_env`).
-2. Add the matching secrets, and reference them in the `env:` block of
-   `.github/workflows/watch.yml`.
-
-Fetching/parsing/dedup happen once per run; filtering and notification run
-per user.
-
-## Maintenance notes
-
-- `state/seen.json` is pruned of entries not seen for 120 days.
-- A source that fails to fetch/parse (or suddenly parses 0 rows) is skipped
-  with a warning; the run continues and state is never wiped.
-- Parser fixtures: `python scripts/refresh_fixtures.py`, then update `TODAY`
-  in `tests/conftest.py` and re-run pytest.
-- When `SimplifyJobs/Summer2027-Internships` launches, add it to
-  `sources.yaml` with the `simplify_json` adapter.
-- After editing the company lists, re-run `scripts/discover_ats_boards.py` to
-  pick up new boards (review the diff — short aliases can match the wrong
-  company), then `python -m src.main --seed` if you don't want a one-time
-  backlog email from the newly added boards.
-- The *refresh-boards* workflow re-runs that discovery on the 3rd of each
-  month and opens a PR with the diff (it requires the repo setting
-  *Settings → Actions → General → "Allow GitHub Actions to create and
-  approve pull requests"*). Merging it may add boards mid-stream; run
-  `--seed` after merging if you'd rather not get the backlog email.
-
-## v2 backlog
-
-Geocoded radius matching, closed-posting detection.
+[MIT](LICENSE)

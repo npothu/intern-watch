@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Intern Watch</title>
+  <desc id="desc">Find internships. Keep track of what happens next. A stack of job cards in the app's green and paper colors.</desc>
+  <rect width="1200" height="300" rx="20" fill="#F4F2ED"/>
+  <rect x="1" y="1" width="1198" height="298" rx="19" stroke="#E2DED3" stroke-width="2"/>
+  <path d="M56 62H86" stroke="#33604A" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="98" cy="62" r="4" fill="#33604A"/>
+  <text x="56" y="143" fill="#211F1A" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="62" font-weight="650" letter-spacing="-2.5">Intern Watch</text>
+  <text x="58" y="190" fill="#6B6557" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22">Find internships. Keep track of what happens next.</text>
+  <text x="58" y="249" fill="#33604A" font-family="Menlo, Consolas, monospace" font-size="12" letter-spacing="2">DISCOVER / APPLY / FOLLOW UP</text>
+  <g transform="translate(790 49)">
+    <rect x="31" y="0" width="303" height="172" rx="13" transform="rotate(7 31 0)" fill="#EBE8DE" stroke="#CDC8BA"/>
+    <rect x="5" y="21" width="303" height="172" rx="13" transform="rotate(-5 5 21)" fill="#FCFBF8" stroke="#CDC8BA"/>
+    <rect x="0" y="34" width="303" height="172" rx="13" fill="#FCFBF8" stroke="#CDC8BA"/>
+    <rect x="21" y="56" width="36" height="36" rx="10" fill="#33604A"/>
+    <path d="m31 74 6 6 11-13" stroke="#F2F8F4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="72" y="61" width="129" height="7" rx="3.5" fill="#6B6557"/>
+    <rect x="72" y="78" width="87" height="6" rx="3" fill="#CDC8BA"/>
+    <path d="M21 110H282" stroke="#E2DED3"/>
+    <rect x="21" y="129" width="153" height="6" rx="3" fill="#CDC8BA"/>
+    <rect x="21" y="145" width="113" height="6" rx="3" fill="#E2DED3"/>
+    <rect x="21" y="174" width="60" height="13" rx="6.5" fill="#EBE8DE"/>
+    <rect x="89" y="174" width="47" height="13" rx="6.5" fill="#EBE8DE"/>
+    <circle cx="262" cy="168" r="19" fill="#E5EDE6"/>
+    <path d="M255 168h14m-6-6 6 6-6 6" stroke="#33604A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
