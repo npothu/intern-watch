@@ -323,14 +323,18 @@ def test_dedup_existing_preserves_applied_and_saved():
     assert by_key["url:a"]["dismissed"] is True
 
 
-def test_dedup_existing_keeps_all_when_two_acted_rows():
+def test_dedup_existing_preserves_state_when_two_acted_rows():
     state = st.empty_state()
     state["matches"]["u"] = [
         _dup_item("url:a", GH_A, applied=True),
         _dup_item("jr:b", GH_B, saved=True),
     ]
-    assert db.dedup_existing_matches(state, "u") == 0
-    assert not any(i.get("dismissed") for i in state["matches"]["u"])
+    assert db.dedup_existing_matches(state, "u") == 1
+    applied, saved = state["matches"]["u"]
+    assert applied["applied"] and applied["saved"]
+    assert not applied.get("dismissed")
+    assert saved["saved"] and saved["dismissed"]
+    assert len(state["matches"]["u"]) == 2  # soft hide, no records deleted
 
 
 def test_dedup_existing_idempotent_and_respects_restored():
@@ -341,8 +345,11 @@ def test_dedup_existing_idempotent_and_respects_restored():
     ]
     # restored row is never re-hidden.
     assert db.dedup_existing_matches(state, "u") == 0
-    # idempotent: second call is a no-op even after clearing restored.
+    # Repeated calls respect the explicit restore, but removing that
+    # override makes the exact duplicate eligible on the next sync.
+    assert db.dedup_existing_matches(state, "u") == 0
     state["matches"]["u"][1].pop("restored")
+    assert db.dedup_existing_matches(state, "u") == 1
     assert db.dedup_existing_matches(state, "u") == 0
 
 
@@ -362,6 +369,93 @@ def test_dedup_existing_catches_jobright_url_row_via_content():
     assert not by_key["url:boards"].get("dismissed")
     assert by_key["jr:cf"]["dismissed"] is True
     assert by_key["url:jobboards"]["dismissed"] is True
+
+
+def test_initial_cleanup_upgrades_exact_duplicates_before_fuzzy_jobright_match():
+    state = st.empty_state()
+    wrapper = _dup_item("url:wrapper",
+                        "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224", applied=True)
+    direct = _dup_item("url:direct", "https://boards.greenhouse.io/embed/job_app?token=8106224")
+    unresolved = _dup_item("jr:unresolved", "https://jobright.ai/jobs/info/" + "a" * 24)
+    state["matches"]["u"] = [wrapper, direct, unresolved]
+    assert db.dedup_existing_matches(state, "u") == 2
+    assert wrapper["url"] == direct["url"]
+    assert wrapper["applied"] and not wrapper.get("dismissed")
+    assert direct["dismissed"] and unresolved["dismissed"]
+    assert db.dedup_existing_matches(state, "u") == 0
+
+
+def test_initial_fuzzy_cleanup_preserves_multiple_acted_unresolved_jobs():
+    state = st.empty_state()
+    applied = _dup_item("jr:applied", "https://jobright.ai/jobs/info/" + "a" * 24, applied=True)
+    saved = _dup_item("jr:saved", "https://jobright.ai/jobs/info/" + "b" * 24, saved=True)
+    state["matches"]["u"] = [applied, saved]
+    assert db.dedup_existing_matches(state, "u") == 0
+    assert not applied.get("dismissed") and not saved.get("dismissed")
+
+
+def test_repeated_url_cleanup_keeps_resume_key_but_upgrades_to_greenhouse():
+    state = st.empty_state()
+    state["_meta"]["crossdedup_done"] = ["u"]
+    wrapper = _dup_item("url:wrapper",
+                        "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224")
+    direct = _dup_item("url:direct", "https://boards.greenhouse.io/embed/job_app?token=8106224")
+    state["matches"]["u"] = [wrapper, direct]
+    assert db.dedup_existing_matches(state, "u", resume_shorts={db.short_key(wrapper['key'])}) == 1
+    assert not wrapper.get("dismissed")
+    assert wrapper["url"] == direct["url"]
+    assert direct["dismissed"] is True
+    assert db.dedup_existing_matches(state, "u") == 0
+
+
+def test_url_cleanup_uses_cached_jobright_destination():
+    state = st.empty_state()
+    state["_meta"]["crossdedup_done"] = ["u"]
+    old = _dup_item("jr:old", "https://jobright.ai/jobs/info/" + "a" * 24, applied=True)
+    direct = _dup_item("url:direct", GH_A, title="A rewritten title")
+    state["matches"]["u"] = [old, direct]
+    st.apply_url_put(state, old["key"], GH_A)
+    assert db.dedup_existing_matches(state, "u") == 1
+    assert old["url"] == GH_A
+    assert old["applied"] is True
+    assert direct["dismissed"] is True
+
+
+def test_a_hidden_duplicate_cannot_hide_the_only_visible_match():
+    state = st.empty_state()
+    hidden = _dup_item("url:hidden", GH_A, added="2026-06-10", dismissed=True)
+    visible = _dup_item("url:visible", GH_B, added="2026-06-12")
+    state["matches"]["u"] = [hidden, visible]
+    assert db.dedup_existing_matches(state, "u") == 0
+    assert not visible.get("dismissed")
+
+
+def test_duplicate_cleanup_syncs_convex_ticks_and_preserves_resume_key():
+    wrapper = _dup_item("url:wrapper",
+                        "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224")
+    direct = _dup_item("url:direct", "https://boards.greenhouse.io/embed/job_app?token=8106224")
+    state = st.empty_state()
+    state["_meta"]["crossdedup_done"] = ["u"]
+    state["matches"]["u"] = [wrapper, direct]
+    short = db.short_key(direct["key"])
+
+    class HostedStore:
+        def get_resume_urls(self, user):
+            return {db.short_key(wrapper["key"]): "https://test.convex.cloud/resume.pdf"}
+
+        def set_ticks(self, user, writes):
+            assert user == "u"
+            assert writes == [store.TickWrite(short, "dismissed", True)]
+            self.writes = writes
+            return []
+
+    hosted = HostedStore()
+    db.sync_user(state, "u", TERMS, NOW, "", "", interactive=False, store=hosted,
+                 ticks=store.TicksView(h_present={short}))
+    assert hosted.writes
+    assert wrapper["url"] == direct["url"]
+    assert not wrapper.get("dismissed")
+    assert direct["dismissed"]
 
 
 # --------------------------------------------- dashboard.main CLI (store-aware)

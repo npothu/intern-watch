@@ -23,12 +23,18 @@ from . import content_dedup, dashboard, ledger
 from . import prefs as prefs_mod
 from . import state as st
 from .adapters import make_adapter
-from .dedupe import dedupe
+from .dedupe import _merge_pair, dedupe
 from .envfile import load_dotenv
 from .filters import UserFilter, Verdict, load_users
 from .llm import api_key_env_for, classify
 from .models import Job, SourceConfig
-from .normalize import canonical_url, extract_jobright_id, norm_company
+from .normalize import (
+    apply_url_rank,
+    canonical_url,
+    extract_jobright_id,
+    norm_company,
+    preferred_apply_url,
+)
 from .notify import (
     build_digest,
     build_email,
@@ -254,14 +260,24 @@ def _drop_url_dupes(state: dict, name: str,
     different dedup_key (the jr:/url: namespace split). Runs after
     _resolve_employer_urls so a jobright job carries its real employer url.
     Jobs with no canonical url (unresolved jobright link) pass through to the
-    fuzzy content gate. Survivor within a batch: has-term > non-jobright >
-    arrival order. Fails open -- keeps the job when nothing joins."""
+    fuzzy content gate. Prefer the direct application link, then known term,
+    non-jobright source and arrival order. Existing deliveries keep their keys
+    and gain the better link without being delivered again."""
     survivors: dict[str, Job] = {}
     ordered = list(enumerate(accepted))
+    owned: dict[str, str] = {}
+    snapshots = [item for bucket in ("matches", "outbox")
+                 for item in state.get(bucket, {}).get(name, [])]
+    for item in sorted(snapshots, key=lambda item: bool(item.get("dismissed"))):
+        key = item.get("key", "")
+        url = st.apply_url_get(state, key) or item.get("url") or ""
+        canon = canonical_url(url)
+        if canon and key:
+            owned.setdefault(canon, key)
 
-    def rank(item: tuple[int, tuple[Job, list[str]]]) -> tuple[bool, bool, int]:
+    def rank(item: tuple[int, tuple[Job, list[str]]]) -> tuple[int, bool, bool, int]:
         idx, (job, _r) = item
-        return (bool(job.terms), not job.jobright_id, -idx)
+        return (apply_url_rank(job.url), bool(job.terms), not job.jobright_id, -idx)
 
     kept: list[tuple[Job, list[str]]] = []
     for _idx, (job, reasons) in sorted(ordered, key=rank, reverse=True):
@@ -272,7 +288,7 @@ def _drop_url_dupes(state: dict, name: str,
         # Within-batch: fold a later same-canon job into the batch survivor.
         winner = survivors.get(canon)
         if winner is not None:
-            winner.sources = sorted(set(winner.sources) | set(job.sources))
+            _merge_pair(winner, job)
             st.mark_notified(state, job.dedup_key, name)
             st.mark_dup_of(state, job.dedup_key, winner.dedup_key)
             log.info("user %s: url-dupe suppressed %s == %s (canon %s) "
@@ -280,12 +296,17 @@ def _drop_url_dupes(state: dict, name: str,
                      winner.dedup_key, canon)
             continue
         # Cross-run: a prior delivery this user already owns wins.
-        prior = st.url_index_get(state, canon)
+        prior = owned.get(canon) or st.url_index_get(state, canon)
         if (prior is not None and prior != job.dedup_key
                 and _owned_by_user(state, name, prior)):
             st.touch(state, prior, job.sources, today)
             st.mark_notified(state, job.dedup_key, name)
             st.mark_dup_of(state, job.dedup_key, prior)
+            for item in snapshots:
+                if item.get("key") == prior:
+                    item["url"] = preferred_apply_url(item.get("url") or "", job.url)
+            cached = st.apply_url_get(state, prior) or ""
+            st.apply_url_put(state, prior, preferred_apply_url(cached, job.url))
             log.info("user %s: url-dupe suppressed %s == %s (canon %s) "
                      "[layer=url-index]", name, job.dedup_key, prior, canon)
             continue

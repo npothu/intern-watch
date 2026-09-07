@@ -74,7 +74,9 @@ export const runIngest = internalAction({
         status: "extracting",
       });
 
-      const canonical = ingest.canonicalUrl || canonicalUrl(ingest.url);
+      // Older ingests stripped gh_jid, which can turn a posting into the
+      // company's entire careers page. Recover identity from the raw URL.
+      const canonical = canonicalUrl(ingest.url);
       // Fetch URL
       const html = await fetchWithLimits(canonical);
 
@@ -122,7 +124,7 @@ export const runIngest = internalAction({
 
       // Upsert into matches, jobDescription riding along when acquired.
       // (Built conditionally: an explicit `undefined` is not a Convex value.)
-      await ctx.runMutation(internal.ingest.upsertMatchInternal, {
+      const stored = await ctx.runMutation(internal.ingest.upsertMatchInternal, {
         user,
         short,
         item,
@@ -133,9 +135,9 @@ export const runIngest = internalAction({
       await ctx.runMutation(internal.ingest.patchIngestInternal, {
         ingestId,
         status: "done",
-        dedupKey,
-        short,
-        canonicalUrl: canonical,
+        dedupKey: stored.dedupKey,
+        short: stored.short,
+        canonicalUrl: canonicalUrl(stored.url),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -243,4 +243,4 @@ def test_workable_apply_suffix_doubling():
              title="Software Engineer Intern"),
     ]
     kept = _run(st.empty_state(), jobs, _StubResolver({}))
-    assert kept == ["url:wk"], kept
+    assert kept == ["url:wk-apply"], kept

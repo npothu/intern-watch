@@ -156,6 +156,7 @@ _UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 _GH_HOSTS = {"boards.greenhouse.io", "job-boards.greenhouse.io",
              "boards.eu.greenhouse.io", "job-boards.eu.greenhouse.io"}
+_GH_API_HOSTS = {"boards-api.greenhouse.io", "boards-api.eu.greenhouse.io"}
 _GH_PATH_ID_RE = re.compile(r"/jobs/(\d+)")
 _GH_CUSTOM_ID_RE = re.compile(r"/jobs/(\d{7,})-[\w-]+/?$")
 _LEVER_HOSTS = {"jobs.lever.co", "jobs.eu.lever.co"}
@@ -194,10 +195,14 @@ def canonical_url(url: str) -> str | None:
         return None
     path = _LOCALE_SEG_RE.sub("", parts.path).rstrip("/")
 
-    if host in _GH_HOSTS:
+    if host in _GH_HOSTS | _GH_API_HOSTS:
         m = _GH_PATH_ID_RE.search(path)
         if m:
             return f"ats:gh:{m.group(1)}"
+        if host in _GH_HOSTS and path == "/embed/job_app":
+            for k, v in parse_qsl(parts.query):
+                if k.lower() == "token" and v.isascii() and v.isdigit():
+                    return f"ats:gh:{v}"
     for k, v in parse_qsl(parts.query, keep_blank_values=True):
         if k.lower() == "gh_jid" and v.isdigit():
             return f"ats:gh:{v}"
@@ -242,6 +247,34 @@ def canonical_url(url: str) -> str | None:
 
     query = _sorted_kept_query(path, parts.query)
     return urlunsplit(("https", host, path, query, ""))
+
+
+def apply_url_rank(url: str) -> int:
+    """Prefer a hosted ATS application over its careers page or aggregator.
+
+    This ranks URLs only after their posting identity has been established.
+    It never guesses a destination from a company name or a similar title.
+    """
+    canon = canonical_url(url)
+    if canon is None:
+        return 0
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    path = parts.path.rstrip("/")
+    if host in _GH_API_HOSTS:
+        return 0  # a content API is not an application page
+    if (host in _GH_HOSTS | _LEVER_HOSTS
+            or host in {"jobs.ashbyhq.com", "apply.workable.com"}
+            or host.endswith(".myworkdayjobs.com")):
+        if path == "/embed/job_app" or path.endswith(("/apply", "/application")):
+            return 3
+        return 2
+    return 1
+
+
+def preferred_apply_url(*urls: str) -> str:
+    """Best observed application link; ties keep the existing URL."""
+    return max(urls, key=apply_url_rank, default="")
 
 
 _JR_ID_RE = re.compile(r"\bjr_id=([0-9a-f]{24})\b", re.I)
