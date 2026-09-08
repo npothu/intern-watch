@@ -30,6 +30,7 @@ interface LedgerRec {
   snapshot?: unknown;
   company?: unknown;
   title?: unknown;
+  term?: unknown;
   location?: unknown;
   url?: unknown;
   dueAt?: unknown;
@@ -139,6 +140,7 @@ export function buildTrackerRows(
       history,
       company,
       title,
+      term: asStrings(snap.term) || asStrings(rec.term) || byShort.get(short)?.term || "",
       location,
       url,
       resumeUrl: resumeUrls[short]?.url,

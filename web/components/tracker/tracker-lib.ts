@@ -66,6 +66,8 @@ export type TrackerRow = {
   history: HistoryEntry[];
   company: string;
   title: string;
+  /** Preserved for linked-job pickers after a match leaves the feed. */
+  term?: string;
   /** Carried for the tracker's search box; the row meta line does not show it. */
   location: string;
   url: string;

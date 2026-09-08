@@ -14,6 +14,7 @@ import {
   Mail as MailIcon,
   PanelRight as PanelRightIcon,
   Plus as PlusIcon,
+  Users as UsersIcon,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -46,6 +47,7 @@ import {
 import { ApplicationDrawer } from "@/components/tracker/drawer";
 import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
+import { ReferralLink } from "@/components/referrals/referral-link";
 import {
   GHOST_DAYS,
   LIVE_STATUSES,
@@ -507,6 +509,7 @@ function TrackerRowView({
 
       {/* Actions: resume link (built only), note, history. */}
       <div className="order-3 flex items-center gap-1 md:flex-wrap md:col-start-3 md:row-start-1">
+        <ReferralLink short={row.short} />
         {row.resumeUrl && (
           <a
             href={row.resumeUrl}
@@ -688,7 +691,7 @@ function EmptyState() {
   );
 }
 
-export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
+export function Tracker({ rows: initialRows, initialSelected }: { rows: TrackerRow[]; initialSelected?: string }) {
   const { show } = useAppView();
   const router = useRouter();
   const [rows, setRows] = useState(initialRows);
@@ -707,7 +710,7 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
   const [noteRow, setNoteRow] = useState<TrackerRow | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string>(ALL_STATUSES);
-  const [focused, setFocused] = useState<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(initialSelected ?? null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const q = query.trim().toLowerCase();
@@ -747,6 +750,12 @@ export function Tracker({ rows: initialRows }: { rows: TrackerRow[] }) {
   );
 
   const paletteActions: PaletteAction[] = [
+    {
+      id: "referrals",
+      label: "Go to Referrals",
+      icon: <UsersIcon className="size-4" />,
+      run: () => router.push("/referrals"),
+    },
     {
       id: "matches",
       label: "Go to Matches",

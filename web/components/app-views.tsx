@@ -29,7 +29,7 @@ export function AppViews({
   /** Terms the preferences want today; null when unknown (nothing hidden). */
   wantedTerms: string[] | null;
 }) {
-  const { view, filter } = useAppView();
+  const { view, filter, job } = useAppView();
 
   if (view === "tracker") {
     // No heading here - Tracker's own first row now opens with the view
@@ -37,10 +37,10 @@ export function AppViews({
     // active cell it sits beside.
     return (
       <div className="mx-auto w-full max-w-[1060px] px-5 py-5">
-        <Tracker rows={applications} />
+        <Tracker key={job ?? "tracker"} rows={applications} initialSelected={job} />
       </div>
     );
   }
 
-  return <Triage rows={matches} initialFilter={filter} wantedTerms={wantedTerms} />;
+  return <Triage key={job ?? "matches"} rows={matches} initialSelected={job} initialFilter={filter} wantedTerms={wantedTerms} />;
 }

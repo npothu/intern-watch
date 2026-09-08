@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { LayoutList, ListChecks, Mail, type LucideIcon } from "lucide-react";
+import { LayoutList, ListChecks, Mail, Users, type LucideIcon } from "lucide-react";
 
 /**
  * Which of the app's top-level surfaces is on screen.
@@ -23,15 +23,14 @@ import { LayoutList, ListChecks, Mail, type LucideIcon } from "lucide-react";
  * URL still names the view and stays directly linkable. `/tracker` is kept
  * alive as an entry point by a redirect in next.config.ts.
  *
- * Inbox is a genuine third surface, but a real route rather than a search
- * param - its own page does real data fetching next.config.ts doesn't need to
- * fake. `ViewId` is the union of everything that earns a cell in the view
+ * Inbox and Referrals use separate routes and fetch their own data.
+ * `ViewId` is the union of everything that earns a cell in the view
  * switch (components/nav/view-switch.tsx); `AppView` stays the narrower
  * matches/tracker pair that `/` itself switches between.
  */
 
 export type AppView = "matches" | "tracker";
-export type ViewId = AppView | "inbox";
+export type ViewId = AppView | "inbox" | "referrals";
 
 const VIEW_PARAM = "view";
 const FILTER_PARAM = "filter";
@@ -42,6 +41,7 @@ const APP_PATH = "/";
 /** The canonical, directly-linkable URL for a view. */
 export function viewHref(view: ViewId, filter?: string): string {
   if (view === "inbox") return "/inbox";
+  if (view === "referrals") return "/referrals";
   const params = new URLSearchParams();
   if (view === "tracker") params.set(VIEW_PARAM, "tracker");
   if (filter) params.set(FILTER_PARAM, filter);
@@ -49,9 +49,7 @@ export function viewHref(view: ViewId, filter?: string): string {
   return query ? `${APP_PATH}?${query}` : APP_PATH;
 }
 
-/** One row of the view registry - enough to render a switch cell or a dock
- *  entry without either hardcoding the view list, so a fourth view is a
- *  one-line addition here. */
+/** One row in the shared navigation registry. */
 export type ViewEntry = {
   id: ViewId;
   label: string;
@@ -66,6 +64,7 @@ export const VIEWS: ViewEntry[] = [
   { id: "matches", label: "Matches", icon: LayoutList, href: viewHref("matches") },
   { id: "tracker", label: "Tracker", icon: ListChecks, href: viewHref("tracker") },
   { id: "inbox", label: "Inbox", icon: Mail, href: viewHref("inbox") },
+  { id: "referrals", label: "Referrals", icon: Users, href: viewHref("referrals") },
 ];
 
 /** Cycle order for the `t` shortcut (components/nav/view-cycle.tsx). */
@@ -81,6 +80,7 @@ export function nextViewId(current: ViewId | null): ViewId {
 
 export type AppViewState = {
   view: AppView;
+  job: string | undefined;
   /** The matches filter a deep link asked for (`?filter=hidden`), if any. */
   filter: string | undefined;
   /** Show a view, optionally opening matches on a filter. */
@@ -110,5 +110,5 @@ export function useAppView(): AppViewState {
     [pathname, router]
   );
 
-  return { view, filter, show };
+  return { view, filter, show, job: params.get("job") ?? undefined };
 }
