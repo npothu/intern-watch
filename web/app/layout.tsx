@@ -32,18 +32,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <ClerkProvider
             appearance={{
               variables: {
-                colorPrimary: "var(--accent)",
-                colorPrimaryForeground: "var(--accent-ink)",
+                colorPrimary: "#33604a",
+                colorPrimaryForeground: "#f2f8f4",
                 colorBackground: "var(--surface)",
                 colorForeground: "var(--ink)",
                 colorMutedForeground: "var(--ink-2)",
-                colorNeutral: "var(--ink)",
+                colorNeutral: "#6b6557",
                 colorMuted: "var(--chip)",
                 colorInput: "var(--bg)",
                 colorInputForeground: "var(--ink)",
                 colorBorder: "var(--line-2)",
                 colorRing: "var(--accent)",
-                colorDanger: "var(--red)",
+                colorDanger: "#a8402f",
                 fontFamily: '"Switzer", system-ui, sans-serif',
                 borderRadius: "6px",
               },
