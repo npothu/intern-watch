@@ -2,8 +2,13 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { verifyState } from "./oauth_state";
+import { upload, preflight } from "./uploads";
+import { download } from "./resume_files";
 
 const http = httpRouter();
+http.route({ path: "/resume/file", method: "GET", handler: download });
+http.route({ path: "/profile/import/upload", method: "POST", handler: upload });
+http.route({ path: "/profile/import/upload", method: "OPTIONS", handler: preflight });
 
 // Gmail push delivery (Pub/Sub push subscription).
 //

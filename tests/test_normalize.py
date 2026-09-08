@@ -1,8 +1,11 @@
 import datetime as dt
+import json
+from pathlib import Path
 
 import pytest
 
 from src.normalize import (
+    apply_url_rank,
     canonical_url,
     extract_jobright_id,
     infer_terms,
@@ -15,6 +18,13 @@ from src.normalize import (
 )
 
 TODAY = dt.date(2026, 6, 11)
+
+
+@pytest.mark.parametrize("case", json.loads(
+    (Path(__file__).parents[1] / "shared" / "job-url-cases.json").read_text()))
+def test_url_identities_agree_with_manual_ingest(case):
+    assert canonical_url(case["url"]) == case["identity"]
+    assert apply_url_rank(case["url"]) == case["rank"]
 
 
 @pytest.mark.parametrize("title,terms,conf", [
@@ -115,6 +125,25 @@ def test_canonical_url_greenhouse_host_variants_collapse():
     a = canonical_url("https://boards.greenhouse.io/cloudflare/jobs/8052785")
     b = canonical_url("https://job-boards.greenhouse.io/cloudflare/jobs/8052785")
     assert a == b == "ats:gh:8052785"
+
+
+@pytest.mark.parametrize("url", [
+    "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224",
+    "https://boards.greenhouse.io/embed/job_app?token=8106224",
+    "https://job-boards.greenhouse.io/embed/job_app?for=dropbox&token=8106224",
+    "https://boards-api.greenhouse.io/v1/boards/dropbox/jobs/8106224",
+])
+def test_canonical_url_greenhouse_embedded_application(url):
+    assert canonical_url(url) == "ats:gh:8106224"
+
+
+@pytest.mark.parametrize("url", [
+    "https://unrelated.example/embed/job_app?token=8106224",
+    "https://boards.greenhouse.io/embed/job_app?token=not-a-job-id",
+    "https://boards.greenhouse.io/other?token=8106224",
+])
+def test_greenhouse_id_detection_does_not_merge_unrelated_urls(url):
+    assert canonical_url(url) != "ats:gh:8106224"
 
 
 def test_canonical_url_gh_jid_path_variants_collapse():

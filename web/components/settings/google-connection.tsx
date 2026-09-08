@@ -1,3 +1,4 @@
+import { DisconnectGmail } from "./disconnect-gmail";
 import Link from "next/link";
 import { CheckCircle2, Mail, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -108,6 +109,8 @@ export function GoogleConnection({
               </p>
             </div>
           )}
+
+          {currentEmail && <DisconnectGmail />}
 
           <div className="flex items-start gap-2 border-t border-line pt-4 text-[11.5px] leading-relaxed text-ink-2">
             <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0 text-accent" />

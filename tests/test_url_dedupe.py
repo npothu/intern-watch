@@ -1,11 +1,54 @@
 import datetime as dt
 
+import pytest
+
 from src import main
 from src import state as st
 from src.models import Job
 
 TODAY = dt.date(2026, 8, 1)
 LEVER = "https://jobs.lever.co/acme/bdcfb29f-4f27-42de-933f-7f83a359b9f0"
+DROPBOX = "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224"
+GREENHOUSE = "https://boards.greenhouse.io/embed/job_app?token=8106224"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_dropbox_prefers_inner_application_url_and_keeps_richer_metadata(reverse):
+    wrapper = _job("url:dropbox", DROPBOX, terms=["Summer 2027"])
+    wrapper.jd_url = "https://boards-api.greenhouse.io/v1/boards/dropbox/jobs/8106224"
+    direct = _job("url:greenhouse", GREENHOUSE, source="vanshb03-2027")
+    jobs = [wrapper, direct]
+    if reverse:
+        jobs.reverse()
+    kept = main._drop_url_dupes(st.empty_state(), "u", _accepted(*jobs),
+                                ["Summer 2027"], TODAY)
+    assert len(kept) == 1
+    survivor = kept[0][0]
+    assert survivor.url == GREENHOUSE
+    assert survivor.terms == ["Summer 2027"]
+    assert survivor.jd_url == wrapper.jd_url
+
+
+def test_cross_run_upgrades_prior_link_without_renotifying_or_rekeying():
+    s = st.empty_state()
+    prior = {"key": "url:dropbox", "url": DROPBOX, "applied": True, "resume": "old.docx"}
+    s["matches"]["u"] = [prior]
+    s["outbox"]["u"] = [dict(prior)]
+    st.url_index_put(s, "ats:gh:8106224", prior["key"])
+    direct = _job("url:greenhouse", GREENHOUSE)
+    assert main._drop_url_dupes(s, "u", _accepted(direct), [], TODAY) == []
+    assert prior == {"key": "url:dropbox", "url": GREENHOUSE,
+                     "applied": True, "resume": "old.docx"}
+    assert s["outbox"]["u"][0]["url"] == GREENHOUSE
+
+
+def test_user_owned_match_wins_even_when_global_index_points_to_another_users_key():
+    s = st.empty_state()
+    st.url_index_put(s, "ats:gh:8106224", "url:other-user")
+    s["matches"]["u"] = [{"key": "url:dropbox", "url": DROPBOX}]
+    direct = _job("url:greenhouse", GREENHOUSE)
+    assert main._drop_url_dupes(s, "u", _accepted(direct), [], TODAY) == []
+    assert s["jobs"][direct.dedup_key]["dup_of"] == "url:dropbox"
 
 
 def _job(key, url, source="ats-boards", jobright_id=None, terms=None):

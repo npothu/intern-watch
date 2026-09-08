@@ -3,7 +3,7 @@ import { internalMutation, internalQuery, mutation, query } from "./_generated/s
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { canonicalUrl, validateUrl } from "./ingest_extract";
+import { canonicalUrl, postingIdentity, preferredApplyUrl, validateUrl } from "./ingest_extract";
 
 // Re-export pure helpers for tests (canonicalUrl/validateUrl already in ingest_extract)
 export { canonicalUrl, validateUrl } from "./ingest_extract";
@@ -132,6 +132,7 @@ export const requestIngest = mutation({
     // Validate and canonicalize
     validateUrl(url);
     const canonical = canonicalUrl(url);
+    const identity = postingIdentity(url) ?? canonical;
     const { dedupKey, short } = dedupInfoForUrl(canonical, url);
 
     // Rate limit before duplicate check so duplicates don't bypass it? Check after validation.
@@ -151,7 +152,8 @@ export const requestIngest = mutation({
       .collect();
     const stale: Id<"manualIngests">[] = [];
     for (const row of existingManual) {
-      const sameJob = row.canonicalUrl === canonical || row.short === short;
+      const sameJob = (postingIdentity(row.url) ?? canonicalUrl(row.url)) === identity
+        || row.short === short;
       if (!sameJob || row.status === "failed") continue;
 
       // An in-flight ingest always blocks: it has no match yet by definition,
@@ -165,6 +167,9 @@ export const requestIngest = mutation({
         .withIndex("by_user_short", (q: any) => q.eq("user", user).eq("short", row.short))
         .first();
       if (match) {
+        await ctx.db.patch(match._id, {
+          item: { ...match.item, url: preferredApplyUrl(match.item?.url ?? "", canonical) },
+        });
         return { status: "already_exists" as const, short: row.short, ingestId: row._id };
       }
       stale.push(row._id);
@@ -180,6 +185,9 @@ export const requestIngest = mutation({
       .collect();
     for (const m of matches) {
       if (m.short === short) {
+        await ctx.db.patch(m._id, {
+          item: { ...m.item, url: preferredApplyUrl(m.item?.url ?? "", canonical) },
+        });
         // Create an already_exists ingest record for traceability, unless one already exists
         const now = Date.now();
         const id = await ctx.db.insert("manualIngests", {
@@ -196,8 +204,11 @@ export const requestIngest = mutation({
       }
       const itemUrl = m.item?.url as string | undefined;
       if (itemUrl) {
-        const itemCanon = canonicalUrl(itemUrl);
-        if (itemCanon === canonical) {
+        const itemIdentity = postingIdentity(itemUrl) ?? canonicalUrl(itemUrl);
+        if (itemIdentity === identity) {
+          await ctx.db.patch(m._id, {
+            item: { ...m.item, url: preferredApplyUrl(itemUrl, canonical) },
+          });
           const now = Date.now();
           const id = await ctx.db.insert("manualIngests", {
             user,
@@ -282,10 +293,23 @@ export const upsertMatchInternal = internalMutation({
     jobDescription: v.optional(v.string()),
   },
   handler: async (ctx, { user, short, item, jobDescription }) => {
-    const existing = await ctx.db
+    let existing = await ctx.db
       .query("matches")
       .withIndex("by_user_short", (q: any) => q.eq("user", user).eq("short", short))
       .first();
+    // The watcher or another manual fetch can finish after requestIngest's
+    // initial check. Recheck at the atomic write, preserving the existing key.
+    if (!existing && typeof item.url === "string") {
+      const identity = postingIdentity(item.url) ?? canonicalUrl(item.url);
+      const matches = await ctx.db.query("matches")
+        .withIndex("by_user", (q) => q.eq("user", user)).collect();
+      existing = matches.find((m) => typeof m.item?.url === "string"
+        && (postingIdentity(m.item.url) ?? canonicalUrl(m.item.url)) === identity) ?? null;
+    }
+    if (existing) {
+      short = existing.short;
+      item = { ...existing.item, url: preferredApplyUrl(existing.item?.url ?? "", item.url ?? "") };
+    }
     const row: WithoutSystemFields<Doc<"matches">> = { user, short, item, pushedAt: Date.now() };
     // A freshly acquired JD wins over an older auto-acquired one, but a
     // user-pasted override (which also stamps jobDescriptionUpdatedAt via
@@ -298,5 +322,6 @@ export const upsertMatchInternal = internalMutation({
     } else {
       await ctx.db.insert("matches", row);
     }
+    return { short, dedupKey: item.key as string, url: item.url as string };
   },
 });

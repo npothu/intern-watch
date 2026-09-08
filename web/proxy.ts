@@ -22,6 +22,7 @@ const browserMiddleware = clerkMiddleware(async (auth, req) => {
 });
 
 export default function proxy(request: NextRequest, event: NextFetchEvent) {
+  if (request.nextUrl.pathname.startsWith("/api/resume/files/") && request.headers.has("Authorization")) return NextResponse.next();
   // The versioned script API authenticates its own bearer key and must never
   // redirect scripts to Clerk or require Clerk to be configured.
   if (request.nextUrl.pathname === "/api/v1" || request.nextUrl.pathname.startsWith("/api/v1/")) return NextResponse.next();

@@ -3,6 +3,7 @@ import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { applyStatus, removeIfUnprogressed } from "./ledger";
+import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
 
 // Query/mutation functions backing the ConvexStore TrackerStore driver
 // (src/store.py). Every endpoint - reads and writes - checks the secret
@@ -86,15 +87,18 @@ export const setTicks = mutation({
           updatedAt: Date.now(),
         });
       } else {
-        // A fresh row starts all-false then sets the toggled field, so a
-        // short that only ever had one flag ticked still exists as a row
-        // (row presence is what the driver reads back as "*_present").
+        // Creating the first tick row must preserve flags already visible
+        // from the snapshot. Otherwise hiding a duplicate would also clear
+        // its applied/saved state, since ticks override the snapshot.
+        const match = await ctx.db.query("matches")
+          .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", w.short))
+          .first();
         await ctx.db.insert("ticks", {
           user,
           short: w.short,
-          applied: false,
-          saved: false,
-          dismissed: false,
+          applied: match?.item?.applied === true,
+          saved: match?.item?.saved === true,
+          dismissed: match?.item?.dismissed === true,
           [w.field]: w.value,
           updatedAt: Date.now(),
         });
@@ -217,6 +221,11 @@ export const pushMatches = mutation({
           q.eq("user", user).eq("short", short),
         )
         .first();
+      if (existing?.item?.url && item.url
+          && postingIdentity(existing.item.url)
+          && postingIdentity(existing.item.url) === postingIdentity(item.url)) {
+        item.url = preferredApplyUrl(existing.item.url, item.url);
+      }
       const row: WithoutSystemFields<Doc<"matches">> = { user, short, item, pushedAt: Date.now() };
       if (jd && !existing?.jobDescription) {
         row.jobDescription = jd;

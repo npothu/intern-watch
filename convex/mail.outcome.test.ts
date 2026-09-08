@@ -219,8 +219,10 @@ test("a follow-up in the same thread updates the pending action, not duplicates 
     from: "no-reply@acme.com", subject: "Update",
     date: "Wed, 5 Aug 2026 14:03:00 -0400", messageId: "<m1@x>",
   };
+  await seedAccount(t);
+  const accountId = (await t.run(ctx => ctx.db.query("mailAccounts").first()))!._id;
   const base = {
-    user: "u1", threadId: "th-1", headers, accountEmail: "me@gmail.com",
+    accountId, user: "u1", threadId: "th-1", headers, accountEmail: "me@gmail.com",
     classification: { signal: "oa", evidence: "online assessment", source: "regex" },
     candidates: [],
   };
@@ -242,8 +244,10 @@ test("backward/from-terminal transitions queue for a human", async () => {
   await seedApp(t, "aaaaaaaaaaaa", "offer", {
     company: "Acme", title: "SWE Intern", url: "https://careers.acme.com/jobs/1",
   });
+  await seedAccount(t);
+  const accountId = (await t.run(ctx => ctx.db.query("mailAccounts").first()))!._id;
   await t.mutation(internal.mail.recordOutcome, {
-    user: "u1", gmailMessageId: "gm1", threadId: "th-1",
+    accountId, user: "u1", gmailMessageId: "gm1", threadId: "th-1",
     headers: { from: "no-reply@acme.com", subject: "Update", date: "", messageId: "" },
     accountEmail: "me@gmail.com",
     classification: { signal: "rejected", evidence: "decided not to move forward", source: "regex" },
@@ -262,8 +266,10 @@ test("same-status signal is recorded as ignored, no action and no history spam",
   await seedApp(t, "aaaaaaaaaaaa", "rejected", {
     company: "Acme", title: "SWE Intern", url: "https://careers.acme.com/jobs/1",
   });
+  await seedAccount(t);
+  const accountId = (await t.run(ctx => ctx.db.query("mailAccounts").first()))!._id;
   await t.mutation(internal.mail.recordOutcome, {
-    user: "u1", gmailMessageId: "gm1", threadId: "th-1",
+    accountId, user: "u1", gmailMessageId: "gm1", threadId: "th-1",
     headers: { from: "no-reply@acme.com", subject: "Update", date: "", messageId: "" },
     accountEmail: "me@gmail.com",
     classification: { signal: "rejected", evidence: "decided not to move forward", source: "regex" },

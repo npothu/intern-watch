@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { resolveTrackerUser } from "@/lib/user";
 import {
   putCredential,
+  disconnectMailAccount,
   testCredential as runCredentialTest,
   deleteCredential,
   setResumeLlm,
@@ -102,5 +103,18 @@ export async function removeCredential(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message || "Couldn't remove the credential." };
+  }
+}
+
+export async function disconnectGmail(): Promise<CredentialResult> {
+  const user = await requireUser();
+  if (!user) return notSignedIn();
+  try {
+    await disconnectMailAccount(user);
+    revalidatePath("/settings/connections");
+    revalidatePath("/settings/connections/google");
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Could not disconnect Gmail. Please retry." };
   }
 }

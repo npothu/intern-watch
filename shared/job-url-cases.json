@@ -1,0 +1,22 @@
+[
+  {"url": "https://jobs.dropbox.com/listing/8106224?gh_jid=8106224", "identity": "ats:gh:8106224", "rank": 1},
+  {"url": "https://boards.greenhouse.io/embed/job_app?token=8106224", "identity": "ats:gh:8106224", "rank": 3},
+  {"url": "https://job-boards.eu.greenhouse.io/embed/job_app?for=dropbox&token=8106224&utm_source=x", "identity": "ats:gh:8106224", "rank": 3},
+  {"url": "https://boards.greenhouse.io/dropbox/jobs/8106224", "identity": "ats:gh:8106224", "rank": 2},
+  {"url": "https://boards-api.greenhouse.io/v1/boards/dropbox/jobs/8106224", "identity": "ats:gh:8106224", "rank": 0},
+  {"url": "https://careers.appian.com/jobs/8041237-software-engineering-intern", "identity": "ats:gh:8041237", "rank": 1},
+  {"url": "https://unrelated.example/embed/job_app?token=8106224", "identity": "https://unrelated.example/embed/job_app?token=8106224", "rank": 1},
+  {"url": "https://boards.greenhouse.io/embed/job_app?token=abc", "identity": "https://boards.greenhouse.io/embed/job_app?token=abc", "rank": 3},
+  {"url": "https://jobs.lever.co/acme/bdcfb29f-4f27-42de-933f-7f83a359b9f0", "identity": "ats:lever:acme:bdcfb29f-4f27-42de-933f-7f83a359b9f0", "rank": 2},
+  {"url": "https://jobs.lever.co/acme/bdcfb29f-4f27-42de-933f-7f83a359b9f0/apply", "identity": "ats:lever:acme:bdcfb29f-4f27-42de-933f-7f83a359b9f0", "rank": 3},
+  {"url": "https://jobs.ashbyhq.com/acme/12345678-1234-1234-1234-123456789abc/application", "identity": "ats:ashby:12345678-1234-1234-1234-123456789abc", "rank": 3},
+  {"url": "https://acme.com/jobs?ashby_jid=12345678-1234-1234-1234-123456789abc", "identity": "ats:ashby:12345678-1234-1234-1234-123456789abc", "rank": 1},
+  {"url": "https://acme.wd1.myworkdayjobs.com/en-US/EXTERNAL_CAREERS/job/City/Engineer_JR202612345", "identity": "ats:wd:acme:JR202612345", "rank": 2},
+  {"url": "https://acme.wd1.myworkdayjobs.com/INTERN/details/Engineer_JR202612345", "identity": "ats:wd:acme:JR202612345", "rank": 2},
+  {"url": "https://apply.workable.com/acme/j/ABC123/apply", "identity": "ats:workable:acme:ABC123", "rank": 3},
+  {"url": "https://www.amazon.jobs/en/jobs/10412530/intern", "identity": "ats:amazon:10412530", "rank": 1},
+  {"url": "http://www.acme.com/en-US/jobs/1/?b=2&a=1&utm_source=x#apply", "identity": "https://acme.com/jobs/1?b=2", "rank": 1},
+  {"url": "https://jobright.ai/jobs/info/6a4298496faf756060967309", "identity": null, "rank": 0},
+  {"url": "mailto:jobs@example.com", "identity": null, "rank": 0},
+  {"url": "", "identity": null, "rank": 0}
+]

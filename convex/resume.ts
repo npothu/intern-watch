@@ -284,7 +284,7 @@ export const generateProfileImportUploadUrl = mutation({
   args: { user: v.string(), secret: v.string() },
   handler: async (ctx, { secret }) => {
     checkSecret(secret);
-    return await ctx.storage.generateUploadUrl();
+    throw new Error("This upload flow has expired. Reload the app and upload again.");
   },
 });
 
@@ -309,17 +309,8 @@ async function deleteImportBlob(
 }
 
 // ---------------------------------------------------------------------------
-// Public mutation: claim an uploaded resume for import. The storage id is the
-// receipt Convex storage handed the browser for its direct upload - claim time
-// is the one moment the client gets to name it. It is recorded HERE, under the
-// signed-in user, and the mapping action and every deletion read it back from
-// this row only. A hostile client's remaining move is therefore to claim a
-// GUESSED id: Convex storage ids are opaque and unguessable, which reduces the
-// exposure from "enumerate and destroy other users' files via the import
-// endpoint" to "guess a random token".
-// Schedules resume_node.runProfileImport - same schedule-then-poll contract as
-// requestBuild, so the caller returns before any model call starts.
-// ---------------------------------------------------------------------------
+// Claim only a completed upload whose owner was recorded by uploads.upload.
+// A storage ID is an identifier, never authorization to read or delete a file.
 export const claimProfileImportUpload = mutation({
   args: {
     user: v.string(),
@@ -330,6 +321,13 @@ export const claimProfileImportUpload = mutation({
   },
   handler: async (ctx, { user, storageId, filename, contentType, secret }) => {
     checkSecret(secret);
+    const upload = await ctx.db.query("profileUploads")
+      .withIndex("by_storage", (q) => q.eq("storageId", storageId)).unique();
+    if (!upload || upload.user !== user || upload.state !== "uploaded" || upload.expiresAt <= Date.now()) {
+      throw new Error("not found");
+    }
+    // Ownership was recorded by the upload endpoint, never by the claimant.
+    await ctx.db.delete(upload._id);
     // A re-upload abandons the previous claim, and its blob goes with it.
     const existing = await ctx.db
       .query("profileImports")
