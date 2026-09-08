@@ -7,8 +7,8 @@ import { MOTION_PREFERENCE_INIT_SCRIPT } from "@/lib/motion-preference";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "intern-watch",
-  description: "Internship triage for intern-watch",
+  title: "Internbaddie",
+  description: "Your private internship tracker",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -29,7 +29,28 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{ __html: MOTION_PREFERENCE_INIT_SCRIPT }}
         />
         <ThemeProvider>
-          <ClerkProvider>{children}</ClerkProvider>
+          <ClerkProvider
+            appearance={{
+              variables: {
+                colorPrimary: "var(--accent)",
+                colorPrimaryForeground: "var(--accent-ink)",
+                colorBackground: "var(--surface)",
+                colorForeground: "var(--ink)",
+                colorMutedForeground: "var(--ink-2)",
+                colorNeutral: "var(--ink)",
+                colorMuted: "var(--chip)",
+                colorInput: "var(--bg)",
+                colorInputForeground: "var(--ink)",
+                colorBorder: "var(--line-2)",
+                colorRing: "var(--accent)",
+                colorDanger: "var(--red)",
+                fontFamily: '"Switzer", system-ui, sans-serif',
+                borderRadius: "6px",
+              },
+            }}
+          >
+            {children}
+          </ClerkProvider>
           <Toaster />
         </ThemeProvider>
       </body>
