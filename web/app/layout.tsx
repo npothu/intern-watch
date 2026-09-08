@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ClerkProvider } from "@clerk/nextjs";
+import { ClerkThemeProvider } from "@/components/clerk-theme-provider";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -7,8 +7,8 @@ import { MOTION_PREFERENCE_INIT_SCRIPT } from "@/lib/motion-preference";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "intern-watch",
-  description: "Internship triage for intern-watch",
+  title: "Internbaddie",
+  description: "Your private internship tracker",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -29,7 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{ __html: MOTION_PREFERENCE_INIT_SCRIPT }}
         />
         <ThemeProvider>
-          <ClerkProvider>{children}</ClerkProvider>
+          <ClerkThemeProvider>{children}</ClerkThemeProvider>
           <Toaster />
         </ThemeProvider>
       </body>
