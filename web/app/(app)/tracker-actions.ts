@@ -1,11 +1,20 @@
 "use server";
 
 import { resolveTrackerUser } from "@/lib/user";
-import { recordStatus, setDueAt, setSnooze } from "@/lib/convex";
+import {
+  createManualApplication,
+  recordStatus,
+  setDueAt,
+  setSnooze,
+  type CreateManualApplicationRequest,
+} from "@/lib/convex";
 import {
   isTrackerStatus,
   STATUS_ORDER,
 } from "@/components/tracker/tracker-lib";
+import {
+  manualApplicationRequestError,
+} from "../../../shared/applications";
 
 /**
  * Server action backing the tracker's status select and note field.
@@ -22,6 +31,33 @@ export type UpdateStatusResult =
   | { ok: false; error: string };
 
 const SHORT_RE = /^[0-9a-f]{12}$/i;
+
+export type CreateApplicationResult =
+  | { ok: true; short: string; status: string; created: boolean }
+  | { ok: false; error: string };
+
+export async function createApplication(
+  request: CreateManualApplicationRequest,
+): Promise<CreateApplicationResult> {
+  const validationError = manualApplicationRequestError(request);
+  if (validationError) return { ok: false, error: validationError };
+  const user = await resolveTrackerUser();
+  if (!user) {
+    return {
+      ok: false,
+      error: "Not signed in, or this account isn't provisioned.",
+    };
+  }
+  try {
+    const result = await createManualApplication(user, request);
+    return { ok: true, ...result };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || "Couldn't add the application.",
+    };
+  }
+}
 
 export async function updateStatus(
   short: string,

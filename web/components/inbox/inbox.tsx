@@ -11,7 +11,14 @@ import { Mail, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { resolveAction } from "@/app/(app)/inbox/inbox-actions";
-import type { InboxAction, MailHealth } from "@/lib/convex";
+import type {
+  ApplicationOption,
+  CreateManualApplicationRequest,
+  InboxAction,
+  MailHealth,
+} from "@/lib/convex";
+import { ApplicationPicker } from "@/components/applications/application-picker";
+import { CreateApplicationDialog } from "@/components/applications/create-application-dialog";
 import { decisiveCandidate } from "../../../convex/classify";
 import {
   STATUS_LABELS,
@@ -29,8 +36,6 @@ import {
 
 const COLLAPSE_MS = 340; // collapse duration + a frame, matching triage HIDE_MS
 const CASCADE_CAP = 12;
-
-const NONE = "__none__";
 
 /* Signal chips reuse the tracker's status tones so "rejected" reads red in
  * both places. */
@@ -71,14 +76,20 @@ function ActionRow({
   action,
   index,
   leaving,
+  applications,
+  busy,
   onResolve,
+  onCreate,
   onDismiss,
 }: {
   action: InboxAction;
   index: number;
   leaving: boolean;
-  onResolve: (short: string | null, status: string) => void;
-  onDismiss: () => void;
+  applications: ApplicationOption[];
+  busy: boolean;
+  onResolve: (short: string, status: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  onCreate: (request: CreateManualApplicationRequest) => Promise<{ ok: true } | { ok: false; error: string }>;
+  onDismiss: () => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const candidates = useMemo(
     () => [...action.candidates].sort((a, b) => b.score - a.score),
@@ -89,7 +100,8 @@ function ActionRow({
   const [status, setStatus] = useState<string>(
     isTrackerStatus(action.signal) ? action.signal : "applied",
   );
-  const noMatch = short === NONE;
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createCompany, setCreateCompany] = useState("");
 
   return (
     /* Grid-row collapse (triage 1g): the outer grid animates 1fr -> 0fr while
@@ -145,25 +157,21 @@ function ActionRow({
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <Select value={short} onValueChange={setShort}>
-              <SelectTrigger aria-label="Application" className="h-7 max-w-[280px] rounded-full border border-line-2 bg-surface px-3 text-[12px] text-ink">
-                <SelectValue placeholder="Choose application" />
-              </SelectTrigger>
-              <SelectContent>
-                {candidates.map((c) => (
-                  <SelectItem key={c.short} value={c.short}>
-                    {c.company} - {c.title}
-                  </SelectItem>
-                ))}
-                <SelectItem value={NONE}>none of these</SelectItem>
-              </SelectContent>
-            </Select>
+            <ApplicationPicker
+              applications={applications}
+              suggestedShorts={candidates.map((candidate) => candidate.short)}
+              value={short}
+              onChange={setShort}
+              onCreate={(company) => {
+                setCreateCompany(company);
+                setCreateOpen(true);
+              }}
+              disabled={busy}
+            />
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger
-                className={cn(
-                  "h-7 w-[128px] rounded-full border border-line-2 bg-surface px-3 text-[12px] font-medium",
-                  noMatch && "pointer-events-none opacity-40",
-                )}
+                disabled={busy}
+                className="h-7 w-[128px] rounded-full border border-line-2 bg-surface px-3 text-[12px] font-medium"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -177,22 +185,28 @@ function ActionRow({
             </Select>
             <button
               type="button"
-              onClick={() => (noMatch ? onDismiss() : onResolve(short, status))}
-              disabled={!short}
+              onClick={() => onResolve(short, status)}
+              disabled={!short || busy}
               className="inline-flex h-7 items-center rounded-full bg-accent px-3.5 text-[12px] font-medium text-accent-ink transition-[filter,transform] hover:brightness-105 active:scale-95 disabled:opacity-40"
             >
-              {noMatch ? "Dismiss" : "Resolve"}
+              {busy ? "Saving..." : "Resolve"}
             </button>
-            {!noMatch && (
-              <button
-                type="button"
-                onClick={onDismiss}
-                className="inline-flex h-7 items-center rounded-full px-3 text-[12px] font-medium text-ink-2 transition-colors hover:bg-chip hover:text-ink"
-              >
-                Dismiss
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onDismiss}
+              disabled={busy}
+              className="inline-flex h-7 items-center rounded-full px-3 text-[12px] font-medium text-ink-2 transition-colors hover:bg-chip hover:text-ink disabled:opacity-40"
+            >
+              Dismiss
+            </button>
           </div>
+          <CreateApplicationDialog
+            open={createOpen}
+            onOpenChange={setCreateOpen}
+            initialCompany={createCompany}
+            initialStatus={status}
+            onSubmit={onCreate}
+          />
         </div>
       </div>
     </div>
@@ -201,14 +215,17 @@ function ActionRow({
 
 export function Inbox({
   initialActions,
+  applications,
   health,
 }: {
   initialActions: InboxAction[];
+  applications: ApplicationOption[];
   health: MailHealth | null;
 }) {
   const router = useRouter();
   const [actions, setActions] = useState(initialActions);
   const [leaving, setLeaving] = useState<Set<string>>(new Set());
+  const [committing, setCommitting] = useState<Set<string>>(new Set());
 
   function depart(id: string) {
     setLeaving((prev) => new Set(prev).add(id));
@@ -226,21 +243,28 @@ export function Inbox({
 
   async function commit(
     action: InboxAction,
-    opts: { short?: string; status?: string; dismiss?: boolean },
+    opts: {
+      short?: string;
+      status?: string;
+      dismiss?: boolean;
+      newApplication?: CreateManualApplicationRequest;
+    },
     label: string,
-  ) {
-    depart(action.id);
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    setCommitting((previous) => new Set(previous).add(action.id));
     const res = await resolveAction(action.id, opts);
     if (res.ok) {
       toast.success(label);
+      depart(action.id);
     } else {
-      // Rollback: the row returns to the top of the list rather than its old
-      // slot - being visible again matters more than ordering.
-      setActions((prev) =>
-        prev.some((a) => a.id === action.id) ? prev : [action, ...prev],
-      );
       toast.error(res.error);
     }
+    setCommitting((previous) => {
+      const next = new Set(previous);
+      next.delete(action.id);
+      return next;
+    });
+    return res;
   }
 
   // Leaving rows stay mounted while their collapse plays; depart() removes
@@ -281,11 +305,20 @@ export function Inbox({
               action={a}
               index={i}
               leaving={leaving.has(a.id)}
+              applications={applications}
+              busy={committing.has(a.id)}
               onResolve={(short, status) =>
                 commit(
                   a,
                   { short: short ?? undefined, status },
                   `${STATUS_LABELS[status as TrackerStatus] ?? status} recorded`,
+                )
+              }
+              onCreate={(newApplication) =>
+                commit(
+                  a,
+                  { newApplication },
+                  `${STATUS_LABELS[(newApplication.draft.status ?? "applied") as TrackerStatus] ?? "Applied"} recorded`,
                 )
               }
               onDismiss={() => commit(a, { dismiss: true }, "Dismissed")}

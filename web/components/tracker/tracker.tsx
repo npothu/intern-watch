@@ -40,10 +40,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  createApplication,
   updateDueAt,
   updateSnooze,
   updateStatus,
 } from "@/app/(app)/tracker-actions";
+import { CreateApplicationDialog } from "@/components/applications/create-application-dialog";
 import { ApplicationDrawer } from "@/components/tracker/drawer";
 import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
@@ -477,7 +479,7 @@ function TrackerRowView({
           <DueChip row={row} />
           <WaitingChip row={row} />
         </div>
-        {row.title && (
+        {row.title && row.url ? (
           <a
             href={row.url}
             target="_blank"
@@ -488,7 +490,11 @@ function TrackerRowView({
             {row.title}
             <ExternalLinkIcon className="mb-0.5 ml-1 inline size-3 shrink-0" />
           </a>
-        )}
+        ) : row.title ? (
+          <span className="mt-0.5 block truncate text-ink-2" title={row.title}>
+            {row.title}
+          </span>
+        ) : null}
         <div className="mt-0.5 text-[11.5px] tabular-nums text-ink-2">
           applied {formatDate(row.appliedDate)} · last activity{" "}
           {formatDate(row.lastActivity)}
@@ -685,8 +691,7 @@ function NoteDialog({
 function EmptyState() {
   return (
     <div className="mt-2 rounded-md border border-line bg-surface px-4 py-9 text-center text-[13px] text-ink-2">
-      No applications yet - tick a match as applied and it lands here
-      permanently.
+      No applications yet. Add one here, or mark a match as applied.
     </div>
   );
 }
@@ -708,6 +713,7 @@ export function Tracker({ rows: initialRows, initialSelected }: { rows: TrackerR
   }
 
   const [noteRow, setNoteRow] = useState<TrackerRow | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string>(ALL_STATUSES);
   const [focused, setFocused] = useState<string | null>(initialSelected ?? null);
@@ -925,6 +931,10 @@ export function Tracker({ rows: initialRows, initialSelected }: { rows: TrackerR
             aria-label="Search applications"
             className="w-full min-w-[180px] rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none sm:w-[280px]"
           />
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <PlusIcon className="size-3.5" />
+            add application
+          </Button>
         </div>
         <FilterPills
           label="Filter by status"
@@ -998,6 +1008,19 @@ export function Tracker({ rows: initialRows, initialSelected }: { rows: TrackerR
         onNote={(short, note) => commitNote(short, note)}
         onDueAt={commitDueAt}
         onSnooze={commitSnooze}
+      />
+      <CreateApplicationDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onSubmit={async (request) => {
+          const result = await createApplication(request);
+          if (result.ok) {
+            toast.success(result.created ? "Application added" : "Application already added");
+            router.refresh();
+            return { ok: true };
+          }
+          return result;
+        }}
       />
     </div>
   );

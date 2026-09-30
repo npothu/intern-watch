@@ -30,6 +30,8 @@ export async function removeIfUnprogressed(
     .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
     .first();
   if (!existing) return false;
+  const snapshot = (existing.snapshot ?? {}) as { source?: string };
+  if (snapshot.source === "manual-application") return false;
   if (existing.status !== "applied") return false;
   if ((existing.history ?? []).length > 1) return false;
   await db.delete(existing._id);
@@ -44,17 +46,19 @@ export async function applyStatus(
     status,
     note,
     snapshot,
+    eventAt,
   }: {
     user: string;
     short: string;
     status: string;
     note?: string;
     snapshot?: unknown;
+    eventAt?: string;
   },
 ): Promise<void> {
   const entry: { status: string; at: string; note?: string } = {
     status,
-    at: new Date().toISOString(),
+    at: eventAt ?? new Date().toISOString(),
   };
   if (note) {
     entry.note = note;

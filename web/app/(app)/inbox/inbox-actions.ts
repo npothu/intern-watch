@@ -4,9 +4,13 @@ import { resolveTrackerUser } from "@/lib/user";
 import {
   getInboxActions,
   resolveInboxAction as convexResolveAction,
+  type CreateManualApplicationRequest,
   type InboxState,
 } from "@/lib/convex";
 import { isTrackerStatus } from "@/components/tracker/tracker-lib";
+import {
+  manualApplicationRequestError,
+} from "../../../../shared/applications";
 
 /**
  * Inbox-page server actions. Every call re-resolves the tracker user
@@ -44,6 +48,7 @@ export type ResolveActionOpts = {
   short?: string;
   status?: string;
   dismiss?: boolean;
+  newApplication?: CreateManualApplicationRequest;
 };
 
 /**
@@ -70,6 +75,16 @@ export async function resolveAction(
   ) {
     return { ok: false, error: `Unknown status "${opts.status}".` };
   }
+  if (opts.newApplication) {
+    const validationError = manualApplicationRequestError(opts.newApplication);
+    if (validationError) return { ok: false, error: validationError };
+  }
+  const targetCount = Number(Boolean(opts.dismiss)) +
+    Number(Boolean(opts.newApplication)) +
+    Number(Boolean(opts.short || opts.status));
+  if (targetCount !== 1 || Boolean(opts.short) !== Boolean(opts.status)) {
+    return { ok: false, error: "Choose one application or dismiss the email." };
+  }
   const user = await resolveTrackerUser();
   if (!user) {
     return {
@@ -83,6 +98,7 @@ export async function resolveAction(
       short: opts.short,
       status: opts.status,
       dismiss: opts.dismiss,
+      newApplication: opts.newApplication,
     });
     return { ok: true };
   } catch (err) {
