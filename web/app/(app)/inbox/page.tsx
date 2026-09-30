@@ -14,8 +14,9 @@ export const dynamic = "force-dynamic";
 export default async function InboxPage() {
   const user = await resolveTrackerUser();
   if (!user) return null; // layout already rendered NotProvisioned
-  const { actions, health } = await getInboxActions(user).catch(() => ({
+  const { actions, applications, health } = await getInboxActions(user).catch(() => ({
     actions: [],
+    applications: [],
     health: null,
   }));
   return (
@@ -26,7 +27,7 @@ export default async function InboxPage() {
       <div className="mb-3">
         <ViewSwitch active="inbox" />
       </div>
-      <Inbox initialActions={actions} health={health} />
+      <Inbox initialActions={actions} applications={applications} health={health} />
     </div>
   );
 }

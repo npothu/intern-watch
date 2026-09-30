@@ -169,6 +169,7 @@ export default defineSchema({
       v.object({
         short: v.optional(v.string()),
         status: v.optional(v.string()),
+        requestId: v.optional(v.string()),
         at: v.string(),
       }),
     ),

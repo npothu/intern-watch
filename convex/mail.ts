@@ -13,6 +13,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { classifyReply, decideTransition, decisiveCandidate, scoreCandidates, stripHtml } from "./classify";
 import { credentialsKey, decryptJson, encryptJson } from "./credentials_crypto";
 import { applyStatus } from "./ledger";
+import {
+  createManualApplicationInLedger,
+  manualApplicationDraftValidator,
+} from "./manual_applications";
+import { APPLICATION_STATUSES } from "../shared/applications";
 
 // Gmail push -> mail-sync backend.
 //
@@ -38,15 +43,7 @@ function checkSecret(secret: string) {
 
 // Statuses resolveAction accepts when writing an application status through
 // to the ledger (matches src/ledger.py set_status).
-const VALID_STATUSES = [
-  "applied",
-  "oa",
-  "phone_screen",
-  "interview",
-  "offer",
-  "rejected",
-  "withdrawn",
-] as const;
+const VALID_STATUSES = APPLICATION_STATUSES;
 
 // -- mail accounts ----------------------------------------------------------
 
@@ -370,7 +367,9 @@ export const getActions = query({
       .withIndex("by_user_state", (q) => q.eq("user", user).eq("state", "pending"))
       .collect();
     const applications = rows.length ? (await ctx.db.query("applications")
-      .withIndex("by_user", (q) => q.eq("user", user)).collect()).map(applicationCandidate) : [];
+      .withIndex("by_user", (q) => q.eq("user", user)).collect()).map(applicationCandidate)
+      .sort((a, b) => a.company.localeCompare(b.company) ||
+        a.title.localeCompare(b.title) || a.short.localeCompare(b.short)) : [];
     const actions = rows.map((r) => {
       const sender = fromParts(r.from);
       const fresh = scoreCandidates({
@@ -415,7 +414,7 @@ export const getActions = query({
           historyId: account.historyId ?? null,
         }
       : null;
-    return { actions, health };
+    return { actions, applications, health };
   },
 });
 
@@ -426,41 +425,84 @@ export const resolveAction = mutation({
     short: v.optional(v.string()),
     status: v.optional(v.string()),
     dismiss: v.optional(v.boolean()),
+    newApplication: v.optional(v.object({
+      requestId: v.string(),
+      draft: manualApplicationDraftValidator,
+    })),
     secret: v.string(),
   },
-  handler: async (ctx, { user, id, short, status, dismiss, secret }) => {
+  handler: async (ctx, {
+    user, id, short, status, dismiss, newApplication, secret,
+  }) => {
     checkSecret(secret);
     const row = await ctx.db.get(id);
     if (!row || row.user !== user) {
       throw new Error("not found");
     }
     if (row.state !== "pending") {
+      if (
+        row.state === "resolved" &&
+        newApplication &&
+        row.resolution?.requestId === newApplication.requestId.toLowerCase()
+      ) {
+        const replay = await createManualApplicationInLedger(ctx.db, {
+          user,
+          requestId: newApplication.requestId,
+          draft: newApplication.draft,
+        });
+        if (
+          replay.short === row.resolution.short
+        ) {
+          return {
+            short: row.resolution.short,
+            status: row.resolution.status,
+          };
+        }
+        throw new Error("resolved application does not match retry");
+      }
       throw new Error("already resolved");
     }
     const at = new Date().toISOString();
     if (dismiss) {
+      if (short || status || newApplication) throw new Error("invalid resolution target");
       await ctx.db.patch(id, { state: "dismissed", resolution: { at } });
-      return;
+      return {};
     }
-    if (!short || !status) {
-      throw new Error("missing short/status");
+    const emailNote = `from email: "${row.evidence}" - ${gmailLink(row.accountEmail, row.gmailMessageId)}`;
+    if (newApplication) {
+      if (short || status) throw new Error("invalid resolution target");
+      const created = await createManualApplicationInLedger(ctx.db, {
+        user,
+        requestId: newApplication.requestId,
+        draft: newApplication.draft,
+        emailNote,
+      });
+      await ctx.db.patch(id, {
+        state: "resolved",
+        resolution: {
+          short: created.short,
+          status: created.status,
+          requestId: newApplication.requestId.toLowerCase(),
+          at,
+        },
+      });
+      return { short: created.short, status: created.status };
     }
-    if (!(VALID_STATUSES as readonly string[]).includes(status)) {
-      throw new Error("bad status");
-    }
+    if (!short || !status) throw new Error("missing short/status");
+    if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error("bad status");
+    const existing = await ctx.db.query("applications")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    const match = existing ? null : await ctx.db.query("matches")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!existing && !match) throw new Error("application not found");
+    await applyStatus(ctx.db, { user, short, status, note: emailNote });
     await ctx.db.patch(id, {
       state: "resolved",
       resolution: { short, status, at },
     });
-    // Write through to the applications ledger via the shared helper, so a
-    // resolved action is indistinguishable from a hand-set status (snapshot
-    // backfill included). The note keeps the email evidence + deep link.
-    await applyStatus(ctx.db, {
-      user,
-      short,
-      status,
-      note: `from email: "${row.evidence}" - ${gmailLink(row.accountEmail, row.gmailMessageId)}`,
-    });
+    return { short, status };
   },
 });
 
@@ -503,10 +545,15 @@ export const listMessageIds = internalQuery({
 // fields from the snapshot plus the live status. `sync` runs the scorer in
 // the action; recordOutcome re-reads the chosen row transactionally.
 function applicationCandidate(r: Doc<"applications">) {
-  const snap = (r.snapshot ?? {}) as { company?: string; title?: string; url?: string };
+  const snap = (r.snapshot ?? {}) as {
+    company?: string;
+    title?: string;
+    location?: string;
+    url?: string;
+  };
   return {
     short: r.short, company: snap.company ?? "", title: snap.title ?? "",
-    url: snap.url ?? "", status: r.status,
+    location: snap.location ?? "", url: snap.url ?? "", status: r.status,
   };
 }
 

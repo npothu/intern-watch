@@ -4,6 +4,9 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canonicalUrl, postingIdentity, preferredApplyUrl, validateUrl } from "./ingest_extract";
+import { dedupInfoForUrl } from "./short_key";
+
+export { dedupInfoForUrl } from "./short_key";
 
 // Re-export pure helpers for tests (canonicalUrl/validateUrl already in ingest_extract)
 export { canonicalUrl, validateUrl } from "./ingest_extract";
@@ -12,96 +15,6 @@ function checkSecret(secret: string) {
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }
-}
-
-// -- SHA1 helpers (pure JS, no WebCrypto dependency) ----------------------
-// Minimal synchronous SHA1 for dedupKey -> short derivation.
-// Adapted from public domain implementation.
-function sha1HexSync(str: string): string {
-  const data = new TextEncoder().encode(str);
-  // Use WebCrypto if available and we are async context, but sync fallback is simpler.
-  // Pure JS SHA1
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return sha1Pure(data);
-}
-
-function sha1Pure(data: Uint8Array): string {
-  // SHA1 constants
-  let h0 = 0x67452301;
-  let h1 = 0xefcdab89;
-  let h2 = 0x98badcfe;
-  let h3 = 0x10325476;
-  let h4 = 0xc3d2e1f0;
-
-  // Pre-processing: padding
-  const ml = data.length * 8;
-  const withOne = new Uint8Array(data.length + 1);
-  withOne.set(data);
-  withOne[data.length] = 0x80;
-  let len = withOne.length;
-  // pad to 448 mod 512
-  while ((len * 8) % 512 !== 448) len++;
-  const padded = new Uint8Array(len + 8);
-  padded.set(withOne);
-  // append length as 64-bit big-endian
-  const view = new DataView(padded.buffer);
-  // high 32 bits of length (always 0 for our sizes)
-  view.setUint32(len, Math.floor(ml / 0x100000000), false);
-  view.setUint32(len + 4, ml >>> 0, false);
-
-  const w = new Uint32Array(80);
-  for (let i = 0; i < padded.length; i += 64) {
-    for (let j = 0; j < 16; j++) {
-      w[j] = view.getUint32(i + j * 4, false);
-    }
-    for (let j = 16; j < 80; j++) {
-      const v = w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16];
-      w[j] = (v << 1) | (v >>> 31);
-    }
-    let a = h0, b = h1, c = h2, d = h3, e = h4;
-    for (let j = 0; j < 80; j++) {
-      let f: number, k: number;
-      if (j < 20) { f = (b & c) | (~b & d); k = 0x5a827999; }
-      else if (j < 40) { f = b ^ c ^ d; k = 0x6ed9eba1; }
-      else if (j < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8f1bbcdc; }
-      else { f = b ^ c ^ d; k = 0xca62c1d6; }
-      const temp = (((a << 5) | (a >>> 27)) + f + e + k + w[j]) >>> 0;
-      e = d; d = c; c = (b << 30) | (b >>> 2); b = a; a = temp;
-    }
-    h0 = (h0 + a) >>> 0;
-    h1 = (h1 + b) >>> 0;
-    h2 = (h2 + c) >>> 0;
-    h3 = (h3 + d) >>> 0;
-    h4 = (h4 + e) >>> 0;
-  }
-  const toHex = (n: number) => n.toString(16).padStart(8, "0");
-  return toHex(h0) + toHex(h1) + toHex(h2) + toHex(h3) + toHex(h4);
-}
-
-// Extract jobright 24-hex id if present
-function extractJobrightId(input: string): string | null {
-  const m = input.match(/jobright\.ai\/jobs\/info\/([0-9a-f]{24})/i) || input.match(/\bjr_id=([0-9a-f]{24})\b/i);
-  return m ? m[1].toLowerCase() : null;
-}
-
-/**
- * Derive the dedup identity for a URL.
- *
- * `raw` matters: canonicalUrl() strips `jr_id` as a tracking parameter, so a
- * jobright-sourced employer link (jobs.ashbyhq.com/...?jr_id=<24hex>) has no
- * jobright id left by the time it reaches here. Reading the id from the raw
- * URL first means such a link derives the same `jr:<id>` key - and therefore
- * the same short - that the watcher assigns when it finds the job itself.
- * Without this, adding a job by hand and having the watcher pick it up later
- * produces two rows for one job.
- */
-export function dedupInfoForUrl(canonical: string, raw?: string): { dedupKey: string; short: string } {
-  const jr = extractJobrightId(raw ?? canonical) || extractJobrightId(canonical);
-  let dedupKey: string;
-  if (jr) dedupKey = `jr:${jr}`;
-  else dedupKey = `manual:${sha1HexSync(canonical)}`;
-  const short = sha1HexSync(dedupKey).slice(0, 12);
-  return { dedupKey, short };
 }
 
 // Rate limit: simple counts in last 60s and 24h. Throws if over limit.

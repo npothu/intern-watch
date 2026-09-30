@@ -7,6 +7,7 @@ import type { Preset, WatchPrefs } from "../../convex/watch_types";
 
 export type { Preset, WatchPrefs };
 import type { ReferralData } from "../../convex/referral_types";
+import type { ManualApplicationRequest } from "../../shared/applications";
 
 /**
  * Server-only Convex client.
@@ -247,6 +248,25 @@ export async function recordStatus(
   await post("mutation", "recordStatus", { user, short, status, note });
 }
 
+export type CreateManualApplicationRequest = ManualApplicationRequest;
+
+export type CreateManualApplicationResponse = {
+  short: string;
+  status: string;
+  created: boolean;
+};
+
+/** Create a permanent application without requiring a discovered match. */
+export async function createManualApplication(
+  user: string,
+  request: CreateManualApplicationRequest,
+): Promise<CreateManualApplicationResponse> {
+  return await post("mutation", "createManualApplication", {
+    user,
+    ...request,
+  }) as CreateManualApplicationResponse;
+}
+
 /** Map of short key -> built resume metadata for the user.
  *
  * The Convex query returns an ARRAY of {short, url, filename, ...} rows; the
@@ -463,6 +483,15 @@ export type InboxCandidate = {
   score: number;
 };
 
+export type ApplicationOption = {
+  short: string;
+  company: string;
+  title: string;
+  location: string;
+  url: string;
+  status: string;
+};
+
 /** A pending inbox action row, shaped like the `mail:getActions` items. */
 export type InboxAction = {
   id: string;
@@ -490,12 +519,20 @@ export type MailHealth = {
   historyId: string | null;
 };
 
-export type InboxState = { actions: InboxAction[]; health: MailHealth | null };
+export type InboxState = {
+  actions: InboxAction[];
+  applications: ApplicationOption[];
+  health: MailHealth | null;
+};
 
 /** All pending inbox actions plus the linked account health. */
 export async function getInboxActions(user: string): Promise<InboxState> {
   const value = await post("query", "getActions", { user }, "mail");
-  return (value as InboxState | null) ?? { actions: [], health: null };
+  return (value as InboxState | null) ?? {
+    actions: [],
+    applications: [],
+    health: null,
+  };
 }
 
 export type ResolveInboxActionArgs = {
@@ -503,14 +540,18 @@ export type ResolveInboxActionArgs = {
   short?: string;
   status?: string;
   dismiss?: boolean;
+  newApplication?: CreateManualApplicationRequest;
 };
 
 /** Resolve (or dismiss) one pending inbox action. */
 export async function resolveInboxAction(
   user: string,
   args: ResolveInboxActionArgs
-): Promise<void> {
-  await post("mutation", "resolveAction", { user, ...args }, "mail");
+): Promise<{ short?: string; status?: string }> {
+  return await post("mutation", "resolveAction", { user, ...args }, "mail") as {
+    short?: string;
+    status?: string;
+  };
 }
 
 // -- profile (resume) --------------------------------------------------------

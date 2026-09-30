@@ -173,6 +173,7 @@ test("getActions returns empty actions and null health for an unknown user", asy
   const t = convexTest(schema);
   const res = await t.query(api.mail.getActions, { user: "nobody", secret: SECRET });
   expect(res.actions).toEqual([]);
+  expect(res.applications).toEqual([]);
   expect(res.health).toBeNull();
 });
 
@@ -219,14 +220,67 @@ test("getActions returns pending action + account health", async () => {
   expect(action.candidates).toEqual([expect.objectContaining({
     short: "ab12cd34ef56", company: "Acme", title: "SWE Intern",
   })]);
+  expect(res.applications).toEqual([
+    expect.objectContaining({
+      short: "ab12cd34ef56",
+      company: "Acme",
+      title: "SWE Intern",
+      status: "applied",
+    }),
+  ]);
   expect(typeof action.id).toBe("string");
+});
+
+test("getActions exposes the full application catalog, including unsuggested rows", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("applications", {
+      user: "u1",
+      short: "111111111111",
+      status: "applied",
+      snapshot: { company: "Acme", title: "SWE Intern", location: "Austin", url: "https://acme.test/1" },
+      history: [],
+      createdAt: "2026-08-01",
+    });
+    await ctx.db.insert("applications", {
+      user: "u1",
+      short: "222222222222",
+      status: "phone_screen",
+      snapshot: { company: "Quiet Co", title: "Data Intern", location: "Remote", url: "https://quiet.test/2" },
+      history: [],
+      createdAt: "2026-08-02",
+    });
+    await ctx.db.insert("applications", {
+      user: "other",
+      short: "333333333333",
+      status: "applied",
+      snapshot: { company: "Private Co", title: "Hidden" },
+      history: [],
+      createdAt: "2026-08-03",
+    });
+    await ctx.db.insert("inboxActions", { ...pendingAction, candidates: [] });
+  });
+
+  const res = await t.query(api.mail.getActions, { user: "u1", secret: SECRET });
+  expect(res.applications).toEqual([
+    expect.objectContaining({ short: "111111111111", company: "Acme", location: "Austin" }),
+    expect.objectContaining({ short: "222222222222", company: "Quiet Co", status: "phone_screen" }),
+  ]);
+  expect(res.applications).not.toContainEqual(expect.objectContaining({ company: "Private Co" }));
+  expect(res.actions[0].candidates).toHaveLength(1);
 });
 
 // -- resolveAction ----------------------------------------------------------
 
 test("resolveAction resolves a pending action with a status", async () => {
   const t = convexTest(schema);
-  const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
+  const id = await t.run(async (ctx) => {
+    await ctx.db.insert("applications", {
+      user: "u1", short: "ab12cd34ef56", status: "applied",
+      snapshot: pendingAction.candidates[0], history: [], createdAt: "2026-08-06",
+    });
+    return ctx.db.insert("inboxActions", { ...pendingAction });
+  });
   await t.mutation(api.mail.resolveAction, {
     user: "u1",
     id,
@@ -238,6 +292,85 @@ test("resolveAction resolves a pending action with a status", async () => {
   expect(row!.state).toBe("resolved");
   expect(row!.resolution).toMatchObject({ short: "ab12cd34ef56", status: "oa" });
   expect(typeof row!.resolution!.at).toBe("string");
+});
+
+test("resolveAction atomically creates a manual application for the email", async () => {
+  const t = convexTest(schema);
+  const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
+  const requestId = "bd55d9f9-8d9a-46e0-a9aa-b086772d9520";
+
+  const result = await t.mutation(api.mail.resolveAction, {
+    user: "u1",
+    id,
+    newApplication: {
+      requestId,
+      draft: { company: "Honeywell Aerospace", status: "phone_screen" },
+    },
+    secret: SECRET,
+  });
+
+  const action = await t.run(async (ctx) => ctx.db.get(id));
+  const applications = await t.run(async (ctx) => ctx.db.query("applications").collect());
+  expect(result).toMatchObject({ short: expect.stringMatching(/^[0-9a-f]{12}$/), status: "phone_screen" });
+  expect(action).toMatchObject({
+    state: "resolved",
+    resolution: { short: result.short, status: "phone_screen", requestId },
+  });
+  expect(applications).toHaveLength(1);
+  expect(applications[0]).toMatchObject({
+    short: result.short,
+    status: "phone_screen",
+    snapshot: { company: "Honeywell Aerospace", source: "manual-application" },
+  });
+  expect(applications[0].history.at(-1)?.note).toContain('from email: "mentions HackerRank and a next step"');
+
+  await expect(
+    t.mutation(api.mail.resolveAction, {
+      user: "u1",
+      id,
+      newApplication: {
+        requestId: "227317be-6b20-4f0a-be2c-c690f691b2e1",
+        draft: { company: "Another company" },
+      },
+      secret: SECRET,
+    }),
+  ).rejects.toThrow("already resolved");
+
+  await t.mutation(api.tracker.recordStatus, {
+    user: "u1",
+    short: result.short,
+    status: "interview",
+    secret: SECRET,
+  });
+  const retry = await t.mutation(api.mail.resolveAction, {
+    user: "u1",
+    id,
+    newApplication: {
+      requestId,
+      draft: { company: "Honeywell Aerospace", status: "phone_screen" },
+    },
+    secret: SECRET,
+  });
+  expect(retry).toEqual(result);
+  expect(await t.run(async (ctx) => ctx.db.query("applications").collect())).toHaveLength(1);
+  expect((await t.run(async (ctx) => ctx.db.query("applications").first()))?.status)
+    .toBe("interview");
+});
+
+test("resolveAction rejects an unknown application without creating a blank row", async () => {
+  const t = convexTest(schema);
+  const id = await t.run(async (ctx) => ctx.db.insert("inboxActions", { ...pendingAction }));
+  await expect(
+    t.mutation(api.mail.resolveAction, {
+      user: "u1",
+      id,
+      short: "ab12cd34ef56",
+      status: "oa",
+      secret: SECRET,
+    }),
+  ).rejects.toThrow("application not found");
+  expect(await t.run(async (ctx) => ctx.db.query("applications").collect())).toEqual([]);
+  expect((await t.run(async (ctx) => ctx.db.get(id)))?.state).toBe("pending");
 });
 
 test("resolveAction dismisses a pending action", async () => {

@@ -8,17 +8,15 @@
  * server page/actions and the client tracker component.
  */
 
-export const STATUS_ORDER = [
-  "applied",
-  "oa",
-  "phone_screen",
-  "interview",
-  "offer",
-  "rejected",
-  "withdrawn",
-] as const;
+import {
+  APPLICATION_STATUSES,
+  isApplicationStatus,
+  type ApplicationStatus,
+} from "../../../shared/applications";
 
-export type TrackerStatus = (typeof STATUS_ORDER)[number];
+export const STATUS_ORDER = APPLICATION_STATUSES;
+
+export type TrackerStatus = ApplicationStatus;
 
 /** Human labels, matched to the Python webui's STATUSES map. */
 export const STATUS_LABELS: Record<TrackerStatus, string> = {
@@ -32,7 +30,7 @@ export const STATUS_LABELS: Record<TrackerStatus, string> = {
 };
 
 export function isTrackerStatus(value: string): value is TrackerStatus {
-  return (STATUS_ORDER as readonly string[]).includes(value);
+  return isApplicationStatus(value);
 }
 
 /** Statuses that mean "still in the running" - a live application can go

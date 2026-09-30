@@ -4,6 +4,10 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { applyStatus, removeIfUnprogressed } from "./ledger";
 import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
+import {
+  createManualApplicationInLedger,
+  manualApplicationDraftValidator,
+} from "./manual_applications";
 
 // Query/mutation functions backing the ConvexStore TrackerStore driver
 // (src/store.py). Every endpoint - reads and writes - checks the secret
@@ -108,6 +112,19 @@ export const setTicks = mutation({
 });
 
 // -- applications ledger ---------------------------------------------------
+
+export const createManualApplication = mutation({
+  args: {
+    user: v.string(),
+    requestId: v.string(),
+    draft: manualApplicationDraftValidator,
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, requestId, draft, secret }) => {
+    checkSecret(secret);
+    return createManualApplicationInLedger(ctx.db, { user, requestId, draft });
+  },
+});
 
 export const getLedger = query({
   args: { user: v.string(), secret: v.string() },

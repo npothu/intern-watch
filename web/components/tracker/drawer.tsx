@@ -155,7 +155,7 @@ export function ApplicationDrawer({
                 <h2 className="text-[15.5px] font-semibold leading-snug text-ink">
                   {shown.company}
                 </h2>
-                {shown.title && (
+                {shown.title && shown.url ? (
                   <a
                     href={shown.url}
                     target="_blank"
@@ -166,7 +166,14 @@ export function ApplicationDrawer({
                     {shown.title}
                     <ExternalLink className="mb-0.5 ml-1 inline size-3" />
                   </a>
-                )}
+                ) : shown.title ? (
+                  <span
+                    className="mt-0.5 block truncate text-[12.5px] text-ink-2"
+                    title={shown.title}
+                  >
+                    {shown.title}
+                  </span>
+                ) : null}
               </div>
               <button
                 type="button"
