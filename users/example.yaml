@@ -27,7 +27,9 @@ eliminate:
                                                   # unrecognized locations kept
   unpaid: true
   grad_only: true          # PhD/Master's-only roles (Simplify degrees field +
-                           # title patterns; "BS/MS" and "Undergraduate" stay)
+                           # title patterns; "BS/MS" and "Undergraduate" stay).
+                           # "phd" instead drops only doctoral-only roles (for
+                           # a Master's student; MS/PhD postings stay)
   active_clearance: true   # requires an already-held clearance (TS/SCI, poly,
                            # "cleared"); clearance-OBTAINABLE roles stay
                            # (US citizen, can get cleared)

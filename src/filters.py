@@ -83,6 +83,16 @@ _GRAD_ONLY_RE = re.compile(
     r"\bph\.?\s?d\b|\bdoctora(?:l|te)\b|\bmaster'?s\b|\bgraduate\b", re.I)
 _UNDERGRAD_OK = ("bachelor", "associate")
 
+# `grad_only: phd` (for a Master's student): only doctoral-only postings go.
+# A title or degrees list that also names a Master's/BS track stays.
+_PHD_RE = re.compile(r"\bph\.?\s?d\b|\bdoctora(?:l|te)\b", re.I)
+_MASTERS_RE = re.compile(
+    r"\bmaster(?:'|’)?s\b|\bm\.?s\b|\bm\.?eng\b|\bms degree\b", re.I)
+_TITLE_NON_PHD_RE = re.compile(
+    _MASTERS_RE.pattern + r"|\bb\.?s\b|undergrad", re.I)
+_MASTERS_OK = (*_UNDERGRAD_OK, "master")
+_PHD_DEGREES = ("phd", "ph.d", "doctor")
+
 # Roles demanding an ALREADY-HELD clearance. Plain "clearance"/"ability to
 # obtain" is NOT matched -- the user can get cleared, just isn't yet.
 # A title that bothers to say TS/SCI or polygraph wants cleared candidates.
@@ -153,6 +163,14 @@ def jd_requires_active_clearance(description: str) -> bool:
 def jd_grad_only(description: str) -> bool:
     return bool(_JD_GRAD_RE.search(description)
                 and not _JD_UNDERGRAD_RE.search(description))
+
+
+# PhD-only via JD: a doctoral mention with neither an undergraduate nor a
+# Master's track mentioned anywhere.
+def jd_phd_only(description: str) -> bool:
+    return bool(_PHD_RE.search(description)
+                and not _JD_UNDERGRAD_RE.search(description)
+                and not _MASTERS_RE.search(description))
 
 
 def location_country(location: str) -> str:
@@ -370,7 +388,11 @@ class UserFilter:
         self.llm_tasks = set(llm.get("tasks", []))
         elim = cfg.get("eliminate", {})
         self.elim_unpaid = bool(elim.get("unpaid"))
-        self.elim_grad_only = bool(elim.get("grad_only"))
+        # grad_only: true drops MS/PhD-only roles; "phd" drops only
+        # doctoral-only ones (a Master's student is eligible for the rest).
+        grad_only = elim.get("grad_only")
+        self.elim_phd_only = str(grad_only).strip().casefold() == "phd"
+        self.elim_grad_only = bool(grad_only) and not self.elim_phd_only
         self.elim_active_clearance = bool(elim.get("active_clearance"))
         self.elim_veteran_only = bool(elim.get("veteran_only"))
         # Optional stale-posting cutoff: drop jobs whose date_posted is older
@@ -480,6 +502,16 @@ class UserFilter:
                 return "eliminated:grad-only-title"
             if jd and jd_grad_only(jd):
                 return "eliminated:grad-only-jd"
+        if self.elim_phd_only:
+            degrees = [d.casefold() for d in job.degrees or []]
+            if any(p in d for d in degrees for p in _PHD_DEGREES) \
+                    and not any(ok in d for d in degrees for ok in _MASTERS_OK):
+                return "eliminated:phd-only-degrees"
+            if _PHD_RE.search(job.title) \
+                    and not _TITLE_NON_PHD_RE.search(job.title):
+                return "eliminated:phd-only-title"
+            if jd and jd_phd_only(jd):
+                return "eliminated:phd-only-jd"
         if self.elim_active_clearance:
             if _ACTIVE_CLEARANCE_RE.search(job.title):
                 return "eliminated:active-clearance"
