@@ -126,6 +126,53 @@ def test_grad_only_degrees_field(uf):
     assert uf.evaluate(_job(degrees=[])).status == "accept"   # unknown -> kept
 
 
+@pytest.fixture
+def uf_ms() -> UserFilter:
+    """A Master's student: `grad_only: phd` keeps MS-track roles."""
+    cfg = yaml.safe_load((ROOT / "users" / "example.yaml").read_text(encoding="utf-8"))
+    cfg["eliminate"]["grad_only"] = "phd"
+    return UserFilter(cfg, ROOT, today=FIXTURE_DATE)
+
+
+@pytest.mark.parametrize("title", [
+    "Machine Learning Intern - Ph.D.",
+    "Software Engineering Intern - PhD - Summer 2027",
+    "Doctoral Software Intern - Computing Research Fall 2026",
+])
+def test_phd_mode_drops_phd_only_titles(uf_ms, title):
+    v = uf_ms.evaluate(_job(title=title))
+    assert v.status == "reject" and "eliminated:phd-only-title" in v.reasons
+
+
+@pytest.mark.parametrize("title", [
+    "Software Engineering Intern (MS/PhD) Fall 2026",
+    "Data Science Intern - PhD or Masters Student Fall 2026",
+    "Software Engineering Intern, Masters Fall 2026",
+    "Avionics Software Internship - Graduate Fall 2026",
+    "Software Engineer Intern (BS/MS) Fall 2026",
+])
+def test_phd_mode_keeps_masters_titles(uf_ms, title):
+    assert uf_ms.evaluate(_job(title=title)).status == "accept"
+
+
+def test_phd_mode_degrees_field(uf_ms):
+    for degrees in (["Master's"], ["Master's", "PhD"], ["Bachelor's"], []):
+        assert uf_ms.evaluate(_job(degrees=degrees)).status == "accept"
+    for degrees in (["PhD"], ["MBA"]):
+        v = uf_ms.evaluate(_job(degrees=degrees))
+        assert v.status == "reject" and "eliminated:phd-only-degrees" in v.reasons
+
+
+def test_phd_mode_jd(uf_ms):
+    phd = "Currently pursuing a PhD in computer science."
+    v = uf_ms.evaluate(_job(description=phd))
+    assert v.status == "reject" and "eliminated:phd-only-jd" in v.reasons
+    for jd in ("Currently pursuing a Master's or PhD in CS.",
+               "Open to MS/PhD students.",
+               "Pursuing a Bachelor's degree; PhD a plus."):
+        assert uf_ms.evaluate(_job(description=jd)).status == "accept"
+
+
 @pytest.mark.parametrize("title", [
     "Software Engineer Intern - TS/SCI with Polygraph",
     "Software Intern (Active Secret Clearance) Fall 2026",
