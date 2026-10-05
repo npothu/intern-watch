@@ -86,9 +86,12 @@ _UNDERGRAD_OK = ("bachelor", "associate")
 # `grad_only: phd` (for a Master's student): only doctoral-only postings go.
 # A title or degrees list that also names a Master's/BS track stays.
 _PHD_RE = re.compile(r"\bph\.?\s?d\b|\bdoctora(?:l|te)\b", re.I)
+_MASTERS_RE = re.compile(
+    r"\bmaster(?:'|’)?s\b|\bm\.?s\b|\bm\.?eng\b|\bms degree\b", re.I)
 _TITLE_NON_PHD_RE = re.compile(
-    r"\bmaster(?:'|’)?s\b|\bm\.?s\b|\bb\.?s\b|undergrad", re.I)
+    _MASTERS_RE.pattern + r"|\bb\.?s\b|undergrad", re.I)
 _MASTERS_OK = (*_UNDERGRAD_OK, "master")
+_PHD_DEGREES = ("phd", "ph.d", "doctor")
 
 # Roles demanding an ALREADY-HELD clearance. Plain "clearance"/"ability to
 # obtain" is NOT matched -- the user can get cleared, just isn't yet.
@@ -164,15 +167,10 @@ def jd_grad_only(description: str) -> bool:
 
 # PhD-only via JD: a doctoral mention with neither an undergraduate nor a
 # Master's track mentioned anywhere.
-_JD_MASTERS_RE = re.compile(
-    r"\bmaster(?:'|’)?s\b|\bm\.?s\.?/m\.?eng\b|\bms degree\b|\bms/phd\b",
-    re.I)
-
-
 def jd_phd_only(description: str) -> bool:
     return bool(_PHD_RE.search(description)
                 and not _JD_UNDERGRAD_RE.search(description)
-                and not _JD_MASTERS_RE.search(description))
+                and not _MASTERS_RE.search(description))
 
 
 def location_country(location: str) -> str:
@@ -505,8 +503,9 @@ class UserFilter:
             if jd and jd_grad_only(jd):
                 return "eliminated:grad-only-jd"
         if self.elim_phd_only:
-            if job.degrees and not any(ok in d.casefold() for d in job.degrees
-                                       for ok in _MASTERS_OK):
+            degrees = [d.casefold() for d in job.degrees or []]
+            if any(p in d for d in degrees for p in _PHD_DEGREES) \
+                    and not any(ok in d for d in degrees for ok in _MASTERS_OK):
                 return "eliminated:phd-only-degrees"
             if _PHD_RE.search(job.title) \
                     and not _TITLE_NON_PHD_RE.search(job.title):

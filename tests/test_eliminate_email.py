@@ -150,15 +150,17 @@ def test_phd_mode_drops_phd_only_titles(uf_ms, title):
     "Software Engineering Intern, Masters Fall 2026",
     "Avionics Software Internship - Graduate Fall 2026",
     "Software Engineer Intern (BS/MS) Fall 2026",
+    "Software Intern (MEng/PhD) Fall 2026",
 ])
 def test_phd_mode_keeps_masters_titles(uf_ms, title):
     assert uf_ms.evaluate(_job(title=title)).status == "accept"
 
 
 def test_phd_mode_degrees_field(uf_ms):
-    for degrees in (["Master's"], ["Master's", "PhD"], ["Bachelor's"], []):
+    for degrees in (["Master's"], ["Master's", "PhD"], ["Bachelor's"], [],
+                    ["MBA"]):
         assert uf_ms.evaluate(_job(degrees=degrees)).status == "accept"
-    for degrees in (["PhD"], ["MBA"]):
+    for degrees in (["PhD"], ["MBA", "PhD", "JD", "MD"]):
         v = uf_ms.evaluate(_job(degrees=degrees))
         assert v.status == "reject" and "eliminated:phd-only-degrees" in v.reasons
 
@@ -169,6 +171,9 @@ def test_phd_mode_jd(uf_ms):
     assert v.status == "reject" and "eliminated:phd-only-jd" in v.reasons
     for jd in ("Currently pursuing a Master's or PhD in CS.",
                "Open to MS/PhD students.",
+               "Open to MS or PhD students.",
+               "Open to M.S. or Ph.D. students.",
+               "Open to MEng/PhD students.",
                "Pursuing a Bachelor's degree; PhD a plus."):
         assert uf_ms.evaluate(_job(description=jd)).status == "accept"
 
