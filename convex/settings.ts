@@ -34,6 +34,11 @@ async function rowFor(ctx: QueryCtx, user: string) {
  */
 export const OPERATOR_DAILY_CAP = 25;
 
+/** The user's allowance: an operator grant when one is set, else the default. */
+function dailyCapFor(row: { operatorDailyCap?: number } | null): number {
+  return row?.operatorDailyCap ?? OPERATOR_DAILY_CAP;
+}
+
 /** UTC calendar day, the bucket the counter resets on. */
 export function dayKey(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -66,8 +71,8 @@ export const getResumeLlm = query({
       provider: isProvider(row?.resumeProvider) ? row!.resumeProvider! : null,
       model: row?.resumeModel ?? null,
       defaultProvider: OPERATOR_PROVIDER,
-      defaultModel: OPERATOR_MODEL,
-      dailyCap: OPERATOR_DAILY_CAP,
+      defaultModel: row?.operatorModel ?? OPERATOR_MODEL,
+      dailyCap: dailyCapFor(row),
       usedToday: used,
       // Whether a shared model exists at all on this deployment. Without it
       // the UI would advertise "25 of 25 builds left" against a quota that can
@@ -89,7 +94,7 @@ export const operatorCapReached = internalQuery({
       .first();
     const today = dayKey(Date.now());
     const used = row?.llmDay === today ? (row.llmCount ?? 0) : 0;
-    return used >= OPERATOR_DAILY_CAP;
+    return used >= dailyCapFor(row);
   },
 });
 
@@ -220,7 +225,7 @@ export const consumeOperatorLlm = internalMutation({
       .withIndex("by_user", (q) => q.eq("user", user))
       .first();
     const used = row?.llmDay === today ? (row.llmCount ?? 0) : 0;
-    if (used >= OPERATOR_DAILY_CAP) return { allowed: false as const, used };
+    if (used >= dailyCapFor(row)) return { allowed: false as const, used };
     if (row) {
       await ctx.db.patch(row._id, { llmDay: today, llmCount: used + 1, updatedAt: Date.now() });
     } else {
@@ -232,5 +237,42 @@ export const consumeOperatorLlm = internalMutation({
       });
     }
     return { allowed: true as const, used: used + 1 };
+  },
+});
+
+/**
+ * Grant (or revoke) a user a larger shared-key allowance and/or a different
+ * Gemini model on the shared key. Operator-only: internal, so it runs from
+ * `npx convex run settings:setOperatorGrant '{"user":..,"dailyCap":50}'` and
+ * never from a client. A field left out is unchanged; null clears it back to
+ * the default.
+ */
+export const setOperatorGrant = internalMutation({
+  args: {
+    user: v.string(),
+    dailyCap: v.optional(v.union(v.number(), v.null())),
+    model: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, { user, dailyCap, model }) => {
+    if (typeof dailyCap === "number" && !(Number.isInteger(dailyCap) && dailyCap >= 0)) {
+      throw new Error("dailyCap must be a non-negative integer");
+    }
+    const patch: { operatorDailyCap?: number; operatorModel?: string; updatedAt: number } = {
+      updatedAt: Date.now(),
+    };
+    if (dailyCap !== undefined) patch.operatorDailyCap = dailyCap ?? undefined;
+    if (model !== undefined) patch.operatorModel = model?.trim() || undefined;
+    const row = await rowFor(ctx, user);
+    if (row) {
+      await ctx.db.patch(row._id, patch);
+    } else {
+      await ctx.db.insert("settings", { user, ...patch });
+    }
+    const after = await rowFor(ctx, user);
+    return {
+      user,
+      dailyCap: dailyCapFor(after),
+      model: after?.operatorModel ?? OPERATOR_MODEL,
+    };
   },
 });

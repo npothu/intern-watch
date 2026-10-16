@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { normalizeWatch, type WatchPrefs } from "./watch_types";
+import { OPERATOR_DAILY_CAP } from "./settings";
+import { OPERATOR_MODEL } from "./llm_providers";
 
 // Settings > Watch: the object the page saves, the report the watcher
 // pushes back, and the normalization between them. The resume-LLM half of
@@ -122,5 +124,35 @@ describe("getWatch / setWatch / putWatchReport", () => {
         secret: SECRET,
       }),
     ).rejects.toThrow(/lead time/);
+  });
+});
+
+describe("setOperatorGrant", () => {
+  test("a granted cap and model apply to that user only, and clear with null", async () => {
+    const t = convexTest(schema);
+    const read = (user: string) => t.query(api.settings.getResumeLlm, { user, secret: SECRET });
+
+    expect(await t.mutation(internal.settings.setOperatorGrant, {
+      user: "u", dailyCap: 50, model: "gemini-4-argon",
+    })).toEqual({ user: "u", dailyCap: 50, model: "gemini-4-argon" });
+    expect(await read("u")).toMatchObject({ dailyCap: 50, defaultModel: "gemini-4-argon" });
+    expect(await read("other")).toMatchObject({ dailyCap: OPERATOR_DAILY_CAP, defaultModel: OPERATOR_MODEL });
+
+    // The reservation honours the grant: allowed past the default, stopped at 50.
+    for (let i = 0; i < 50; i++) {
+      expect((await t.mutation(internal.settings.consumeOperatorLlm, { user: "u" })).allowed).toBe(true);
+    }
+    expect((await t.mutation(internal.settings.consumeOperatorLlm, { user: "u" })).allowed).toBe(false);
+    expect(await t.query(internal.settings.operatorCapReached, { user: "u" })).toBe(true);
+
+    // Omitted fields are untouched; null reverts to the default.
+    await t.mutation(internal.settings.setOperatorGrant, { user: "u", dailyCap: null });
+    expect(await read("u")).toMatchObject({ dailyCap: OPERATOR_DAILY_CAP, defaultModel: "gemini-4-argon" });
+  });
+
+  test("rejects a nonsense cap", async () => {
+    const t = convexTest(schema);
+    await expect(t.mutation(internal.settings.setOperatorGrant, { user: "u", dailyCap: -1 }))
+      .rejects.toThrow(/non-negative integer/);
   });
 });

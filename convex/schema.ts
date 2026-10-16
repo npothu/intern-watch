@@ -322,6 +322,12 @@ export default defineSchema({
   // mirroring the LLM_DAILY_CAP counter on mailAccounts. A user running their
   // own key is never counted here - it is their quota to spend.
   //
+  // operatorDailyCap/operatorModel are an operator's per-user grant on that
+  // shared key: a higher allowance and/or a different Gemini model than the
+  // defaults in settings.ts / llm_providers.ts. Set only through the internal
+  // settings.setOperatorGrant (`npx convex run`), never by the web app - the
+  // host is the one paying for them.
+  //
   // `watch` is the Settings > Preferences object (convex/watch_schema.ts): the
   // watcher preferences a person edits in the app. The Python watcher
   // overlays it on the user yaml every run and writes `watchReport`, the
@@ -334,6 +340,8 @@ export default defineSchema({
     resumeModel: v.optional(v.string()),
     llmDay: v.optional(v.string()),    // "YYYY-MM-DD" (UTC)
     llmCount: v.optional(v.number()),  // operator-key requests used that day
+    operatorDailyCap: v.optional(v.number()),
+    operatorModel: v.optional(v.string()),
     mailLlmDay: v.optional(v.string()),
     mailLlmCount: v.optional(v.number()),
     watch: v.optional(watchValidator),
