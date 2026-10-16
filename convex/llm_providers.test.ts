@@ -103,6 +103,18 @@ describe("chooseLlm", () => {
     expect(c.apiKey).toBe("sk-user");
   });
 
+  test("an operator-granted model replaces the default on the shared key only", () => {
+    const granted = chooseLlm({ operatorKey: "op", operatorModel: "gemini-4-argon" });
+    expect(granted.source).toBe("operator");
+    expect(granted.provider).toBe(OPERATOR_PROVIDER);
+    expect(granted.model).toBe("gemini-4-argon");
+    // The user's own key still runs the user's own choice.
+    const own = chooseLlm({ userKey: "k", operatorKey: "op", operatorModel: "gemini-4-argon" });
+    expect(own.model).toBe(DEFAULT_MODEL[OPERATOR_PROVIDER]);
+    // Blank means no grant.
+    expect(chooseLlm({ operatorKey: "op", operatorModel: " " }).model).toBe(OPERATOR_MODEL);
+  });
+
   test("no key anywhere still yields a runnable build, with a reason", () => {
     const c = chooseLlm({});
     expect(c.source).toBe("none");

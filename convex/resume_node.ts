@@ -386,6 +386,7 @@ async function performBuild(
     userKey,
     operatorKey,
     operatorCapReached: capReached,
+    operatorModel: settingsRow?.operatorModel,
   });
 
   const apiKey = choice.apiKey;
@@ -718,6 +719,7 @@ export const runProfileImport = internalAction({
         userKey,
         operatorKey,
         operatorCapReached,
+        operatorModel: settingsRow?.operatorModel,
       });
       if (!choice.apiKey) {
         throw new Error(

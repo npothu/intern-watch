@@ -330,8 +330,12 @@ export function chooseLlm(opts: {
   operatorKey?: string | null;
   /** True when the user has already used up today's operator-key allowance. */
   operatorCapReached?: boolean;
+  /** An operator-granted model for this user on the shared key. Must be a
+   *  model OPERATOR_PROVIDER serves - the shared key is that provider's. */
+  operatorModel?: string | null;
 }): LlmChoice {
   const provider = effectiveProvider(opts.preference);
+  const operatorModel = opts.operatorModel?.trim() || OPERATOR_MODEL;
 
   // Note this does NOT require an explicit preference. Before per-user model
   // choice existed, a user's Gemini key was read unconditionally; gating on a
@@ -352,7 +356,7 @@ export function chooseLlm(opts: {
       return {
         source: "none",
         provider: OPERATOR_PROVIDER,
-        model: OPERATOR_MODEL,
+        model: operatorModel,
         apiKey: null,
         reason:
           "daily limit on the shared model reached - add your own API key in Settings for unlimited rebuilds",
@@ -361,7 +365,7 @@ export function chooseLlm(opts: {
     return {
       source: "operator",
       provider: OPERATOR_PROVIDER,
-      model: OPERATOR_MODEL,
+      model: operatorModel,
       apiKey: opts.operatorKey,
     };
   }
@@ -369,7 +373,7 @@ export function chooseLlm(opts: {
   return {
     source: "none",
     provider: OPERATOR_PROVIDER,
-    model: OPERATOR_MODEL,
+    model: operatorModel,
     apiKey: null,
     reason:
       "no shared model is configured on this deployment - add your own API key in Settings to enable tailoring",
