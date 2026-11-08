@@ -251,7 +251,8 @@ export const pushMatches = mutation({
       // A blank incoming term never erases a known one: the stored term may
       // come from the JD backfill (term_backfill.ts), which the watcher's
       // title-only view of the job cannot see.
-      if (!item.term && existing?.item?.term) {
+      const blank = (t: unknown) => typeof t !== "string" || !t.trim();
+      if (existing && blank(item.term) && !blank(existing.item?.term)) {
         item.term = existing.item.term;
         if (existing.item.termConfidence) item.termConfidence = existing.item.termConfidence;
       }

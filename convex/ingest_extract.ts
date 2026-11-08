@@ -441,7 +441,8 @@ function companyFromAtPhrase(text: string): string {
 //      month range with a year, month+year in a clause about starting, or a
 //      season next to an internship noun (year from the anchor date).
 //   3. unknown.
-// JD clauses about graduation, returning to school or deadlines are skipped;
+// JD clauses must be about the role or its dates; clauses about graduation,
+// enrollment, returning to school, fiscal years or deadlines are skipped;
 // a JD's explicit term starting more than 90 days before the anchor is a past
 // cohort; a JD year must be four digits or apostrophe'd; lowercase "may" is a
 // verb.
@@ -488,7 +489,11 @@ const JD_SEASON_NOUN_RE = new RegExp(
   "i",
 );
 const JD_SKIP_RE =
-  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
+  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal/i;
+// A JD clause counts only when it is about the role or its dates.
+const JD_CONTEXT_RE = /intern|co-?op|program|placement|position|\brole\b|cohort|\bstart|\bbegin|commenc|duration|\bdates?\b/i;
+// Same set src/normalize.py _ascii_space folds to " " (newlines kept for clause splitting).
+const SPACE_RE = /[\t\v\f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff\x1c-\x1f\x85]/g;
 const CLAUSE_SPLIT_RE = /(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+/;
 const PAST_COHORT_DAYS = 90;
 const SEASON_START: Record<string, [number, number]> = {
@@ -564,7 +569,7 @@ function rangeSeasons(m1: number, y1: number, m2: number, y2: number): string[] 
 }
 
 function jdClauses(jd: string): string[] {
-  return jd.split(CLAUSE_SPLIT_RE).filter((c) => c.trim() && !JD_SKIP_RE.test(c));
+  return jd.split(CLAUSE_SPLIT_RE).filter((c) => c.trim() && JD_CONTEXT_RE.test(c) && !JD_SKIP_RE.test(c));
 }
 
 function jdExplicit(clauses: string[], anchor: Date): string[] {
@@ -610,15 +615,16 @@ export function inferTermDetailed(input: {
 }): TermInference {
   const anchor = input.today instanceof Date ? input.today
     : input.today ? new Date(`${input.today.slice(0, 10)}T00:00:00Z`) : new Date();
-  const title = input.title ?? "";
-  const clauses = input.jd ? jdClauses(input.jd) : [];
+  const title = (input.title ?? "").replace(SPACE_RE, " ");
+  const url = (input.url ?? "").replace(SPACE_RE, " ");
+  const clauses = input.jd ? jdClauses(input.jd.replace(SPACE_RE, " ")) : [];
   const done = (terms: string[], confidence: TermConfidence, source: TermInference["source"]): TermInference => {
     const ordered = orderedTerms(terms);
     return { terms: ordered, term: ordered[0] ?? "", confidence, source };
   };
   const explicit: [TermInference["source"], string[]][] = [
     ["title", explicitTerms(title)],
-    ["url", explicitTerms(input.url ?? "")],
+    ["url", explicitTerms(url)],
     ["jd", jdExplicit(clauses, anchor)],
   ];
   for (const [source, found] of explicit) if (found.length) return done(found, "explicit", source);

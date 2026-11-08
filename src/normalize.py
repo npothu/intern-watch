@@ -306,11 +306,25 @@ def extract_jobright_id(url: str) -> str | None:
 #      internship noun with no year ("12-week summer internship", "Fall
 #      co-op", "Spring semester"), its year taken from the anchor date.
 #   3. unknown.
-# JD clauses about graduation, degrees, returning to school or deadlines are
-# skipped: "graduating Spring 2028" is not the internship's term. A JD's
-# explicit term starting more than 90 days before the anchor is a past
-# cohort ("our Summer 2026 interns ..." read in November) and is ignored;
+# JD clauses must be about the role or its dates (intern, co-op, program,
+# start, dates, ...); clauses about graduation, enrollment, returning to
+# school, fiscal years or deadlines are skipped: "graduating Spring 2028"
+# is not the internship's term. A JD's explicit term starting more than 90
+# days before the anchor is a past cohort ("our Summer 2026 interns ..."
+# read in November) and is ignored;
 # a JD year must be four digits or apostrophe'd; lowercase "may" is a verb.
+
+# ASCII semantics for \b \s \d and case folding, so these patterns behave
+# exactly like the TS mirror's (JS regexes without the u flag). Input runs
+# through _ascii_space first: JS \s also covers NBSP, BOM and friends.
+_RX = re.I | re.A
+_SPACE_RE = re.compile("[\t\v\f \u00a0\u1680\u2000-\u200a\u2028\u2029"
+                       "\u202f\u205f\u3000\ufeff\x1c-\x1f\x85]")
+
+
+def _ascii_space(text: str) -> str:
+    return _SPACE_RE.sub(" ", text)
+
 
 _SEASONS = {"summer": "Summer", "fall": "Fall", "autumn": "Fall",
             "spring": "Spring", "winter": "Winter"}
@@ -323,15 +337,15 @@ _YY = "2[4-9]"  # same 2024-2029 window as before; widen with care ("spring 30 d
 _SEASON_LIST = rf"(?:{_SEASON_ALT})(?:\s*/\s*(?:{_SEASON_ALT}))*"
 _EXPLICIT_RE = re.compile(
     rf"(?<![a-z])({_SEASON_LIST})[\s_-]*(?:of\s+)?[‘’']?\s*(?:20)?({_YY})(?!\d)",
-    re.I)
+    _RX)
 # JD prose is noisier than a title ("prices fall 27%"): the year must be
 # four digits or apostrophe'd there.
 _JD_EXPLICIT_RE = re.compile(
     rf"(?<![a-z])({_SEASON_LIST})[\s_-]*(?:of\s+)?(?:20|[‘’']\s*)({_YY})(?!\d)",
-    re.I)
+    _RX)
 # year-before-season: "2026 Summer", "2027 Spring Intern", "2027-summer"
 _EXPLICIT_REV_RE = re.compile(
-    rf"(?<!\d)20({_YY})[\s_-]+({_SEASON_ALT})(?![a-z])", re.I)
+    rf"(?<!\d)20({_YY})[\s_-]+({_SEASON_ALT})(?![a-z])", _RX)
 
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -342,14 +356,14 @@ _MONTH_ALT = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|"
               r"dec(?:ember)?")
 # title: "Sept 2026", "January 2027 Start"
 _MONTH_YEAR_RE = re.compile(
-    rf"\b({_MONTH_ALT})\.?\s*[‘’']?\s*(?:20)?({_YY})\b", re.I)
+    rf"\b({_MONTH_ALT})\.?\s*[‘’']?\s*(?:20)?({_YY})\b", _RX)
 
 # season with no year: "Fall Intern", "Fall Co-op"
-_SEASON_ONLY_RE = re.compile(rf"\b({_SEASON_ALT})\b", re.I)
+_SEASON_ONLY_RE = re.compile(rf"\b({_SEASON_ALT})\b", _RX)
 
 # bare year next to intern-ish words: "2027 Software Engineer Intern".
 # Industry convention: a bare year on an internship means that year's Summer.
-_BARE_YEAR_RE = re.compile(rf"\b20({_YY})\b")
+_BARE_YEAR_RE = re.compile(rf"\b20({_YY})\b", re.A)
 
 # --- JD body rules. Years must be 4-digit or apostrophe'd: in "May 18 -
 # Aug 27" the 27 is a day.
@@ -358,23 +372,29 @@ _DAY = r"(?:\s+\d{1,2}(?:st|nd|rd|th)?)?"
 _JD_RANGE_RE = re.compile(
     rf"\b({_MONTH_ALT})\b\.?{_DAY},?(?:\s*{_JD_YEAR})?"
     rf"\s*(?:-|–|—|to|through|thru|until)\s*"
-    rf"({_MONTH_ALT})\b\.?{_DAY},?\s*{_JD_YEAR}\b", re.I)
+    rf"({_MONTH_ALT})\b\.?{_DAY},?\s*{_JD_YEAR}\b", _RX)
 _JD_MONTH_YEAR_RE = re.compile(
-    rf"\b({_MONTH_ALT})\b\.?{_DAY},?\s*{_JD_YEAR}\b", re.I)
+    rf"\b({_MONTH_ALT})\b\.?{_DAY},?\s*{_JD_YEAR}\b", _RX)
 _JD_START_RE = re.compile(r"\b(?:start|starts|starting|begin|begins|beginning|"
-                          r"commence|commences|commencing|start date)\b", re.I)
+                          r"commence|commences|commencing|start date)\b", _RX)
 _JD_SEASON_NOUN_RE = re.compile(
     rf"\b({_SEASON_ALT})\s+(?:intern(?:ship)?s?|co-?ops?|semester|term|"
-    rf"session|program(?:me)?|cohort|placement)\b", re.I)
+    rf"session|program(?:me)?|cohort|placement)\b", _RX)
 _JD_SKIP_RE = re.compile(
     r"graduat|class of|commencement|diploma|returning to|"
     r"return to (?:school|campus|university|college)|deadline|apply by|"
     r"applications? (?:close|due|open)|date posted|posted on|last updated|"
     r"on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?"
-    r"(?:bachelor|master|ph\.?d|doctora|undergrad|degree)", re.I)
+    r"(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal", _RX)
+# A JD clause counts only when it is about the role or its dates: "our office
+# renovation runs May-August 2027" or "tuition support during the Fall
+# semester" say nothing about the internship.
+_JD_CONTEXT_RE = re.compile(
+    r"intern|co-?op|program|placement|position|\brole\b|cohort|\bstart|"
+    r"\bbegin|commenc|duration|\bdates?\b", _RX)
 # Split a JD into clauses: newlines/bullets, or sentence punctuation
 # followed by a capital ("Aug. 7" stays whole).
-_CLAUSE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+")
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+", re.A)
 _PAST_COHORT_DAYS = 90
 
 TermSource = Literal["title", "url", "jd"]
@@ -457,7 +477,7 @@ def _range_seasons(m1: int, y1: int, m2: int, y2: int) -> list[str]:
 
 def _jd_clauses(jd: str) -> list[str]:
     return [c for c in _CLAUSE_SPLIT_RE.split(jd)
-            if c.strip() and not _JD_SKIP_RE.search(c)]
+            if c.strip() and _JD_CONTEXT_RE.search(c) and not _JD_SKIP_RE.search(c)]
 
 
 def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
@@ -498,11 +518,12 @@ def infer_term(title: str, url: str | None = None, jd: str | None = None,
     the run date for a live posting (the watcher), the date a stored row was
     added (the hosted backfill)."""
     anchor = today or dt.date.today()
-    title = title or ""
-    clauses = _jd_clauses(jd) if jd else []
+    title = _ascii_space(title or "")
+    url = _ascii_space(url or "")
+    clauses = _jd_clauses(_ascii_space(jd)) if jd else []
     explicit_sources: list[tuple[TermSource, list[str]]] = [
         ("title", _explicit(title)),
-        ("url", _explicit(url or "")),
+        ("url", _explicit(url)),
         ("jd", _jd_explicit(clauses, anchor)),
     ]
     for source, found in explicit_sources:
