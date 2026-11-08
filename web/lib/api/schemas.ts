@@ -17,9 +17,21 @@ export const profile = z.record(z.string(), z.unknown()).refine(
   "Profile is too large (max 768KB).",
 ).describe("Resume profile JSON object, at most 768 KiB. See docs/resume.md and convex/profile_schema.ts.");
 export const jobUrl = z.string().trim().min(1).max(2048).superRefine((value, ctx) => {
-  try { validateUrl(value); } catch {
-    ctx.addIssue({ code: "custom", message: "Provide a public HTTP or HTTPS job URL." });
+  try { validateUrl(value); } catch (error) {
+    // A listing URL is a valid URL of the wrong kind: say so.
+    const listing = error instanceof Error && /search or listing page/.test(error.message);
+    ctx.addIssue({ code: "custom", message: listing ? error.message : "Provide a public HTTP or HTTPS job URL." });
   }
+});
+// Caller-supplied posting fields for a job the server cannot read itself
+// (bot wall, JS-only page). Limits mirror convex/ingest.ts MANUAL_LIMITS.
+export const ingest = z.strictObject({
+  url: jobUrl,
+  jdText: z.string().trim().min(1).max(20_000).optional()
+    .describe("The job description, when the page cannot be fetched. Stored as a pasted JD."),
+  title: z.string().trim().min(1).max(300).optional().describe("Job title; required with jdText when the page gives none."),
+  company: z.string().trim().min(1).max(200).optional(),
+  location: z.string().trim().min(1).max(300).optional(),
 });
 export const ticks = z.strictObject({
   writes: z.array(z.strictObject({ short, field: z.enum(["applied", "saved", "dismissed"]), value: z.boolean() })).max(500),

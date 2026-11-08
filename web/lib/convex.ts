@@ -450,8 +450,11 @@ export type IngestResponse =
   | { ingestId: string; status: "fetching"; short: string }
   | { ingestId: string; status: "already_exists"; short: string };
 
-export async function requestIngest(user: string, url: string): Promise<IngestResponse> {
-  const value = await post("mutation", "requestIngest", { user, url }, "ingest");
+/** Caller-supplied posting fields; see convex/ingest.ts requestIngest. */
+export type IngestManualFields = { jdText?: string; title?: string; company?: string; location?: string };
+
+export async function requestIngest(user: string, url: string, manual: IngestManualFields = {}): Promise<IngestResponse> {
+  const value = await post("mutation", "requestIngest", { user, url, ...manual }, "ingest");
   return value as IngestResponse;
 }
 
@@ -463,6 +466,8 @@ export type IngestRow = {
   canonicalUrl?: string;
   status: string;
   error?: string;
+  /** set on failed rows: "blocked" | "fetch_failed" */
+  errorCode?: string;
   dedupKey?: string;
   createdAt: number;
   updatedAt: number;

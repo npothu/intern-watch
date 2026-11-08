@@ -142,11 +142,14 @@ export async function handleApiRequest(request: Request, segments: string[]): Pr
       failure = new ApiError(409, "conflict", "This inbox action has already been resolved.");
     } else if (error instanceof ConvexError && /rate limited: too many requests/.test(error.message)) {
       failure = new ApiError(429, "rate_limited", "Job ingestion rate limit reached. Try again later.");
+    } else if (error instanceof ConvexError && /Error: (this looks like a job search[^\n]*|invalid (?:jdText|title|company|location)[^\n]*)/.test(error.message)) {
+      // Ingest input rejections are the caller's to fix, not backend failures.
+      failure = new ApiError(400, "invalid_request", /Error: ([^\n]*)/.exec(error.message)![1]);
     } else {
       // Convex error messages can contain argument values, including credentials.
       failure = new ApiError(502, "backend_error", "The backend could not complete this request.");
     }
-    return Response.json({ error: { code: failure.code, message: failure.message } }, {
+    return Response.json({ error: { ...failure.details, code: failure.code, message: failure.message } }, {
       status: failure.status,
       headers: { ...responseHeaders, ...(failure.status === 401 ? { "WWW-Authenticate": "Bearer" } : {}) },
     });

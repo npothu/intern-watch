@@ -71,15 +71,17 @@ Scripts can filter those collections locally.
 | HTTP status | Meaning |
 | --- | --- |
 | 200 | Read or write completed |
+| 201 | Job ingestion finished; the match exists |
 | 202 | Ingestion, resume build, or profile mapping accepted; poll for completion |
 | 400 | Invalid JSON, fields, or parameters |
 | 401 | Missing, invalid, or revoked key |
 | 403 | A read-only key attempted a write |
 | 404 | Endpoint or required record not found |
 | 405 | Unsupported method for this endpoint |
-| 409 | Operation cannot proceed in the current state |
+| 409 | Operation cannot proceed in the current state; `already_exists` for a job already in matches |
 | 413 | Request body exceeds 2 MiB |
 | 415 | Body is not sent as JSON |
+| 422 | `fetch_failed`: the job page could not be read (see Job ingestion) |
 | 429 | Job ingestion rate limit reached |
 | 502 | Backend request failed; raw backend errors are withheld |
 | 503 | API keys are absent or misconfigured |
@@ -105,8 +107,8 @@ Browser cookies alone never authorize these endpoints.
 | GET | `/matches` | Array of matches with current applied, saved and dismissed flags |
 | GET | `/ticks` | Array of stored match flags |
 | PUT | `/ticks` | `{writes:[{short,field,value}]}`, up to 500; returns `{count}` |
-| POST | `/ingests` | `{url}`; returns `{ingestId,short,status}` |
-| GET | `/ingests/{id}` | Ingestion record, including status and any error |
+| POST | `/ingests` | `{url,jdText?,title?,company?,location?}`; see Job ingestion below |
+| GET | `/ingests/{id}` | Ingestion record: status, any error and errorCode, and `short` once done |
 | GET | `/applications` | Array of applications with short, status, note, history, snapshot and dates |
 | PUT | `/applications/{short}/status` | `{status,note?}`; omitted note means empty string |
 | PUT | `/applications/{short}/due-date` | `{dueAt}`, an ISO date or datetime, or null to clear |
@@ -194,3 +196,31 @@ Install both dependency sets with `npm ci` and `npm ci --prefix web`.
 Run `npm test -- web/lib/api` for the API tests, or `npm test` for the complete backend and shared web suite.
 API tests send HTTP-shaped requests through the route handlers and real web client to an in-memory Convex backend.
 They do not require cloud credentials or write production data.
+
+## Job ingestion
+
+`POST /ingests` waits up to 20 seconds for the page to be fetched and read, then answers with the outcome:
+
+| Status | Body | Meaning |
+| --- | --- | --- |
+| 201 | `{data:{ingestId,status:"done",short}}` | The match exists; `short` is usable at once |
+| 202 | `{data:{ingestId,status}}` | Still running; poll `GET /ingests/{id}` |
+| 409 | `{error:{code:"already_exists",short,ingestId}}` | The job is already in matches under `short` |
+| 422 | `{error:{code:"fetch_failed",reason,message,ingestId}}` | The page could not be read |
+| 400 | `{error:{code:"invalid_request",...}}` | Not a public URL, or a search/listing page rather than one posting |
+
+`short` appears only once a match exists.
+A 202 and a failed ingest never carry one, so a script cannot build a resume against a match that was never created.
+
+`reason` is `blocked` when the site served a bot check or an empty JavaScript shell (for example careers.ibm.com), and `fetch_failed` for HTTP errors, closed postings (404/410) and network failures.
+For a `blocked` page, send the job description yourself: `{url, jdText, title, company?, location?}`.
+The JD is stored as a pasted JD, which automatic acquisition never replaces.
+`title` is required when the page gives none.
+To attach a JD to a job that already exists, use `PUT /matches/{short}/job-description`.
+
+The web app's Add URL dialog does not wait.
+It closes as soon as the URL is accepted and follows the ingest in a toast.
+A script has nowhere to show a later result, so the API answers with the outcome when it can.
+
+The server reads JDs from each board's own public endpoint when the page is rendered with JavaScript: Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Workable, Oracle Recruiting Cloud (including custom career domains), Eightfold (including Microsoft), Apple, iCIMS (its `?in_iframe=1` frame) and Phenom (embedded page data).
+

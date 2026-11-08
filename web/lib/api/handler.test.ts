@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import schema from "../../../convex/schema";
@@ -26,6 +26,8 @@ const secret = "test-backend-secret";
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 let backend: ReturnType<typeof convexTest>;
 let upstream: ReturnType<typeof vi.fn>;
+// Job pages the ingest action fetches (anything not addressed to Convex).
+let jobPages: Record<string, () => Response | Promise<Response>>;
 
 async function request(path: string, method = "GET", body?: unknown, token = key) {
   const req = new Request(`https://app.example/api/v1${path}`, {
@@ -48,7 +50,12 @@ beforeEach(async () => {
     { sha256: hash(otherKey), user: "bob", access: "write" },
   ]));
   backend = convexTest(schema, modules);
+  jobPages = {};
   upstream = vi.fn(async (url: string, init: RequestInit) => {
+    if (!url.startsWith("https://api-test.convex.cloud/")) {
+      const page = jobPages[url];
+      return page ? page() : new Response("not found", { status: 404 });
+    }
     expect(url).toMatch(/^https:\/\/api-test.convex.cloud\/api\/(query|mutation|action)$/);
     const { path, args } = JSON.parse(String(init.body));
     const kind = url.split("/").at(-1) as "query" | "mutation" | "action";
@@ -111,12 +118,98 @@ test("profile, preferences and model writes round-trip and remain private", asyn
   expect((await (await request("/resume-model")).json()).data).toMatchObject({ provider: "openrouter", model: "example/model" });
 });
 
-test("job ingestion can be started and polled only by its owner", async () => {
-  const started = await request("/ingests", "POST", { url: "https://example.com/jobs/2" });
-  expect(started.status).toBe(202);
+// The ingest action's modules load in real time; warm them so the fake
+// clock below doesn't run out the endpoint's wait before the action starts.
+const realSetTimeout = globalThis.setTimeout;
+beforeAll(async () => { await import("../../../convex/ingest_node"); });
+
+/** Drive fake time (the endpoint's polling and the scheduled ingest action)
+ * until the request settles, yielding real time so async work can land. */
+async function settle(pending: Promise<Response>): Promise<Response> {
+  let done = false;
+  void pending.finally(() => { done = true; });
+  for (let i = 0; i < 200 && !done; i++) {
+    await new Promise((resolve) => realSetTimeout(resolve, 2));
+    await vi.advanceTimersByTimeAsync(200);
+  }
+  return pending;
+}
+
+const postingPage = (title: string) => () => new Response(
+  `<html><head><script type="application/ld+json">${JSON.stringify({
+    "@type": "JobPosting", title, hiringOrganization: { name: "Example" },
+    description: "<p>Responsibilities: build reliable APIs and own outcomes end to end.</p>".repeat(6),
+  })}</script></head><body></body></html>`,
+  { headers: { "Content-Type": "text/html" } },
+);
+
+test("job ingestion answers with the finished match, polled only by its owner", async () => {
+  jobPages["https://example.com/jobs/2"] = postingPage("Platform Intern");
+  const started = await settle(request("/ingests", "POST", { url: "https://example.com/jobs/2" }));
+  expect(started.status).toBe(201);
   const { data } = await started.json();
-  expect((await request(`/ingests/${data.ingestId}`)).status).toBe(200);
+  expect(data).toMatchObject({ status: "done", short: expect.stringMatching(/^[0-9a-f]{12}$/) });
+  const polled = await request(`/ingests/${data.ingestId}`);
+  expect(polled.status).toBe(200);
+  expect((await polled.json()).data).toMatchObject({ status: "done", short: data.short });
   expect((await request(`/ingests/${data.ingestId}`, "GET", undefined, otherKey)).status).toBe(404);
+  const jd = await (await request(`/matches/${data.short}/job-description`)).json();
+  expect(jd.data.text).toContain("Responsibilities");
+});
+
+test("a bot-walled page (Avature's empty 202) is a 422 with no usable short", async () => {
+  const url = "https://careers.example.com/en_US/careers/JobDetail?jobId=137214";
+  jobPages[url] = () => new Response("", { status: 202, headers: { "x-amzn-waf-action": "challenge" } });
+  const response = await settle(request("/ingests", "POST", { url }));
+  expect(response.status).toBe(422);
+  const { error } = await response.json();
+  expect(error).toMatchObject({ code: "fetch_failed", reason: "blocked", message: expect.stringMatching(/HTTP 202/) });
+  expect(error.short).toBeUndefined();
+  const polled = (await (await request(`/ingests/${error.ingestId}`)).json()).data;
+  expect(polled).toMatchObject({ status: "failed", errorCode: "blocked" });
+  expect(polled.short).toBeUndefined();
+  expect((await (await request("/matches")).json()).data).toHaveLength(1); // only the seeded match
+});
+
+test("a caller-supplied JD and title turn a bot-walled URL into a match", async () => {
+  const url = "https://careers.example.com/en_US/careers/JobDetail?jobId=137215";
+  jobPages[url] = () => new Response("", { status: 202 });
+  const jdText = "Responsibilities: design and ship ML features. ".repeat(8);
+  const response = await settle(request("/ingests", "POST", { url, jdText, title: "ML Engineer Intern", company: "Example" }));
+  expect(response.status).toBe(201);
+  const { data } = await response.json();
+  const match = (await (await request("/matches")).json()).data.find((m: { short: string }) => m.short === data.short);
+  expect(match).toMatchObject({ title: "ML Engineer Intern", company: "Example", tag: "[MANUAL]" });
+  const jd = (await (await request(`/matches/${data.short}/job-description`)).json()).data;
+  expect(jd.text).toBe(jdText.trim());
+  expect(jd.updatedAt).not.toBeNull(); // stored as a pasted JD, never auto-replaced
+});
+
+test("re-adding a job already in matches is a 409 already_exists naming its short", async () => {
+  const response = await request("/ingests", "POST", { url: "https://example.com/jobs/1" });
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toMatchObject({ code: "already_exists", short });
+  jobPages["https://example.com/jobs/3"] = postingPage("Data Intern");
+  const first = await (await settle(request("/ingests", "POST", { url: "https://example.com/jobs/3" }))).json();
+  const again = await request("/ingests", "POST", { url: "https://example.com/jobs/3?utm_source=x" });
+  expect(again.status).toBe(409);
+  expect((await again.json()).error).toMatchObject({ code: "already_exists", short: first.data.short });
+});
+
+test("search and listing URLs are rejected before any fetch", async () => {
+  for (const url of ["https://careers.example.com/careers/search?q=intern", "https://example.com/jobs?keyword=intern"]) {
+    const response = await request("/ingests", "POST", { url });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.message).toMatch(/search or listing page/);
+  }
+});
+
+test("an ingest still fetching after the wait is a 202 without a short", async () => {
+  jobPages["https://example.com/jobs/4"] = () => new Promise<Response>(() => {});
+  const response = await settle(request("/ingests", "POST", { url: "https://example.com/jobs/4" }));
+  expect(response.status).toBe(202);
+  const { data } = await response.json();
+  expect(data).toEqual({ ingestId: expect.any(String), status: "extracting" });
 });
 
 test("resume preconditions, saved job descriptions and build polling preserve backend semantics", async () => {

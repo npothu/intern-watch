@@ -378,6 +378,9 @@ export default defineSchema({
     canonicalUrl: v.optional(v.string()),
     status: v.string(),
     error: v.optional(v.string()),
+    // Why a failed ingest failed: "blocked" (bot wall / JS-only page) or
+    // "fetch_failed" (HTTP error, closed posting, network).
+    errorCode: v.optional(v.string()),
     dedupKey: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),

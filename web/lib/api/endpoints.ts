@@ -31,6 +31,45 @@ function requireSuccess(result: { ok: boolean; error?: string; reason?: string }
   return result;
 }
 
+// POST /ingests waits this long for the background fetch before answering
+// 202. Unlike the web dialog (PR #83), which closes at once and follows the
+// ingest in a toast, a script has nowhere to show a later result: answering
+// with the outcome - 201 done, 422 failed - saves it a polling loop, and a
+// 202 never carries a short that does not exist yet.
+export const INGEST_WAIT_MS = 20_000;
+const INGEST_POLL_MS = 1_000;
+
+async function waitForIngest(user: string, ingestId: string): Promise<store.IngestRow | null> {
+  const deadline = Date.now() + INGEST_WAIT_MS;
+  let row: store.IngestRow | null = null;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, INGEST_POLL_MS));
+    row = await store.getIngestStatus(user, ingestId);
+    if (!row || row.status === "done" || row.status === "failed") break;
+  }
+  return row;
+}
+
+/** An ingest's short names a match only once the match exists. A short
+ * handed out while fetching (or after a failure) looks usable and is not:
+ * resume builds against it 404. */
+function publicIngestRow(row: store.IngestRow) {
+  const { short, ...rest } = row;
+  return row.status === "done" || row.status === "already_exists" ? { ...rest, short } : rest;
+}
+
+function ingestResponse(row: store.IngestRow | null, ingestId: string): unknown {
+  if (row?.status === "failed") {
+    throw new ApiError(422, "fetch_failed", row.error ?? "The job page could not be read.", {
+      ingestId, reason: row.errorCode ?? "fetch_failed",
+    });
+  }
+  if (row?.status === "done") {
+    return Response.json({ data: { ingestId, status: "done", short: row.short } }, { status: 201 });
+  }
+  return { ingestId, status: row?.status ?? "fetching" };
+}
+
 export function fileResponse(file: store.ResumeExportFile): Response {
   const bytes = Buffer.from(file.base64, "base64");
   const ascii = file.filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
@@ -49,12 +88,19 @@ export const endpoints: Endpoint[] = [
     const byShort = new Map(ticks.map((tick) => [tick.short, tick]));
     return matches.map((match) => ({ ...match, ...byShort.get(match.short ?? "") }));
   }),
-  endpoint("POST", "/ingests", "Add a job URL and start ingestion", z.strictObject({ url: s.jobUrl }),
-    (user, _, body) => store.requestIngest(user, body.url), 202),
+  endpoint("POST", "/ingests", "Add a job URL; waits briefly for the result", s.ingest, async (user, _, { url, ...manual }) => {
+    const started = await store.requestIngest(user, url, manual);
+    if (started.status === "already_exists") {
+      throw new ApiError(409, "already_exists", "This job is already in your matches.", {
+        short: started.short, ingestId: started.ingestId,
+      });
+    }
+    return ingestResponse(await waitForIngest(user, started.ingestId), started.ingestId);
+  }, 202),
   endpoint("GET", "/ingests/{id}", "Poll a job ingestion", s.empty, async (user, { id }) => {
     const result = await store.getIngestStatus(user, id);
     if (!result) throw new ApiError(404, "not_found", "Ingestion not found.");
-    return result;
+    return publicIngestRow(result);
   }),
   endpoint("GET", "/ticks", "List match flags", s.empty, (user) => store.getTicks(user)),
   endpoint("PUT", "/ticks", "Set up to 500 match flags atomically", s.ticks, async (user, _, { writes }) => {

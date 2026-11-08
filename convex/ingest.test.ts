@@ -72,6 +72,30 @@ describe("ingest: validateUrl", () => {
   test("blocks non-http scheme", () => {
     expect(() => validateUrl("ftp://example.com/file")).toThrow(/http/);
   });
+  test("rejects search and listing pages", () => {
+    for (const url of [
+      "https://ibm.com/careers/search?q=136613",
+      "https://careers.example.com/en_US/careers/SearchJobs/?listFilterMode=1",
+      "https://apply.careers.microsoft.com/careers?query=intern&start=0",
+      "https://careers.oracle.com/jobs/",
+      "https://acme.wd5.myworkdayjobs.com/en-US/External?q=intern",
+    ]) {
+      expect(() => validateUrl(url), url).toThrow(/search or listing page/);
+    }
+  });
+  test("keeps single postings, including ones with search-ish parameters", () => {
+    for (const url of [
+      "https://careers.ibm.com/en_US/careers/JobDetail?jobId=137214",
+      "https://careers.ibm.com/en_US/careers/JobDetail/AI-ML-Engineer-Intern-2027-SAN-JOSE/135597",
+      "https://acme.eightfold.ai/careers?pid=563808972035923&query=intern",
+      "https://boards.greenhouse.io/acme?gh_jid=4012345",
+      "https://campus-americas.icims.com/jobs/26272/data-engineer-intern/job?in_iframe=1",
+      "https://jobs.apple.com/en-us/details/200676912-3715/software-engineering-intern",
+      "https://jobs.lever.co/acme/11111111-2222-3333-4444-555555555555?q=x",
+    ]) {
+      expect(() => validateUrl(url), url).not.toThrow();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
