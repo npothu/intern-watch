@@ -19,6 +19,11 @@ class Job(BaseModel):
     locations: list[str] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)   # e.g. ["Fall 2026"]; [] = unknown
     term_confidence: TermConfidence = "unknown"
+    # The terms came from the JD body (main.infer_terms_from_jds), not the
+    # source's own title/URL data. Such a term may only ACCEPT at the term
+    # stage: one outside the wanted set is treated as unknown (LLM decides),
+    # never as a term-not-wanted rejection. Transient, like `description`.
+    terms_from_jd: bool = False
     url: str                          # apply/info link, tracking params stripped
     jobright_id: str | None = None    # 24-hex id when extractable
     work_model: str | None = None     # "On Site" | "Hybrid" | "Remote" | None

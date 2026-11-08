@@ -396,8 +396,12 @@ _JD_SEASON_NOUN_RE = re.compile(
 # degree completion, deadlines, posting dates. Ignored entirely, including
 # by the consistency gate below.
 _JD_HARD_SKIP_RE = re.compile(
-    r"graduat|class of|commencement|diploma|returning to|"
-    r"return to (?:school|campus|university|college)|deadline|apply by|"
+    # \b-anchored: "undergraduate", "postgraduate", "diplomacy" are not
+    # graduation; "returning to" needs a school-like object ("returning to
+    # the office" is not).
+    r"\bgraduat|class of|commencement|\bdiploma\b|"
+    r"\breturn(?:ing)? to (?:school|campus|university|college|class(?:es)?)\b|"
+    r"deadline|apply by|"
     r"applications? (?:close|due|open)|date posted|posted on|last updated|"
     r"on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?"
     r"(?:bachelor|master|ph\.?d|doctora|undergrad|degree)", _RX)
@@ -427,10 +431,19 @@ _JD_SEASON_WORD_RE = re.compile(
 # A placement longer than one term: a single-term answer cannot be trusted
 # unless it came from a stated span.
 _JD_LONG_DURATION_RE = re.compile(
-    r"\b(?:(?:[5-9]|1[0-2]|five|six|seven|eight|nine|ten|eleven|twelve)"
-    r"[\s-]*months?|(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|"
-    r"fifty[\w-]*)[\s-]*weeks?|half[\s-]+a[\s-]+year|(?:two|2|multi)[\s-]*"
+    r"\b(?:(?:[5-9]|1\d|2[0-4]|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"eighteen|twenty[\w-]*)\+?[\s-]*(?:calendar[\s-]+)?months?|"
+    r"(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|fifty[\w-]*)"
+    r"\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*"
     r"(?:semesters?|terms))\b", _RX)
+# Placement evidence that keeps a hard-skipped clause in the gate: an
+# explicit season tied to an internship noun ("our Summer 2027 internship",
+# not "graduation date of Spring 2028"), a month range ("May 18 - Aug 7,
+# 2027"), or a season + internship noun ("spring co-op").
+_JD_PLACEMENT_EVIDENCE_RE = re.compile(
+    rf"(?:{_JD_EXPLICIT_RE.pattern})\W+(?:\w+\W+){{0,2}}?"
+    r"(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\b|"
+    rf"(?:{_JD_RANGE_RE.pattern})|(?:{_JD_SEASON_NOUN_RE.pattern})", _RX)
 # A month range counts only when the clause says it is the placement's span:
 # "the internship runs May-August 2027", "co-op dates: Jan-Jun 2027".
 _JD_SPAN_RE = re.compile(
@@ -446,8 +459,9 @@ _JD_YEAR_ROUND_RE = re.compile(
 # answer flips overnight there (May 31 -> Summer 2027, June 1 -> Summer
 # 2028), so the rule returns unknown and the LLM decides.
 _SEASON_AMBIGUOUS_MONTHS = {
-    "Spring": {12, 1, 2, 3, 4}, "Summer": {4, 5, 6, 7, 8},
-    "Fall": {7, 8, 9, 10, 11}, "Winter": {11, 12, 1, 2},
+    # The season's _TERM_COVER months (Spring also the December before).
+    "Spring": {12, 1, 2, 3, 4}, "Summer": {4, 5, 6, 7, 8, 9},
+    "Fall": {7, 8, 9, 10, 11, 12}, "Winter": {11, 12, 1, 2},
 }
 # Months a term plausibly covers, as (year offset, month), for the gate: a
 # Summer internship may start in April and end in September.
@@ -655,8 +669,11 @@ def _jd_consistent(terms: list[str], gate: list[str], placement: list[str],
              for dy, month in _TERM_COVER[season]}
     months = {month for _, month in cover}
     seasons = {season for season, _ in parsed}
-    if len(terms) == 1 and not from_span and any(
-            _JD_LONG_DURATION_RE.search(c) for c in placement):
+    # A long duration in any placement clause is doubt, even beside a
+    # one-term span ("this co-op is 12 months" + "May 18 - Aug 7"); only a
+    # stated span covering several terms can account for it.
+    if any(_JD_LONG_DURATION_RE.search(c) for c in placement) and not (
+            from_span and len(terms) > 1):
         return False
     for c in gate:
         if any(t not in terms for t in _explicit(c, _JD_EXPLICIT_RE)):
@@ -685,7 +702,10 @@ def infer_term(title: str, url: str | None = None, jd: str | None = None,
     title = _ascii_space(title or "")
     url = _ascii_space(url or "")
     all_clauses = _split_clauses(_ascii_space(jd)) if jd else []
-    gate = [c for c in all_clauses if not _JD_HARD_SKIP_RE.search(c)]
+    # A hard-skipped clause never produces a term, but one that also carries
+    # placement evidence still has to agree with the answer.
+    gate = [c for c in all_clauses if not _JD_HARD_SKIP_RE.search(c)
+            or _JD_PLACEMENT_EVIDENCE_RE.search(c)]
     clauses = _jd_clauses(all_clauses)
     jd_explicit = _jd_explicit(clauses, anchor)
     if jd_explicit and not _jd_consistent(jd_explicit, gate, clauses, False):

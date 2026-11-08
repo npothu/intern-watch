@@ -433,3 +433,82 @@ def test_infer_terms_from_jds_only_touches_unknown_terms_with_a_jd():
     assert known.terms == ["Summer 2027"]
     assert no_jd.terms == []
     assert (jd.terms, jd.term_confidence) == (["Spring 2027"], "inferred")
+
+
+# ------------------------- a JD-derived term may only accept, never reject
+
+def _jd_llm_run(monkeypatch, tmp_path, llm_term, terms=None, rules=None):
+    """One run with a single job whose JD says Fall 2027 while the user wants
+    Summer 2027; the fake LLM answers `llm_term`. Returns (state, payloads)."""
+    job = _job(1, term=None)
+    job.term_confidence = "unknown"
+    job.description = "Join our Fall 2027 internship program in Atlanta."
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [job]
+
+    cfg = _user_cfg(terms=terms or ["Summer 2027"], rules=rules)
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "provider": "gemini",
+                  "tasks": ["term_inference"], "max_jobs_per_run": 10}
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": OkAdapter}, [cfg])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    batches: list[list[Job]] = []
+
+    def fake_classify(batch, top_def, wanted, llm_cfg):
+        batches.append(list(batch))
+        return {j.dedup_key: {"term": llm_term} for j in batch}
+
+    monkeypatch.setattr(main, "classify", fake_classify)
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    assert main.main(["--state-file", str(state_file)]) == 0
+    return st.load_state(state_file), batches
+
+
+def test_unwanted_jd_term_goes_to_the_llm_and_its_summer_verdict_accepts(monkeypatch, tmp_path):
+    state, batches = _jd_llm_run(monkeypatch, tmp_path, "Summer 2027")
+    # Without the accept-only rule this was a permanent term-not-wanted.
+    assert [j.dedup_key for b in batches for j in b] == [_key(1)]
+    assert st.was_notified(state, _key(1), "example")
+
+
+def test_unwanted_jd_term_with_a_null_llm_verdict_uses_the_every_wanted_term_fallback(
+        monkeypatch, tmp_path):
+    # Every wanted term (just Summer 2027) accepts -> the fallback accepts.
+    state, _ = _jd_llm_run(monkeypatch, tmp_path, None)
+    assert st.was_notified(state, _key(1), "example")
+
+
+def test_jd_term_stage_verdicts():
+    from pathlib import Path
+
+    from src.filters import UserFilter
+    cfg = _user_cfg(terms=["Summer 2027", "Spring 2028"])   # Spring 2028 has no rule
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "tasks": ["term_inference"]}
+    uf = UserFilter(cfg, Path(__file__).parents[1], today=TODAY)
+    uf.llm_enabled = True
+
+    def jd_job(term):
+        j = _job(1, term=term)
+        j.terms_from_jd = True
+        return j
+
+    # wanted JD term: proceeds to the rules as before
+    assert uf.evaluate(jd_job("Summer 2027")).status == "accept"
+    # unwanted JD term: unknown-term, handed to the LLM
+    first = uf.evaluate(jd_job("Fall 2027"))
+    assert (first.status, first.reasons) == ("ambiguous", ["unknown-term"])
+    assert "term" in first.needs
+    # LLM null: every-wanted-term fallback; Spring 2028 has no rule -> unresolved
+    second = uf.evaluate(jd_job("Fall 2027"), llm_facts={"term": None})
+    assert (second.status, second.reasons) == ("reject", ["term-unresolved"])
+    # the same term from title/source data keeps rejecting as term-not-wanted
+    source = uf.evaluate(_job(1, term="Fall 2027"))
+    assert (source.status, source.reasons) == ("reject", ["term-not-wanted"])

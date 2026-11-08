@@ -548,7 +548,13 @@ class UserFilter:
         if elim:
             return _reject(elim)
 
-        if not job.terms:
+        # A term read from the JD body may only accept: one outside the wanted
+        # set is handled exactly like no term (LLM, then the every-wanted-
+        # term fallback), so a misread JD costs an LLM call, never a
+        # permanent term-not-wanted rejection. Title/URL/source terms keep
+        # their behaviour.
+        jd_term_unwanted = job.terms_from_jd and not set(job.terms) & self.terms_wanted
+        if not job.terms or jd_term_unwanted:
             if llm_facts is not None:
                 # Even the LLM couldn't resolve a term. Don't hard-drop: accept
                 # iff the job passes the rules under EVERY wanted term (the most

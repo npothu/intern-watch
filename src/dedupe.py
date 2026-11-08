@@ -28,6 +28,7 @@ def _merge_pair(base: Job, other: Job) -> Job:
     base.url = preferred_apply_url(base.url, other.url)
     if not base.terms and other.terms:
         base.terms, base.term_confidence = other.terms, other.term_confidence
+        base.terms_from_jd = other.terms_from_jd
     base.jobright_id = base.jobright_id or other.jobright_id
     base.work_model = base.work_model or other.work_model
     base.salary = base.salary or other.salary

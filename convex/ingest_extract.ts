@@ -495,7 +495,7 @@ const JD_SEASON_NOUN_ALL_RE = new RegExp(JD_SEASON_NOUN_RE.source, "gi");
 // Clauses whose dates are understood and never the placement (graduation,
 // degree completion, deadlines, posting dates): ignored, even by the gate.
 const JD_HARD_SKIP_RE =
-  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
+  /\bgraduat|class of|commencement|\bdiploma\b|\breturn(?:ing)? to (?:school|campus|university|college|class(?:es)?)\b|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
 // Clauses whose dates are not the placement but may disagree with it: they
 // never produce a term, but the consistency gate still reads them.
 const JD_SOFT_SKIP_RE =
@@ -508,13 +508,18 @@ const JD_SEASON_WORD_RE = new RegExp(
   `\\b(${SEASON_ALT})\\b(?!\\s+(?:under|within|into|behind|short|through|off|apart|outside|in love)\\b)`, "gi");
 // A placement longer than one term: a single-term answer needs a stated span.
 const JD_LONG_DURATION_RE =
-  /\b(?:(?:[5-9]|1[0-2]|five|six|seven|eight|nine|ten|eleven|twelve)[\s-]*months?|(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|fifty[\w-]*)[\s-]*weeks?|half[\s-]+a[\s-]+year|(?:two|2|multi)[\s-]*(?:semesters?|terms))\b/i;
+  /\b(?:(?:[5-9]|1\d|2[0-4]|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\w-]*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|fifty[\w-]*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms))\b/i;
+// Placement evidence that keeps a hard-skipped clause in the gate (see normalize.py).
+const JD_PLACEMENT_EVIDENCE_RE = new RegExp(
+  `(?:${JD_EXPLICIT_RE.source})\\W+(?:\\w+\\W+){0,2}?(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\\b|(?:${JD_RANGE_RE.source})|(?:${JD_SEASON_NOUN_RE.source})`,
+  "i",
+);
 // A month range counts only when the clause says it is the placement's span.
 const JD_SPAN_RE = /\b(?:runs?|running|from|starts?|starting|begins?|beginning|duration|dates?|lasts?|between|join)\b/i;
 const JD_YEAR_ROUND_RE = /year[\s-]round|all year|throughout the year|multiple (?:terms|seasons)|any (?:term|season)/i;
 // Months where a yearless "<season> internship" could mean this year's or next year's (see normalize.py).
 const SEASON_AMBIGUOUS_MONTHS: Record<string, number[]> = {
-  Spring: [12, 1, 2, 3, 4], Summer: [4, 5, 6, 7, 8], Fall: [7, 8, 9, 10, 11], Winter: [11, 12, 1, 2],
+  Spring: [12, 1, 2, 3, 4], Summer: [4, 5, 6, 7, 8, 9], Fall: [7, 8, 9, 10, 11, 12], Winter: [11, 12, 1, 2],
 };
 // Months a term plausibly covers, as [year offset, month], for the gate.
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -702,7 +707,8 @@ function jdConsistent(terms: string[], gate: string[], placement: string[], from
     }
   }
   // Duration only from placement clauses: "a 6-month application limit" is not the placement.
-  if (terms.length === 1 && !fromSpan && placement.some((c) => JD_LONG_DURATION_RE.test(c))) return false;
+  // A long duration in any placement clause is doubt unless a stated span covers several terms.
+  if (placement.some((c) => JD_LONG_DURATION_RE.test(c)) && !(fromSpan && terms.length > 1)) return false;
   for (const c of gate) {
     if (explicitTerms(c, JD_EXPLICIT_RE).some((t) => !terms.includes(t))) return false;
     for (const m of c.matchAll(JD_MONTH_YEAR_ALL_RE)) {
@@ -737,7 +743,8 @@ export function inferTermDetailed(input: {
   const title = (input.title ?? "").replace(SPACE_RE, " ");
   const url = (input.url ?? "").replace(SPACE_RE, " ");
   const all = input.jd ? splitClauses(input.jd.replace(SPACE_RE, " ")) : [];
-  const gate = all.filter((c) => !JD_HARD_SKIP_RE.test(c));
+  // A hard-skipped clause with placement evidence still has to agree with the answer.
+  const gate = all.filter((c) => !JD_HARD_SKIP_RE.test(c) || JD_PLACEMENT_EVIDENCE_RE.test(c));
   const clauses = jdClauses(all);
   const done = (terms: string[], confidence: TermConfidence, source: TermInference["source"]): TermInference => {
     const ordered = orderedTerms(terms);

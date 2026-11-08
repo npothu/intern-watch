@@ -151,6 +151,7 @@ def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
         got = infer_term(job.title, job.url, job.description, today)
         if got.terms:
             job.terms, job.term_confidence = got.terms, got.confidence
+            job.terms_from_jd = True
             resolved += 1
             log.info("term from %s for %s: %s (%s)", got.source,
                      job.dedup_key, ", ".join(got.terms), got.confidence)
@@ -406,9 +407,12 @@ def _backfill_apply_urls(state: dict, resolver,
 
 def _finalize(uf: UserFilter, job: Job, facts: dict) -> Verdict:
     """Re-run the rule engine with LLM facts. Writes an LLM-supplied term onto
-    the job first (term is objective and shared across users)."""
-    if not job.terms and facts.get("term"):
+    the job first (term is objective and shared across users). It replaces a
+    JD-derived term too: that term only reached the LLM because it was not
+    wanted, and the LLM read the same JD plus the title."""
+    if facts.get("term") and (not job.terms or job.terms_from_jd):
         job.terms, job.term_confidence = [facts["term"]], "inferred"
+        job.terms_from_jd = False
     return uf.evaluate(job, llm_facts=facts)
 
 
@@ -1024,6 +1028,8 @@ def _explain_user(uf: UserFilter, job: Job, state: dict) -> list[str]:
     cached = _cached_facts(state, job, name)
     term_src = ("explicit" if job.terms and job.term_confidence == "explicit"
                 else "inferred" if job.terms else "unknown")
+    if job.terms_from_jd:
+        term_src += ", from the JD: accept-only"
     lines.append(f"term: {job.terms or '[]'} ({term_src})")
     if "term" in cached:
         lines.append(f"  cached LLM term: {cached['term']}")
