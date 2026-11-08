@@ -33,6 +33,10 @@ if [ "${IW_PREVIEW_PHASE:-}" = "build" ]; then
 
   echo "Preview backend $name starts empty. Production snapshots are never imported."
 
+  # Phase 1 seeds the backend once `convex deploy` has pushed the functions
+  # (this hook runs BEFORE that push), so hand it the preview URL.
+  printf '%s' "$CONVEX_URL" > "$CONVEX_SCRATCH/preview-url"
+
   # Inline the preview's URLs into the Next.js bundles (web/next.config.ts):
   # the server code reads process.env.CONVEX_URL at runtime, and the runtime
   # env is the shared Preview environment, not this deployment.
@@ -59,7 +63,19 @@ rm -rf "$CONVEX_SCRATCH/convex/_generated"
 # Recreate the branch backend on every push so old production seed data cannot survive.
 preview=$(printf '%s' "${VERCEL_GIT_COMMIT_REF:-local}" | tr -c 'A-Za-z0-9-' '-' | cut -c1-60)
 cd "$CONVEX_SCRATCH"
-exec node_modules/.bin/convex deploy --yes \
+node_modules/.bin/convex deploy --yes \
   --preview-create "$preview" \
   --cmd "IW_PREVIEW_PHASE=build bash '$REPO/scripts/vercel-build.sh'" \
   --cmd-url-env-var-name CONVEX_URL
+
+# ---- phase 3: functions are live on the preview backend; seed it ----------
+# Synthetic data only (fictional companies, .invalid URLs) so the preview has
+# something to click through. Best effort: a seeding failure never fails the build.
+url=$(cat "$CONVEX_SCRATCH/preview-url" 2>/dev/null || true)
+if [ -n "$url" ]; then
+  cp "$REPO/scripts/seed-preview.mjs" "$REPO/scripts/preview-seed-data.mjs" "$CONVEX_SCRATCH/"
+  (IW_PREVIEW_PHASE=seed CONVEX_URL="$url" node "$CONVEX_SCRATCH/seed-preview.mjs") \
+    || echo "warning: preview seed failed; backend stays empty"
+else
+  echo "warning: no preview URL recorded; skipping seed"
+fi
