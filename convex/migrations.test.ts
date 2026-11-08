@@ -126,6 +126,26 @@ test("maintenance blocks public endpoints", async () => {
   await expect(t.query(api.tracker.getTicks, { user: "example", secret: SECRET })).resolves.toBeDefined();
 });
 
+test("deleteUser removes only that user's rows and needs confirm + maintenance", async () => {
+  const t = convexTest(schema);
+  await seed(t, "nathan", ["aaaaaaaaaaaa"]);
+  await seed(t, "example", ["aaaaaaaaaaaa"]);
+  const dry = await t.action(internal.migrations.deleteUser, { user: "nathan", dryRun: true });
+  expect(dry.before).toMatchObject({ ticks: 1, applications: 1, matches: 1, settings: 1 });
+  await expect(t.action(internal.migrations.deleteUser, { user: "nathan", dryRun: false })).rejects.toThrow(/confirm/);
+  delete process.env.TRACKER_MAINTENANCE;
+  await expect(t.action(internal.migrations.deleteUser, { user: "nathan", dryRun: false, confirm: "nathan" }))
+    .rejects.toThrow(/TRACKER_MAINTENANCE/);
+  process.env.TRACKER_MAINTENANCE = "1";
+  const r = await t.action(internal.migrations.deleteUser, { user: "nathan", dryRun: false, confirm: "nathan" });
+  expect(r.remaining).toBe(0);
+  const left = await t.run((ctx) => ctx.db.query("ticks").collect());
+  expect(left.map((row) => row.user)).toEqual(["example"]);
+  // Now the rename is collision-free.
+  const moved = await t.action(internal.migrations.renameUser, { from: "example", to: "nathan", dryRun: false });
+  expect(moved.remainingOnFrom).toBe(0);
+});
+
 test("rejects malformed or identical keys", async () => {
   const t = convexTest(schema);
   await expect(t.action(internal.migrations.renameUser, { from: "example", to: "bad key", dryRun: true })).rejects.toThrow();

@@ -29,8 +29,10 @@ SHORTs, credentials, resume files and document ids do not change.
      and actions now fail with a maintenance message; Gmail pushes get a 503 and
      Pub/Sub redelivers them later; the daily mail crons skip.
    - Any Gmail-connect (OAuth) flow in progress must be restarted afterwards.
-2. **Move any old target aside** (only if the dry run shows the new key already owns rows):
-   `npx convex run --prod migrations:renameUser '{"from":"nathan","to":"nathan_legacy","dryRun":false}'`
+2. **Delete the stale target** (only if the new key already owns rows; for 2026-11 the old
+   `nathan` was test data Nathan asked to discard):
+   `npx convex run --prod migrations:deleteUser '{"user":"nathan","dryRun":true}'`, check the counts, then
+   `npx convex run --prod migrations:deleteUser '{"user":"nathan","dryRun":false,"confirm":"nathan"}'`
 3. **Dry run**:
    `npx convex run --prod migrations:renameUser '{"from":"example","to":"nathan","dryRun":true}'`
    `blockers` must be empty: maintenance on, no pending/running scheduled
@@ -42,11 +44,11 @@ SHORTs, credentials, resume files and document ids do not change.
 5. **Web env** (host dashboard): in `TRACKER_USER_MAP` map the email to `nathan`; in
    `TRACKER_API_KEYS` change each `"user":"example"` to `"nathan"`. Redeploy.
 6. **Data repo** (one commit, from an up-to-date main):
-   - `python scripts/rename_state_user.py --data-dir <data-repo> --from nathan --to nathan_legacy --write` (only if `nathan` exists there)
+   - `python scripts/rename_state_user.py --data-dir <data-repo> --from nathan --delete --write` (only if `nathan` exists there)
    - `python scripts/rename_state_user.py --data-dir <data-repo> --from example --to nathan --write`
    - `git mv users/example.yaml users/nathan.yaml` and set `name: nathan`.
    - Rename the surviving dashboard issue title to `📋 intern-baddie matches — nathan`
-     (its number is now under `_meta.dashboard_issue.nathan`); close the old test issue.
+     (its number is now under `_meta.dashboard_issue.nathan`); close the old test issue (#34).
 7. Update `user` in each local API key file (`~/.config/intern-baddie/script-key.json`).
 8. **Reopen**: `npx convex env remove --prod TRACKER_MAINTENANCE`, re-enable the
    workflows, then verify: `GET /api/v1/me` returns `nathan`, the web app shows the

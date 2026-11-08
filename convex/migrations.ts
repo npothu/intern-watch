@@ -155,6 +155,32 @@ export const renameUserBatch = internalMutation({
   },
 });
 
+// File-storage fields that a deleted row may own.
+const STORAGE_FIELDS = ["storageId", "docxStorageId", "prevStorageId", "prevDocxStorageId"];
+
+export const deleteUserBatch = internalMutation({
+  args: { table: v.string(), user: v.string(), limit: v.number() },
+  handler: async (ctx, { table, user, limit }) => {
+    if (!maintenanceOn()) throw new ConvexError("TRACKER_MAINTENANCE must be 1 while deleting rows");
+    const page = await rowsFor(ctx.db, table, user).paginate({
+      cursor: null, numItems: limit, maximumBytesRead: MOVE_BATCH_BYTES,
+    });
+    let files = 0;
+    for (const row of page.page) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = row as any;
+      for (const f of STORAGE_FIELDS) {
+        if (r[f]) {
+          // A blob already gone is fine; the row is what matters.
+          try { await ctx.storage.delete(r[f]); files++; } catch { /* already deleted */ }
+        }
+      }
+      await ctx.db.delete(row._id);
+    }
+    return { deleted: page.page.length as number, files, isDone: page.isDone as boolean };
+  },
+});
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 async function countAll(ctx: any, user: string): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
@@ -238,5 +264,47 @@ export const renameUser = internalAction({
       }
     }
     return { dryRun: false, before, moved, after, remainingOnFrom: total(after[from]) };
+  },
+});
+
+// Permanently delete every row (and owned file blob) of one user key. Used to
+// discard a stale test user before reusing its key. Same safety rails as
+// renameUser: maintenance on, nothing scheduled, dry run first. The `confirm`
+// argument must repeat the user key.
+export const deleteUser = internalAction({
+  args: { user: v.string(), dryRun: v.boolean(), confirm: v.optional(v.string()), batch: v.optional(v.number()) },
+  handler: async (ctx, { user, dryRun, confirm, batch }) => {
+    if (!USER_KEY.test(user)) throw new ConvexError("user key must match [a-zA-Z0-9_-]{1,100}");
+    const before = await countAll(ctx, user);
+    const pending: { name: string; state: string; scheduledTime: number }[] = [];
+    for (let cursor: string | null = null; ;) {
+      const page: { live: typeof pending; cursor: string; isDone: boolean } =
+        await ctx.runQuery(internal.migrations.pendingScheduledPage, { cursor });
+      pending.push(...page.live);
+      if (page.isDone) break;
+      cursor = page.cursor;
+    }
+    const blockers: string[] = [];
+    if (!maintenanceOn()) blockers.push("TRACKER_MAINTENANCE is not 1");
+    if (pending.length) blockers.push(`${pending.length} scheduled function(s) pending or running`);
+    if (dryRun) return { dryRun: true, before, pending: pending.slice(0, 50), blockers };
+    if (confirm !== user) throw new ConvexError(`refusing: pass confirm: "${user}" to delete`);
+    if (blockers.length) throw new ConvexError(`refusing: ${blockers.join("; ")}`);
+    const limit = Math.max(1, Math.min(batch ?? 200, 500));
+    const deleted: Record<string, number> = {};
+    let files = 0;
+    for (const table of TABLE_NAMES) {
+      deleted[table] = 0;
+      for (;;) {
+        const r: { deleted: number; files: number; isDone: boolean } =
+          await ctx.runMutation(internal.migrations.deleteUserBatch, { table, user, limit });
+        deleted[table] += r.deleted;
+        files += r.files;
+        if (r.deleted === 0 && r.isDone) break;
+        if (r.deleted === 0) throw new ConvexError(`${table}: empty batch before the range was exhausted`);
+      }
+    }
+    const after = await countAll(ctx, user);
+    return { dryRun: false, before, deleted, files, remaining: total(after) };
   },
 });

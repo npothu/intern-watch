@@ -51,3 +51,15 @@ def test_refuses_when_target_exists_then_works_after_moving_it_aside(tmp_path):
     seen, apps = _read(tmp_path)
     assert apps == {"nathan": {"a": {}}, "nathan_legacy": {"b": {}}}
     assert seen["jobs"]["k1"]["notified_for"] == ["nathan", "nathan_legacy"]
+
+
+def test_delete_then_rename(tmp_path):
+    _write(tmp_path, _seen("example", "nathan"), {"example": {"a": {}}, "nathan": {"b": {}}})
+    assert main(["--data-dir", str(tmp_path), "--from", "nathan", "--delete", "--write"]) == 0
+    seen, apps = _read(tmp_path)
+    assert "nathan" not in json.dumps([seen, apps])
+    assert apps == {"example": {"a": {}}}
+    assert main(["--data-dir", str(tmp_path), "--from", "example", "--to", "nathan", "--write"]) == 0
+    seen, apps = _read(tmp_path)
+    assert apps == {"nathan": {"a": {}}}
+    assert seen["_meta"]["dashboard_issue"] == {"nathan": 1}

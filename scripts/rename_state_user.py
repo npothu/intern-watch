@@ -3,7 +3,7 @@
 Companion to convex/migrations.ts:renameUser for the Python-side state the
 watcher commits to the data repo. Dry run by default; pass --write to save.
 
-    python scripts/rename_state_user.py --data-dir ../autojobfinder --from nathan --to nathan_legacy
+    python scripts/rename_state_user.py --data-dir ../autojobfinder --from nathan --delete
     python scripts/rename_state_user.py --data-dir ../autojobfinder --from example --to nathan
     ... --write
 
@@ -89,6 +89,41 @@ def rename_applications(apps: dict, src: str, dst: str) -> dict[str, int]:
     return {"applications": len(apps.get(dst, {}))} if report else {}
 
 
+def delete_user(seen: dict, apps: dict, user: str) -> dict[str, int]:
+    """Remove every trace of `user` from the user-keyed places rename touches."""
+    counts: dict[str, int] = {}
+
+    def bump(k: str) -> None:
+        counts[k] = counts.get(k, 0) + 1
+
+    if apps.pop(user, None) is not None:
+        bump("applications")
+    meta = seen.get("_meta", {})
+    if meta.get("dashboard_issue", {}).pop(user, None) is not None:
+        bump("_meta.dashboard_issue")
+    if user in meta.get("crossdedup_done", []):
+        meta["crossdedup_done"] = [u for u in meta["crossdedup_done"] if u != user]
+        bump("_meta.crossdedup_done")
+    for name in SEEN_USER_DICTS:
+        if user in seen.get(name, {}):
+            del seen[name][user]
+            bump(name)
+    for c in seen.get("companies", {}).values():
+        if isinstance(c, dict) and isinstance(c.get("top"), dict) and user in c["top"]:
+            del c["top"][user]
+            bump("companies.*.top")
+    for j in seen.get("jobs", {}).values():
+        if not isinstance(j, dict):
+            continue
+        if isinstance(j.get("notified_for"), list) and user in j["notified_for"]:
+            j["notified_for"] = [u for u in j["notified_for"] if u != user]
+            bump("jobs.*.notified_for")
+        if isinstance(j.get("llm_top"), dict) and user in j["llm_top"]:
+            del j["llm_top"][user]
+            bump("jobs.*.llm_top")
+    return counts
+
+
 def leftovers(obj, key: str, path: str = "$") -> list[str]:
     """Paths where `key` still appears as a dict key or list item."""
     out: list[str] = []
@@ -110,23 +145,29 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--data-dir", required=True, type=Path)
     ap.add_argument("--from", dest="src", required=True)
-    ap.add_argument("--to", dest="dst", required=True)
+    target = ap.add_mutually_exclusive_group(required=True)
+    target.add_argument("--to", dest="dst")
+    target.add_argument("--delete", action="store_true",
+                        help="permanently remove --from instead of renaming it")
     ap.add_argument("--write", action="store_true", help="save changes (default: dry run)")
     a = ap.parse_args(argv)
-    if not (USER_KEY.match(a.src) and USER_KEY.match(a.dst)) or a.src == a.dst:
+    if not USER_KEY.match(a.src) or (a.dst is not None and (not USER_KEY.match(a.dst) or a.src == a.dst)):
         ap.error("user keys must match [a-zA-Z0-9_-]{1,100} and differ")
 
     seen_p = a.data_dir / "state" / "seen.json"
     apps_p = a.data_dir / "state" / "applications.json"
     seen = json.loads(seen_p.read_text(encoding="utf-8"))
     apps = json.loads(apps_p.read_text(encoding="utf-8"))
-    try:
-        counts = {**rename_applications(apps, a.src, a.dst), **rename_seen(seen, a.src, a.dst)}
-    except Collision as e:
-        print(f"refusing: {e} (move the existing '{a.dst}' aside first)", file=sys.stderr)
-        return 2
+    if a.delete:
+        counts = delete_user(seen, apps, a.src)
+    else:
+        try:
+            counts = {**rename_applications(apps, a.src, a.dst), **rename_seen(seen, a.src, a.dst)}
+        except Collision as e:
+            print(f"refusing: {e} (delete or move the existing '{a.dst}' first)", file=sys.stderr)
+            return 2
     left = leftovers(seen, a.src) + leftovers(apps, a.src)
-    print(json.dumps({"from": a.src, "to": a.dst, "write": a.write, "renamed": counts,
+    print(json.dumps({"from": a.src, "to": "(deleted)" if a.delete else a.dst, "write": a.write, "changed": counts,
                       "leftovers": left[:20]}, indent=2))
     if left:
         print(f"refusing: '{a.src}' still present at {len(left)} path(s)", file=sys.stderr)
