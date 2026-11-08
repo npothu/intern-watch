@@ -4,7 +4,7 @@
 (zero2sudo) posted, or were added to the ledger by hand as `[MANUAL]`.
 This doc asks why the pipeline did not deliver them first.
 
-**Scope.** 49 applications: the 46 `[MANUAL]` ledger entries plus 3 applied-log
+**Scope.** 49 applications: the hand-added ledger entries plus the applied-log
 lines tagged `(source: zero2sudo)`. We will not scrape Instagram. It is
 auth-gated, it would need an unofficial client, and the platform's terms
 forbid it. That is the same stance this repo takes on jobright's full feed.
@@ -25,7 +25,8 @@ Every fix below targets the public employer and list data.
   history (`data/jobs.json`, closed rows included). Check its ats-boards
   coverage. Fetch the posting URL once to see whether it is still live.
 
-Only company and ATS names appear here. No personal data is included.
+Only aggregate counts by failure class and ATS appear here, plus synthetic
+examples. No individual application, posting or employer is listed.
 
 Workstream letters refer to the parallel scraping-input work started on
 2026-11-08: **A** Workday listing adapter; **B** SmartRecruiters, Oracle CX,
@@ -60,55 +61,56 @@ large tech, semiconductor and quant employers with Master's-eligible programs. 2
 true silent misses. Simplify rows are only one source, so this is a lower
 bound.
 
-## Per-application table
+## Breakdown by failure stage and ATS
 
-ATS is the host of the URL that was applied to.
+This public template does not carry the individual application history. Below
+are counts only. ATS is the host of the URL that was applied to.
 
-| company | ATS | class | stage / detail | fixed by |
-|---|---|---|---|---|
-| American Express (x10) | Oracle CX (custom domain + `egug.fa.us2`) | b-grad | Simplify degrees `["Master's"]`, first seen Aug-Sep → `eliminated:grad-only-degrees`. The manual URL `careers.americanexpress.com/.../job/<id>` is the same req as the ingested `egug.fa.us2.oraclecloud.com/.../job/<id>`, but `canonical_url` does not join them. | Fix 1 (re-evaluate); Fix 4 (Oracle alias) |
-| BlackRock (x3) | Workday (2 via the `careers.blackrock.com` front) | b-grad | `degrees ["Master's"]`, first seen 09-15. The front-site URL has its own id; the Workday req (R2664xx) was ingested. | Fix 1; Fix 4 |
-| Veeam (AI/ML, Kasten) | Greenhouse EU | b-grad | Master's/PhD degrees, first seen 09-12 | Fix 1 |
-| Solidigm | SmartRecruiters | b-grad | Master's/PhD, 09-05. The manual URL has a slug suffix (`/<id>-<slug>`) and the ingested one doesn't, so the SmartRecruiters canonical form misses it. | Fix 1; Fix 4 |
-| Western Digital | SmartRecruiters | b-grad | Master's, 09-14 | Fix 1 |
-| HP IQ | Greenhouse | b-grad | Master's/PhD, 09-01 | Fix 1 |
-| Intel | Workday | b-grad | Master's/PhD, 09-03 | Fix 1 |
-| Waymo | Greenhouse (`gh_jid` on own domain) | b-grad | MS/PhD, 09-17 | Fix 1 |
-| TWG Global | Workable | b-grad | Master's/PhD, 09-01 | Fix 1 |
-| SpaceX | Greenhouse (ats-boards) | b-grad | `eliminated:grad-only-title` ("Graduate Engineer Internship"), 08-03 | Fix 1 |
-| General Motors (x4) | Workday | b-role | Simplify titles "Seam Intern - Embodied AI" / "Onboard Autonomy Intern - Embodied AI" → `no-role-keyword`. The `" ai "` keyword needs a space after it, so it never matches a title that ends in AI. | Fix 2 |
-| Mayo Clinic | Oracle CX | b-role | "Undergraduate Intern - Neurology AI": same `" ai "` bug | Fix 2 |
-| Veeam (Data Analytics & Programs) | Greenhouse EU | b-role | no include keyword ("data analytics" is not in the list); config choice | Fix 3 (config) |
-| Danaher | Workday | b-role | "Supply Chain AI Co-op" → `excluded-keyword:supply chain` (works as configured) | Fix 3 (config) |
-| Cisco | Phenom (`careers.cisco.com`), via jobright-eng | b-term | LLM term null → `term-unresolved` | E |
-| OpenGov | Ashby | b-term | no term in title, LLM term null → `term-unresolved` | E |
-| TensorWave | Ashby | b-term | LLM term null; Simplify later labelled it "Summer 2026" | E |
-| Armadin | Ashby | b-term | the posting says Summer 2027, but Simplify's row says **Winter 2026** with the term stripped from the title → `term-not-wanted` | E (JD term should override a source's "explicit" term) |
-| Root Insurance | Rippling | b-term (also c) | Simplify said Winter 2026 → `term-not-wanted`. It was also ingested the day after the apply, so it was late as well as rejected. Counted once, as b-term. | E |
-| Texas Instruments | Oracle CX | c | ingested (Simplify) and delivered the day after it was applied to from the zero2sudo link | partly this PR: zshah101 first listed a TI "Software Engineering Intern" Oracle CX req on the evening of the apply day, so it would at best have tied. B (Oracle CX listing) is the real fix. |
-| Khan Academy, Stripe, Muon Space, T-Mobile, Datadog, General Motors (x2) | Greenhouse / Workday / own site | delivered | `notified_for` holds the user (Datadog via a content-signature sibling key) | G (link manual adds to existing matches) |
-| Tenet3 | Greenhouse | a | no list carried it, no ats-boards row, posting now gone | G (suggested ats-boards row) |
-| Sephora | Eightfold (`join.sephora.com`) | a | own site only | B (Eightfold listing) |
-| IBM | Avature (`ibm.com/careers`) | a | own site only (the manual entry's title was the search page) | B (Avature listing) |
-| CNH | SuccessFactors (`join.cnh.com`) | a | own site only | none (no SuccessFactors adapter planned) |
-| Entergy | SuccessFactors (`jobs.entergy.com`) | a | own site only; the title would also fail the role filter (no keyword) | none |
-| L3Harris | Radancy front (`careers.l3harris.com`) | a | own site only, now 404. Other L3Harris postings do arrive via the lists. | A/B if the backing ATS is identified |
-| Shopify | own site (`shopify.com/careers`) | a | own site only, now 410 | none |
-
-### Counts per ATS (host applied to)
-
-| ATS | n | classes |
-|---|---:|---|
-| Oracle CX (incl. a custom-domain front) | 12 | b-grad 10, b-role 1, c 1 |
-| Workday (incl. BlackRock's Radancy front, whose reqs were ingested via Workday) | 12 | b-grad 4, b-role 5, delivered 3 |
-| Greenhouse (incl. EU, embeds, own-domain `gh_jid`) | 9 | b-grad 5, b-role 1, delivered 2, a 1 |
-| Ashby | 3 | b-term 3 |
-| SmartRecruiters | 2 | b-grad 2 |
-| other: own site (6, incl. the L3Harris Radancy front), Phenom, Rippling, Workable, Stripe/Datadog own sites | 11 | a 6, b-term 2, b-grad 1, delivered 2 |
+| ATS | n | b-grad | b-role | b-term | delivered | c | a |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Oracle CX (incl. custom-domain fronts) | 12 | 10 | 1 | | | 1 | |
+| Workday (incl. Radancy fronts backed by Workday) | 12 | 4 | 5 | | 3 | | |
+| Greenhouse (incl. EU, embeds, own-domain `gh_jid`) | 9 | 5 | 1 | | 2 | | 1 |
+| Ashby | 3 | | | 3 | | | |
+| SmartRecruiters | 2 | 2 | | | | | |
+| other (own career sites, Phenom, Eightfold, Avature, SuccessFactors, Rippling, Workable) | 11 | 1 | | 2 | 2 | | 6 |
+| **total** | **49** | **22** | **7** | **5** | **7** | **1** | **7** |
 
 Takeaway: **Oracle CX and Workday account for 24 of the 49**, and in every
 one of those 24 the job *was* ingested. More ATS coverage alone would
 not have delivered them.
+
+Sub-stages:
+
+- **b-grad (22):** 21 were `eliminated:grad-only-degrees` from a source
+  `degrees` list of Master's and/or PhD. 1 was `eliminated:grad-only-title`.
+  In 13 of the 22, the URL applied to was an alias of the ingested URL: an
+  Oracle CX custom domain, a Radancy front or a SmartRecruiters slug. That
+  hides the match from a URL lookup but does not change the outcome.
+- **b-role (7):** 5 were `no-role-keyword` caused by the `" ai "` padding
+  bug (Fix 2). 1 had no include keyword at all (an analytics title). 1 hit
+  an exclude keyword as configured.
+- **b-term (5):** 3 were `term-unresolved` after the LLM returned null. 2
+  were `term-not-wanted` because the source's "explicit" term disagreed with
+  the posting.
+- **a (7):** 6 were own-site-only employers (Eightfold, Avature,
+  SuccessFactors x2, a Radancy front, a custom site). 1 was a small
+  Greenhouse board with no ats-boards row. 3 of the 7 are now closed (404/410).
+
+### Synthetic examples of each failure
+
+These are invented postings (fictional employer, `.invalid` hosts) that
+reproduce each mechanism:
+
+| example | mechanism | class |
+|---|---|---|
+| Example Corp "Platform Engineer Intern", Simplify `degrees: ["Master's"]`, first seen under `grad_only: true`; config later set to `phd` | eliminated once, never re-evaluated | b-grad |
+| `careers.example.invalid/en/sites/CX_1/job/1234` (front) vs `abcd.fa.us2.oraclecloud.com/.../sites/CX_1/job/1234` (ingested) | same req, two URLs; lookup misses | b-grad (alias) |
+| "Perception Intern - Embodied AI" | `" ai "` never matches a title-final "AI" | b-role |
+| Ashby posting titled "Summer 2027 Internship - Frontend"; the list row says "Frontend Engineer Intern" with term "Winter 2026" | source term overrides the posting | b-term |
+| "Software Engineer Intern" with no term in the title; LLM returns `term: null` | most-restrictive fallback rejects | b-term |
+| Delivered via `example.wd1.myworkdayjobs.com/.../Intern_R12345`; manual add uses `example.invalid/jobs/12345` | manual add not linked to the match | delivered |
+| Employer on SuccessFactors only, no list carries it | no adapter, no list | a |
 
 ## Fixes
 
@@ -161,12 +163,13 @@ reach the term/rules/LLM steps. Expect more top-company LLM calls per run
 while the backlog clears.
 Previously rejected jobs: nothing happens to them unless Fix 1 lands.
 Also consider adding `autonomy` to `include_keywords`/`strict_include_keywords`
-("Onboard Autonomy Intern").
+("... Autonomy Intern").
 
 ### Fix 3: config, not code
 
-- `data analytics`: decide whether analytics internships are wanted. Veeam
-  was rejected for lacking it, and Entergy (never ingested) would have been.
+- `data analytics`: decide whether analytics internships are wanted. One
+  ingested row was rejected for lacking it, and one never-ingested row would
+  have been.
 - `supply chain` in the exclude list blocks "Supply Chain AI Co-op". If wanted,
   replace the bare exclude with a narrower one.
 
@@ -174,20 +177,22 @@ Also consider adding `autonomy` to `include_keywords`/`strict_include_keywords`
 
 - Oracle CX: `.../hcmUI/CandidateExperience/<lang>/sites/<site>/job/<id>` on
   `*.fa.*.oraclecloud.com`, and the same `/sites/<site>/job/<id>` path on an
-  employer domain (`careers.americanexpress.com`), are one posting.
+  employer's vanity domain, are one posting.
   `canonical_url` should emit `ats:oraclecx:<tenant>:<id>`, with a small
   `custom host → tenant` alias map (seeded from the zshah101
   `data/companies.json`, which maps 5,354 companies to an ATS/slug/host).
   Without this, a front-site manual add or a second list with the vanity URL
   is a new key.
 - SmartRecruiters: `jobs.smartrecruiters.com/<Company>/<id>[-slug]` →
-  `ats:sr:<company>:<id>`.
-- Radancy/TalentBrew fronts (`careers.blackrock.com`, `careers.l3harris.com`)
-  link to the backing Workday req (`..._R266473/apply`). An alias resolver for
+  `ats:sr:<company>:<id>`. **Done in this PR** (canonical v4), together with
+  Workday numeric and short-prefix reqids (`_2642004-1`, `_UNI4670`) and a
+  case-insensitive Workday fallback path.
+- Radancy/TalentBrew fronts (an employer's `careers.<domain>`) link to the
+  backing Workday req (`..._R123456/apply`). An alias resolver for
   manual adds can follow that one link.
 
-Workstream B (Oracle CX / SmartRecruiters listing adapters) should own the
-canonical form, so its new keys and these aliases agree from day one.
+Workstream B (Oracle CX listing adapter) should own the Oracle canonical
+form, so its new keys and these aliases agree from day one.
 
 ### Fix 5: link manual adds to existing matches (G)
 
@@ -203,22 +208,23 @@ G's gap report.
 This PR adds the `zshah-2027` (automated, open postings, direct ATS URLs) and
 `speedyapply-ai` lists. On 2026-11-08, 208 zshah rows and about 129 AI-list
 rows were in no other source, and the zshah rows were mostly Workday / Oracle
-CX / SmartRecruiters. In a dry run against the instance's state, the new
-sources added several hundred new jobs and roughly 200 matches
-(deterministic pass only, with no LLM key locally; exact numbers are in the PR). Of the misses above, they
-would have caught TI (latency). They also re-surface 12 previously rejected
-priority postings under a new URL key, which are then evaluated under today's
-config (see the PR body). They do not fix b-grad, b-role or b-term. Those
-need Fixes 1-3.
+CX / SmartRecruiters.
+
+Their current backlog is **seed-marked, not delivered**: the first-sight
+seeding change (workstream H) merges first and marks every row a newly added
+source lists on its first run as seen. Only postings that appear later are
+delivered. Like any other rejection, the seeded rows are not re-evaluated.
+New sources therefore improve future latency and coverage. They do not
+recover b-grad, b-role or b-term misses; those need Fixes 1-3.
 
 ### What other workstreams already cover
 
 | fix | workstream |
 |---|---|
-| Workday breadth (GM, Intel, T-Mobile, Danaher, BlackRock tenants) | A. Note that every Workday miss here was ingested, so A adds latency and coverage but would not have changed these outcomes. |
+| Workday breadth | A. Note that every Workday miss here was ingested, so A adds latency and coverage but would not have changed these outcomes. |
 | Oracle CX / SmartRecruiters / Avature / Eightfold / Phenom listing adapters; canonical forms (Fix 4) | B |
 | JD fetch for Oracle/Avature/Phenom/Eightfold (needed for JD-based term and grad-only) | C |
-| `term-unresolved` and wrong-source-term (Cisco, OpenGov, TensorWave, Armadin, Root) | E |
-| closed-posting probe (would mark Shopify/L3Harris/Tenet3 closed) | F |
-| manual add → existing match / suggested ats-boards row (Tenet3), gap report (Fix 5) | G |
+| `term-unresolved` and wrong-source-term (the 5 b-term rows) | E |
+| closed-posting probe (the 3 closed class-a postings) | F |
+| manual add → existing match / suggested ats-boards row, gap report (Fix 5) | G |
 | re-evaluation on config change (Fix 1), keyword padding (Fix 2) | **none yet** |

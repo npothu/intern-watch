@@ -161,7 +161,8 @@ def _zshah(fixtures, today):
 
 
 def test_zshah_parses_api_sample(fixtures, today):
-    # Trimmed snapshot of docs/api/jobs.json (2026-11-08): up to 3 rows per
+    # Trimmed snapshot of docs/api/jobs.json (2026-11-08, MIT: see
+    # zshah_jobs.LICENSE next to it): up to 3 rows per
     # (ATS, season, program). Not refreshed by scripts/refresh_fixtures.py --
     # the live file is ~1 MB.
     jobs = _zshah(fixtures, today)

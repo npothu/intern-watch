@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from .models import Job
-from .normalize import norm_company, normalize_url, preferred_apply_url
+from .normalize import canonical_url, norm_company, normalize_url, preferred_apply_url
 
 _CONF_RANK = {"explicit": 2, "inferred": 1, "unknown": 0}
 
@@ -22,6 +22,19 @@ def dedup_key(job: Job) -> str:
     return f"hash:{hashlib.sha1(basis.encode()).hexdigest()}"
 
 
+def most_restrictive_degrees(a: list[str], b: list[str]) -> list[str]:
+    """Combine two sources' degree lists without loosening either. An empty
+    list means "unknown", so the other side wins; two known lists keep only
+    the degrees both allow (a row listing just Master's/PhD must not regain
+    eligibility because another source listed nothing or Bachelor's too).
+    Disjoint lists keep the first, which callers pass as the richer record."""
+    if not a or not b:
+        return list(a or b)
+    folded = {d.casefold() for d in b}
+    both = [d for d in a if d.casefold() in folded]
+    return both or list(a)
+
+
 def _merge_pair(base: Job, other: Job) -> Job:
     """Fold `other` into `base` (base assumed the richer/preferred record)."""
     base.sources = sorted(set(base.sources) | set(other.sources))
@@ -33,6 +46,7 @@ def _merge_pair(base: Job, other: Job) -> Job:
     base.work_model = base.work_model or other.work_model
     base.salary = base.salary or other.salary
     base.description = base.description or other.description
+    base.degrees = most_restrictive_degrees(base.degrees, other.degrees)
     base.jd_url = base.jd_url or other.jd_url
     if other.date_posted and (not base.date_posted or other.date_posted < base.date_posted):
         base.date_posted = other.date_posted
@@ -64,4 +78,25 @@ def dedupe(jobs: list[Job]) -> list[Job]:
         for other in group[1:]:
             base = _merge_pair(base, other)
         merged.append(base)
+    _share_degrees_by_canon(merged)
     return merged
+
+
+def _share_degrees_by_canon(jobs: list[Job]) -> None:
+    """Jobs with different dedup keys but one canonical posting (same ATS req
+    reached via two URL spellings) are evaluated separately; give each the
+    most restrictive degree evidence any of them carries, so the copy without
+    degrees cannot slip past the grad-only elimination its twin hit."""
+    by_canon: dict[str, list[Job]] = {}
+    for job in jobs:
+        canon = canonical_url(job.url)
+        if canon:
+            by_canon.setdefault(canon, []).append(job)
+    for twins in by_canon.values():
+        if len(twins) < 2:
+            continue
+        degrees: list[str] = []
+        for job in twins:
+            degrees = most_restrictive_degrees(degrees, job.degrees)
+        for job in twins:
+            job.degrees = most_restrictive_degrees(job.degrees, degrees)
