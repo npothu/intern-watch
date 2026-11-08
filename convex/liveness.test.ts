@@ -3,7 +3,7 @@ import { convexTest } from "convex-test";
 import { readFileSync, readdirSync } from "node:fs";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { fetchPublic, MAX_SKIP_WRITES } from "./liveness_probe";
+import { BATCH_LIMIT, clampBatchLimit, fetchPublic, MAX_SKIP_WRITES } from "./liveness_probe";
 import {
   checkLiveness,
   classifyPage,
@@ -17,6 +17,8 @@ import {
   RECHECK_MS,
   type Fetcher,
   type HttpResult,
+  type LivenessRecord,
+  apiSignal,
 } from "./liveness";
 
 // Fixtures are real responses recorded on 2026-11-08 with curl (browser UA,
@@ -81,6 +83,21 @@ describe("probePlan", () => {
     expect(p?.api).toBe("https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/Ext/job/US-CA/Intern_R1");
   });
 
+  test("Greenhouse embed links map to the boards API; without `for` they stay page-only", () => {
+    const p = probePlan("https://job-boards.greenhouse.io/embed/job_app?for=acme&token=4242");
+    expect(p).toMatchObject({ kind: "greenhouse", api: "https://boards-api.greenhouse.io/v1/boards/acme/jobs/4242" });
+    expect(probePlan("https://boards.greenhouse.io/embed/job_app?token=4242")?.kind).toBe("page");
+  });
+
+  test("an embed link whose API 404s but whose page still renders the form is not closed", async () => {
+    const url = "https://job-boards.greenhouse.io/embed/job_app?for=acme&token=4242";
+    const calls: Call[] = [
+      { url: "https://boards-api.greenhouse.io/v1/boards/acme/jobs/4242", status: 404, body: "{}" },
+      { url, status: 200, body: "<form>Apply for this job</form>" },
+    ];
+    expect((await checkLiveness(url, replay(calls).fetcher)).state).not.toBe("closed");
+  });
+
   test("EU Greenhouse boards are page-only (the API host differs)", () => {
     expect(probePlan("https://job-boards.eu.greenhouse.io/veeam/jobs/123")?.kind).toBe("page");
   });
@@ -119,6 +136,27 @@ describe("page signals", () => {
     expect(closedText("<p>Our filled calendar of events keeps interns busy.</p>")).toBeNull();
   });
 
+  test("JD prose that only contains closed words stays open", () => {
+    const prose = [
+      "<p>Applications are reviewed on a rolling basis until the position has been filled.</p>",
+      "<p>This role is no longer open to candidates who require visa sponsorship.</p>",
+      "<p>We are no longer accepting applications from third-party recruiters.</p>",
+      "<p>This position is no longer available in Colorado, but remains open in Texas.</p>",
+      "<p>The position is no longer open to new grads; interns welcome.</p>",
+      "<p>Once the job has been filled, we will notify all applicants.</p>",
+    ];
+    for (const html of prose) {
+      expect(closedText(html), html).toBeNull();
+      expect(classifyPage(plan, res({ body: html })).state, html).toBe("open");
+    }
+  });
+
+  test("a closed notice at the end of its sentence or block still closes", () => {
+    expect(closedText("<div>We are no longer accepting applications for this role</div>")).not.toBeNull();
+    expect(closedText("<p>This position is no longer open at this time!</p>")).not.toBeNull();
+    expect(closedText("<h1>Sorry</h1><p>This job has been filled</p><footer>x</footer>")).not.toBeNull();
+  });
+
   test("Avature redirect to search closes; a WAF 202 does not", () => {
     const av = { kind: "avature" as const, page: "https://acme.avature.net/careers/JobDetail?jobId=9" };
     expect(classifyPage(av, { status: 200, finalUrl: "https://acme.avature.net/careers/SearchJobs", body: "x" }).state).toBe("closed");
@@ -141,6 +179,20 @@ describe("page signals", () => {
     ];
     const v = await checkLiveness("https://boards.greenhouse.io/acme/jobs/55", replay(calls).fetcher);
     expect(v.state).not.toBe("closed");
+  });
+});
+
+describe("Workday and Oracle API signals", () => {
+  const wd = { kind: "workday" as const, page: "https://acme.wd1.myworkdayjobs.com/Ext/job/X/Y_R1", api: "https://acme.wd1.myworkdayjobs.com/wday/cxs/acme/Ext/job/X/Y_R1" };
+  const body = (info: object) => ({ status: 200, finalUrl: wd.api, body: JSON.stringify({ jobPostingInfo: info }) });
+  test("canApply:false on a posted job is open; posted:false is gone", () => {
+    expect(apiSignal(wd, body({ posted: true, canApply: false })).signal).toBe("open");
+    expect(apiSignal(wd, body({ posted: false, canApply: true })).signal).toBe("gone");
+    expect(apiSignal(wd, { status: 404, finalUrl: wd.api, body: "{}" }).signal).toBe("gone");
+  });
+  test("Oracle items:[] stays a gone signal", () => {
+    const ora = { kind: "oracle" as const, page: "https://x.fa.us2.oraclecloud.com/p", api: "https://x.fa.us2.oraclecloud.com/a" };
+    expect(apiSignal(ora, { status: 200, finalUrl: ora.api, body: '{"items":[],"count":0}' }).signal).toBe("gone");
   });
 });
 
@@ -185,6 +237,16 @@ describe("nextLiveness streak", () => {
     const legacy = { url, lastVerdict: "closed" as const, reason: "x", checkedAt: T0, closedStreak: 1 };
     expect(nextLiveness(legacy, url, closed, T0 + 5).record.closedAt).toBeUndefined();
     expect(nextLiveness(legacy, url, closed, T0 + GAP).record.closedAt).toBe(T0 + GAP);
+  });
+
+  test("a legacy streak still confirms after early verdicts overwrite checkedAt", () => {
+    let r: LivenessRecord = { url, lastVerdict: "closed", reason: "x", checkedAt: T0, closedStreak: 1 };
+    const early = nextLiveness(r, url, closed, T0 + 5);
+    expect(early.record.closedCountedAt).toBe(T0); // window pinned, not slid to T0+5
+    r = early.record;
+    r = nextLiveness(r, url, closed, T0 + 10).record;
+    expect(r.closedCountedAt).toBe(T0);
+    expect(nextLiveness(r, url, closed, T0 + GAP).record.closedAt).toBe(T0 + GAP);
   });
 
   test("unknown breaks a pending streak (verdicts must be consecutive); open resets", () => {
@@ -290,6 +352,31 @@ describe("claimBatch / recordVerdict", () => {
     // Nothing else got a closed flag.
     expect(items.filter((i: { closed?: boolean }) => i.closed).length).toBe(1);
     expect(ids.fresh).toBe(row.id);
+  });
+
+  test("a closed row with a ledger entry is not flagged (applied tick undone after progressing)", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const [row] = await t.mutation(internal.liveness_probe.claimBatch, { now: 1000, limit: 1 });
+    for (const now of [2000, 2000 + CLOSED_CONFIRM_GAP_MS]) {
+      await t.mutation(internal.liveness_probe.recordVerdict, { id: row.id, url: row.url, state: "closed", reason: "x", now });
+    }
+    const flagged = async () =>
+      (await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET })).find((i: { short: string }) => i.short === "fresh")?.closed;
+    expect(await flagged()).toBe(true);
+    await t.run((ctx) =>
+      ctx.db.insert("applications", { user: "u1", short: "fresh", status: "interview", history: [], createdAt: "2026-11-01" }),
+    );
+    expect(await flagged()).toBeUndefined();
+  });
+
+  test("probeBatch's limit is clamped to BATCH_LIMIT", () => {
+    expect(clampBatchLimit(undefined)).toBe(BATCH_LIMIT);
+    expect(clampBatchLimit(50)).toBe(BATCH_LIMIT);
+    expect(clampBatchLimit(1_000_000)).toBe(BATCH_LIMIT);
+    expect(clampBatchLimit(3)).toBe(3);
+    expect(clampBatchLimit(0)).toBe(1);
+    expect(clampBatchLimit(Number.NaN)).toBe(BATCH_LIMIT);
   });
 
   test("a row applied while its probe was in flight is not marked", async () => {

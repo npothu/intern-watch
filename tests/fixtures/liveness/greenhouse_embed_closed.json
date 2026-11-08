@@ -3,6 +3,11 @@
  "expect": "closed",
  "calls": [
   {
+   "url": "https://boards-api.greenhouse.io/v1/boards/robinhood/jobs/8142961",
+   "status": 404,
+   "body": "{\"status\":404,\"error\":\"Job not found\"}"
+  },
+  {
    "url": "https://job-boards.greenhouse.io/embed/job_app?for=robinhood&token=8142961",
    "status": 200,
    "finalUrl": "https://job-boards.greenhouse.io/embed/job_board?for=robinhood&error=true",

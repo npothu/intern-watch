@@ -14,7 +14,7 @@
 // page renders with an Apply button (observed). Workday and Oracle CX are the
 // exceptions - their pages are JS shells that answer 200 for anything, so the
 // API is the only signal there, and their signals are explicit (CXS 404 or
-// posted/canApply false; Oracle's ById finder returning zero items).
+// `posted: false`; Oracle's ById finder returning zero items).
 //
 // URL -> API mapping reuses jd_acquire.atsApiUrl so the two stay in step.
 // Oracle CX lives here for now; once jd_acquire grows an Oracle adapter, fold
@@ -75,6 +75,21 @@ export function oracleTarget(u: URL): string | null {
   return `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails?onlyData=true&finder=${finder}`;
 }
 
+/**
+ * Greenhouse embed links (`/embed/job_app?for=<board>&token=<id>`, the shape
+ * several GitHub lists store) -> the same boards API a /jobs/<id> URL uses.
+ * Without `for` there is no board to ask, so those stay page-only.
+ */
+export function greenhouseEmbedApi(u: URL): string | null {
+  const host = u.hostname.toLowerCase();
+  if (!host.endsWith("greenhouse.io") || host.includes(".eu.")) return null;
+  if (!/^\/embed\/job_app\/?$/.test(u.pathname)) return null;
+  const board = u.searchParams.get("for");
+  const token = u.searchParams.get("token");
+  if (!board || !token || !/^\d+$/.test(token) || !/^[\w-]+$/.test(board)) return null;
+  return `https://boards-api.greenhouse.io/v1/boards/${board}/jobs/${token}`;
+}
+
 function isAvature(u: URL): boolean {
   return (
     u.hostname.toLowerCase().endsWith(".avature.net") ||
@@ -105,6 +120,9 @@ export function probePlan(rawUrl: string): ProbePlan | null {
   // atsApiUrl assumes; a wrong host would 404 for a live job. Page-only.
   if (host.includes(".eu.greenhouse.io")) return { kind: "page", page };
 
+  const embed = greenhouseEmbedApi(u);
+  if (embed) return { kind: "greenhouse", page, api: embed };
+
   // Workday apply/login sub-pages ("…/job/<loc>/<slug>/apply") are not part
   // of the posting path the CXS API knows; strip them or a live job 404s.
   let apiInput = page;
@@ -128,16 +146,26 @@ export function probePlan(rawUrl: string): ProbePlan | null {
 
 // -- page signals -------------------------------------------------------------
 
-// Phrases career sites render for a dead posting. Kept specific (subject +
-// "no longer"/"filled"/"expired") so ordinary JD prose doesn't trip them.
+// Phrases career sites render for a dead posting. Each must END the notice:
+// the phrase (plus an optional "for this role" / "at this time" tail) is
+// followed only by sentence punctuation or the end of the line, so JD prose
+// that merely contains the words - "no longer available in Colorado, but
+// remains open in Texas", "no longer accepting applications from third-party
+// recruiters" - does not match. Conditional sentences ("until the position
+// has been filled") are rejected separately in closedText.
+const TAIL = String.raw`(?: (?:for|to) (?:this|the) (?:job|role|position|posting|opening|requisition|vacancy))?(?: at this time)?`;
+const END = String.raw`(?=\s*(?:[.!]|$))`;
+const notice = (body: string) => new RegExp(String.raw`\b${body}${TAIL}${END}`, "im");
 const CLOSED_TEXT_RES: RegExp[] = [
-  /\b(?:job|position|posting|role|opening|requisition|vacancy)(?: posting)? (?:is|has been) no longer (?:available|open|active|accepting)/i,
-  /\bno longer accepting applications\b/i,
-  /\b(?:job|position|posting|role|requisition) has been (?:filled|closed|removed)\b/i,
-  /\b(?:job|position|posting|requisition|job posting) has expired\b/i,
-  /\b(?:this|the) (?:job|position|posting|requisition) is (?:closed|no longer open)\b/i,
-  /\bthe (?:job|page|position) you are looking for (?:is no longer|no longer exists|has been removed|doesn't exist|does not exist)/i,
+  notice(String.raw`(?:job|position|posting|role|opening|requisition|vacancy)(?: posting)? (?:is|has been) no longer (?:available|open|active|accepting applications)`),
+  notice(String.raw`no longer accepting applications`),
+  notice(String.raw`(?:job|position|posting|role|requisition) has been (?:filled|closed|removed)`),
+  notice(String.raw`(?:job|position|posting|requisition) has expired`),
+  notice(String.raw`(?:this|the) (?:job|position|posting|requisition) is (?:closed|no longer open)`),
+  notice(String.raw`the (?:job|page|position) you are looking for (?:is no longer available|no longer exists|has been removed|doesn't exist|does not exist)`),
 ];
+/** A notice inside a conditional clause describes the future, not now. */
+const CONDITIONAL_RE = /\b(?:until|once|after|before|when|whenever|if|unless|as soon as)\b/i;
 
 /** A known "position closed/filled" phrase in the page's visible text. */
 export function closedText(html: string): string | null {
@@ -145,8 +173,13 @@ export function closedText(html: string): string | null {
   // multi-MB SPA bundle is wasted work.
   const text = stripJdHtml(html.slice(0, 300_000));
   for (const re of CLOSED_TEXT_RES) {
-    const m = text.match(re);
-    if (m) return m[0].toLowerCase();
+    const m = re.exec(text);
+    if (!m) continue;
+    // The sentence the phrase sits in, up to the phrase.
+    const before = text.slice(0, m.index);
+    const start = Math.max(before.lastIndexOf("."), before.lastIndexOf("!"), before.lastIndexOf("?"), before.lastIndexOf("\n"));
+    if (CONDITIONAL_RE.test(before.slice(start + 1))) continue;
+    return m[0].toLowerCase();
   }
   return null;
 }
@@ -205,7 +238,9 @@ function confirmGone(plan: ProbePlan, res: HttpResult): Verdict {
     try {
       const f = new URL(res.finalUrl);
       const onPosting =
-        (f.hostname.toLowerCase().endsWith("greenhouse.io") && /\/jobs\/\d+/.test(f.pathname)) ||
+        (f.hostname.toLowerCase().endsWith("greenhouse.io") &&
+          (/\/jobs\/\d+/.test(f.pathname) ||
+            (/^\/embed\/job_app/.test(f.pathname) && f.searchParams.has("token")))) ||
         // Boards that forward to the employer's own site keep the job id.
         f.searchParams.has("gh_jid");
       if (!onPosting) return { state: "closed", reason: "redirect-off-posting" };
@@ -258,9 +293,11 @@ export function apiSignal(plan: ProbePlan, res: HttpResult): { signal: ApiSignal
       : { signal: "gone", reason: "oracle-empty" };
   }
   if (plan.kind === "workday") {
-    const info = p.jobPostingInfo as { posted?: unknown; canApply?: unknown } | undefined;
+    const info = p.jobPostingInfo as { posted?: unknown } | undefined;
     if (!info || typeof info !== "object") return { signal: "unknown", reason: "workday-no-info" };
-    if (info.posted === false || info.canApply === false) {
+    // Only `posted: false` (or the CXS 404 above) closes. canApply:false on a
+    // posted job is a per-viewer/apply-flow state, not a removed posting.
+    if (info.posted === false) {
       return { signal: "gone", reason: "workday-not-posted" };
     }
     return { signal: "open", reason: "workday-posted" };
@@ -396,6 +433,10 @@ export function nextLiveness(
   const lastCounted = base.closedStreak > 0 ? (base.closedCountedAt ?? base.checkedAt) : undefined;
   if (lastCounted !== undefined && now - lastCounted < CLOSED_CONFIRM_GAP_MS) {
     // Too early to count: keep the streak, come back when the gap is up.
+    // Pin the window to the counted verdict: without this a legacy record
+    // (no closedCountedAt) would date from checkedAt, which this verdict just
+    // overwrote, and the window would slide forward forever.
+    if (record.closedCountedAt === undefined) record.closedCountedAt = lastCounted;
     return { record, dueAt: lastCounted + CLOSED_CONFIRM_GAP_MS };
   }
   record.closedStreak = base.closedStreak + 1;

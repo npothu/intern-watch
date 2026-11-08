@@ -160,6 +160,13 @@ export const recordVerdict = internalMutation({
   },
 });
 
+/** Clamped to BATCH_LIMIT so a manual `npx convex run` stays inside the
+ * per-run write budget documented above. */
+export function clampBatchLimit(limit: number | undefined): number {
+  const n = Number.isFinite(limit) ? Math.floor(limit as number) : BATCH_LIMIT;
+  return Math.max(1, Math.min(n, BATCH_LIMIT));
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const HEADERS = {
@@ -253,7 +260,7 @@ export const probeBatch = internalAction({
     if (maintenanceOn()) return { probed: 0, closed: 0, skipped: "maintenance" };
     const claimed: Claimed[] = await ctx.runMutation(internal.liveness_probe.claimBatch, {
       now: Date.now(),
-      limit: Math.max(1, Math.min(limit ?? BATCH_LIMIT, 50)),
+      limit: clampBatchLimit(limit),
     });
     const fetcher = pacedFetcher();
     let closed = 0;
