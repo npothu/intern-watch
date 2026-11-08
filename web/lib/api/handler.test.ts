@@ -14,7 +14,7 @@ vi.hoisted(() => {
 });
 
 import { GET, POST, PUT, DELETE, HEAD } from "../../app/api/v1/[[...path]]/route";
-import { endpoints } from "./endpoints";
+import { endpoints, INGEST_WAIT_MS } from "./endpoints";
 import { handleApiRequest, openApiDocument } from "./handler";
 
 const modules = import.meta.glob("../../../convex/**/*.ts");
@@ -169,6 +169,36 @@ test("a bot-walled page (Avature's empty 202) is a 422 with no usable short", as
   expect(polled).toMatchObject({ status: "failed", errorCode: "blocked" });
   expect(polled.short).toBeUndefined();
   expect((await (await request("/matches")).json()).data).toHaveLength(1); // only the seeded match
+});
+
+test("a title without a JD does not turn a bot-walled URL into a match", async () => {
+  const url = "https://careers.example.com/en_US/careers/JobDetail?jobId=137216";
+  jobPages[url] = () => new Response("", { status: 202 });
+  const response = await settle(request("/ingests", "POST", { url, title: "Software Intern" }));
+  expect(response.status).toBe(422);
+  const { error } = await response.json();
+  expect(error).toMatchObject({ code: "fetch_failed", reason: "blocked" });
+  expect(error.short).toBeUndefined();
+  expect((await (await request("/matches")).json()).data).toHaveLength(1); // only the seeded match
+});
+
+test("a stalled status read ends at the wait budget with a 202 and the ingest id", async () => {
+  jobPages["https://example.com/jobs/5"] = () => new Promise<Response>(() => {});
+  // From here on, every getIngestStatus call hangs until its signal aborts.
+  const real = upstream.getMockImplementation()!;
+  upstream.mockImplementation(async (url: string, init: RequestInit) => {
+    if (url.endsWith("/api/query") && JSON.parse(String(init.body)).path === "ingest:getIngestStatus") {
+      return new Promise<Response>((_, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    }
+    return real(url, init);
+  });
+  const started = Date.now();
+  const response = await settle(request("/ingests", "POST", { url: "https://example.com/jobs/5" }));
+  expect(response.status).toBe(202);
+  expect((await response.json()).data).toEqual({ ingestId: expect.any(String), status: "fetching" });
+  expect(Date.now() - started).toBeLessThanOrEqual(INGEST_WAIT_MS + 1_000); // fake clock: the budget held
 });
 
 test("a caller-supplied JD and title turn a bot-walled URL into a match", async () => {

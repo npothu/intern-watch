@@ -6,7 +6,9 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { canonicalUrl, companyFromUrl, detectAts, extractForAts, inferTerm } from "./ingest_extract";
 import { manualArgs } from "./ingest";
-import { acquireJdFromUrl, llmExtractJd, pageFetchUrl, type AcquireResult } from "./jd_acquire";
+import {
+  acquireJdFromUrl, atsApiUrl, llmExtractJd, oracleApiFromPage, pageFetchUrl, type AcquireResult,
+} from "./jd_acquire";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const FETCH_MAX_BYTES = 200 * 1024; // 200KB cap
@@ -175,7 +177,23 @@ export async function resolveIngest(
   }
 
   const meta = acquired.meta ?? {};
-  const scrapedTitle = extracted && extracted.title !== "Unknown" ? extracted.title : "";
+  // An Oracle CX page is a JS shell whose <title> is the employer, never the
+  // role: only the requisition feed (meta) or the caller can name the job.
+  const oracle = atsApiUrl(canonical)?.kind === "oracle" || !!oracleApiFromPage(canonical, pageHtml);
+  const scrapedTitle = !oracle && extracted && extracted.title !== "Unknown" ? extracted.title : "";
+
+  // Acquisition failed - the page could not be fetched, or an Oracle feed
+  // had no such posting - and no tier produced a JD: caller-supplied
+  // title/company/location alone must not turn that into a match. Only a
+  // pasted JD does.
+  if (!jobDescription && (pageError || (oracle && !meta.title))) {
+    const base = pageError
+      ? (pageError instanceof Error ? pageError.message : String(pageError))
+      : "the Oracle requisition feed has no such posting - it may be closed or on another career site";
+    const hint = /may be closed/.test(base) ? "" : " - paste the job description and title to add it anyway";
+    throw new FetchError(pageError instanceof FetchError ? pageError.code : "fetch_failed", base + hint);
+  }
+
   const title = manual.title?.trim() || meta.title || scrapedTitle;
   if (!title) {
     if (pageError) {

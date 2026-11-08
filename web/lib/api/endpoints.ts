@@ -39,12 +39,28 @@ function requireSuccess(result: { ok: boolean; error?: string; reason?: string }
 export const INGEST_WAIT_MS = 20_000;
 const INGEST_POLL_MS = 1_000;
 
+/** Poll until the ingest settles or the wait budget runs out. Every status
+ * query is bounded by the budget left (a stalled backend read must not hold
+ * the request past it); on expiry the caller answers 202 with the ingest id. */
 async function waitForIngest(user: string, ingestId: string): Promise<store.IngestRow | null> {
   const deadline = Date.now() + INGEST_WAIT_MS;
   let row: store.IngestRow | null = null;
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, INGEST_POLL_MS));
-    row = await store.getIngestStatus(user, ingestId);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(INGEST_POLL_MS, deadline - Date.now())));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    // An AbortController + setTimeout rather than AbortSignal.timeout, so the
+    // deadline follows the same clock as the polling (and fake timers).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining);
+    try {
+      row = await store.getIngestStatus(user, ingestId, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) break; // budget spent: report it as still running
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!row || row.status === "done" || row.status === "failed") break;
   }
   return row;
@@ -67,7 +83,9 @@ function ingestResponse(row: store.IngestRow | null, ingestId: string): unknown 
   if (row?.status === "done") {
     return Response.json({ data: { ingestId, status: "done", short: row.short } }, { status: 201 });
   }
-  return { ingestId, status: row?.status ?? "fetching" };
+  // Still running, or the status read ran out of budget: never a short here.
+  const status = row && row.status !== "done" && row.status !== "failed" ? row.status : "fetching";
+  return { ingestId, status };
 }
 
 export function fileResponse(file: store.ResumeExportFile): Response {

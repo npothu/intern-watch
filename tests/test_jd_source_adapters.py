@@ -84,6 +84,28 @@ def test_icims_scrape_fetches_the_iframe_page():
     assert seen == [frame]
 
 
+def test_icims_ua_is_the_crawler_ua_for_both_url_forms():
+    url = ("https://campus-americas.icims.com/jobs/26272/"
+           "data-engineer-intern%2c-2027-summer-u.s./job")
+    frame = jd_source._page_fetch_url(url)
+    for given in (url, frame):  # rewritten, and pasted already-framed
+        agents: list[str] = []
+
+        def handler(request: httpx.Request, agents: list[str] = agents) -> httpx.Response:
+            agents.append(request.headers["user-agent"])
+            return httpx.Response(200, text=_text("icims_iframe.html"))
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        assert jd_source._generic_scrape(client, given)
+        assert agents == [jd_source._CRAWLER_UA], given
+    # Non-iCIMS pages keep the browser UA.
+    agents = []
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda r: agents.append(r.headers["user-agent"]) or httpx.Response(200, text="<p>x</p>")))
+    jd_source._generic_scrape(client, "https://example.com/jobs/1")
+    assert agents == [jd_source._PAGE_UA]
+
+
 def test_oracle_custom_domain_page_hint():
     url = "https://careers.example.com/en/sites/CX_1/job/26011082"
     api = jd_source._oracle_api_url("egug.fa.us2.oraclecloud.com", "CX_1", "26011082")

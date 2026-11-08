@@ -81,6 +81,32 @@ describe("resolveIngest", () => {
     });
   });
 
+  test("a title alone does not override a failed fetch: no JD, no match", async () => {
+    await expect(resolveIngest("https://careers.example.com/en_US/careers/JobDetail?jobId=137214",
+      { title: "Software Intern", company: "Example", location: "Remote" }, blocked))
+      .rejects.toMatchObject({ code: "blocked", message: expect.stringMatching(/paste the job description/) });
+  });
+
+  test("an empty Oracle feed is not a posting, even with an employer <title>", async () => {
+    const url = "https://ehtl.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/19813";
+    const routes: Record<string, string> = {
+      [url]: "<html><head><title>Example Corp</title></head><body><div id=app></div></body></html>",
+      [atsApiUrl(url)!.api]: fixture("oracle_cx_empty.json"),
+    };
+    const fetchText = async (u: string) => {
+      if (u in routes) return routes[u];
+      throw new FetchError("fetch_failed", "fetch failed: HTTP 404");
+    };
+    await expect(resolveIngest(url, {}, fetchText)).rejects.toMatchObject({
+      code: "fetch_failed", message: expect.stringMatching(/Oracle requisition feed has no such posting/),
+    });
+    await expect(resolveIngest(url, { title: "Firmware Intern" }, fetchText)).rejects.toThrow(/no such posting/);
+    // A pasted JD (with the title) still adds it.
+    const jdText = "Responsibilities: firmware for embedded products. ".repeat(6);
+    expect(await resolveIngest(url, { jdText, title: "Firmware Intern" }, fetchText))
+      .toMatchObject({ title: "Firmware Intern", company: "Example Corp", jdIsManual: true });
+  });
+
   test("a JD without a title, on a page that gives none, asks for the title", async () => {
     await expect(resolveIngest("https://careers.example.com/job/1", { jdText: "x".repeat(300) }, blocked))
       .rejects.toThrow(/pass `title`/);

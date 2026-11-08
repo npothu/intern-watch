@@ -51,7 +51,9 @@ async function post(
   kind: "query" | "mutation" | "action",
   fn: string,
   args: Record<string, unknown>,
-  module: string = "tracker"
+  module: string = "tracker",
+  // Aborts the request and its body read (callers with a deadline).
+  signal?: AbortSignal,
 ): Promise<unknown> {
   if (!CONVEX_URL) {
     throw new ConvexError("CONVEX_URL is not set (see web/.env.example)");
@@ -71,6 +73,7 @@ async function post(
         format: "json",
       }),
       cache: "no-store",
+      ...(signal ? { signal } : {}),
     });
   } catch (err) {
     throw new ConvexError(
@@ -475,8 +478,8 @@ export type IngestRow = {
   updatedAt: number;
 };
 
-export async function getIngestStatus(user: string, ingestId: string): Promise<IngestRow | null> {
-  const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest");
+export async function getIngestStatus(user: string, ingestId: string, signal?: AbortSignal): Promise<IngestRow | null> {
+  const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest", signal);
   return value as IngestRow | null;
 }
 

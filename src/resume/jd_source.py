@@ -128,18 +128,25 @@ def _oracle_api_from_page(url: str, html: str) -> tuple[str, str] | None:
     return ("oracle", _oracle_api_url(pod[1].lower(), m[2], m[3]))
 
 
-def _page_fetch_url(url: str) -> str:
-    """The URL whose HTML carries the posting: iCIMS wraps the JD in an
-    iframe, whose `?in_iframe=1` page is the small one with the JSON-LD."""
+def _is_icims_posting(url: str) -> bool:
+    """<tenant>.icims.com/jobs/<id>/... -- with or without ?in_iframe=1."""
     try:
         parsed = httpx.URL(url)
     except Exception:  # noqa: BLE001
-        return url
+        return False
     host = (parsed.host or "").lower()
-    if (host.endswith(".icims.com") and re.match(r"^/jobs/\d+(?:/|$)", parsed.path)
-            and parsed.params.get("in_iframe") != "1"):
-        return str(parsed.copy_set_param("in_iframe", "1"))
-    return url
+    return host.endswith(".icims.com") and bool(re.match(r"^/jobs/\d+(?:/|$)", parsed.path))
+
+
+def _page_fetch_url(url: str) -> str:
+    """The URL whose HTML carries the posting: iCIMS wraps the JD in an
+    iframe, whose `?in_iframe=1` page is the small one with the JSON-LD."""
+    if not _is_icims_posting(url):
+        return url
+    parsed = httpx.URL(url)
+    if parsed.params.get("in_iframe") == "1":
+        return url
+    return str(parsed.copy_set_param("in_iframe", "1"))
 
 
 def _ats_api_for(url: str) -> tuple[str, str] | None:
@@ -349,7 +356,9 @@ def _generic_scrape(client: httpx.Client, url: str,
     page_url = _page_fetch_url(url)
     # iCIMS's WAF captchas a desktop-Chrome UA that cannot run JS but serves
     # the posting to an honest crawler UA (ingest_node.ts BROWSER_HEADERS).
-    ua = _CRAWLER_UA if page_url != url else _PAGE_UA
+    # Chosen by host, not by whether the URL needed rewriting: a pasted
+    # `?in_iframe=1` URL is the same WAF.
+    ua = _CRAWLER_UA if _is_icims_posting(url) else _PAGE_UA
     resp = client.get(page_url, headers={"User-Agent": ua}, follow_redirects=True)
     resp.raise_for_status()
     # Avature answers bots with an (often empty) HTTP 202 WAF challenge;

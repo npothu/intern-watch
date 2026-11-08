@@ -217,6 +217,7 @@ A 202 and a failed ingest never carry one, so a script cannot build a resume aga
 For a `blocked` page, send the job description yourself: `{url, jdText, title, company?, location?}`.
 The JD is stored as a pasted JD, which automatic acquisition never replaces.
 `title` is required when the page gives none.
+`title`, `company` and `location` without `jdText` never add a job whose page could not be read, or an Oracle posting its feed does not list; those stay a 422.
 To attach a JD to a job that already exists, use `PUT /matches/{short}/job-description`.
 
 The web app's Add URL dialog does not wait.
