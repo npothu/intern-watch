@@ -749,9 +749,14 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
                  enricher: _JobrightEnricher | None = None,
                  resolver=None, store: TrackerStore | None = None,
-                 listed: dict[str, Job] | None = None) -> None:
+                 listed: dict[str, Job] | None = None,
+                 held_canons: set[str] | None = None) -> None:
     """`listed` (this run's deduped jobs by key) enables the recheck of
-    still-listed rejected jobs; without it only `candidates` are judged."""
+    still-listed rejected jobs; without it only `candidates` are judged.
+    held_canons: canonical URLs of rows deferred over the JD cap this run.
+    An accepted twin of one (e.g. the same posting via an aggregator, with no
+    JD) is held pending too, so both spellings are decided together on the
+    run that has the JD instead of the twin racing ahead."""
     today = now.date()
     # Settings > Watch (hosted store) overlays the yaml: terms window,
     # per-season presets, priority companies, remote, digest time/recipients.
@@ -906,6 +911,16 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # fuzzy content signature for jobs whose url couldn't be canonicalized.
     terms_order = uf.terms_order
     _resolve_employer_urls(accepted, state, resolver)
+    if held_canons:
+        kept = []
+        for job, reasons in accepted:
+            if canonical_url(job.url) in held_canons:
+                st.set_pending(state, job.dedup_key, name)
+                log.info("user %s: %s held pending with its JD-deferred twin",
+                         name, job.dedup_key)
+            else:
+                kept.append((job, reasons))
+        accepted = kept
     accepted = _drop_url_dupes(state, name, accepted, terms_order, today)
     accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
 
@@ -1536,21 +1551,35 @@ def main(argv: list[str] | None = None) -> int:
             if key in candidate_keys:
                 continue
             pending_job = merged_by_key.get(key)
+            if (pending_job is None and not st.was_notified(state, key, name)
+                    and state["jobs"].get(key, {}).get("jd_deferred")):
+                # Deferred over the JD cap and never decided: it left the feed
+                # before its slot. Keep it pending so a relist (no longer
+                # "new") is still evaluated; prune drops it in time.
+                continue
             if pending_job is None or st.was_notified(state, key, name):
                 st.clear_pending(state, key, name)  # vanished or already done
             else:
                 candidates.append(pending_job)
-        # Over the JD cap: not evaluated this run, kept pending so the next
-        # run fetches its JD (oldest first) and decides it then.
-        if jd_wait:
-            for job in candidates:
-                if job.dedup_key in jd_wait:
-                    st.set_pending(state, job.dedup_key, name)
-            candidates = [j for j in candidates if j.dedup_key not in jd_wait]
+        # Over the JD cap: not evaluated this run, kept pending (and flagged
+        # jd_deferred) so the next run fetches its JD, oldest first, and
+        # decides it then. A candidate decided this run loses the flag.
+        held: set[str] = set()
+        for job in candidates:
+            if job.dedup_key in jd_wait:
+                st.set_pending(state, job.dedup_key, name)
+                state["jobs"].setdefault(job.dedup_key, {})["jd_deferred"] = True
+                canon = canonical_url(job.url)
+                if canon:
+                    held.add(canon)
+            else:
+                state["jobs"].get(job.dedup_key, {}).pop("jd_deferred", None)
+        candidates = [j for j in candidates if j.dedup_key not in jd_wait]
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,
-                         resolver=resolver, listed=merged_by_key)
+                         resolver=resolver, listed=merged_by_key,
+                         held_canons=held)
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()

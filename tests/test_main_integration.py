@@ -744,3 +744,76 @@ def test_enrich_jds_cap_takes_oldest_first_and_reports_the_rest(monkeypatch):
     assert main.enrich_jds(jobs, state, deferred) == 2
     assert deferred == ["url:a"]
     assert jobs[0].description is None and jobs[1].description == "jd"
+
+
+def _jd_cap_run(monkeypatch, tmp_path, feeds, cap=0):
+    """Run main once per entry of `feeds` (a list of job lists the stub
+    source returns that run) with JD_FETCH_CAP=cap; returns the state."""
+    import httpx
+    run = {"i": 0}
+
+    class Feed:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today):
+            return [j.model_copy() for j in feeds[run["i"]]]
+
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": Feed}, [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    real = httpx.Client
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, json={"content": "<p>Paid internship.</p>"})), **kw))
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    states = []
+    for i, _ in enumerate(feeds):
+        run["i"] = i
+        monkeypatch.setattr(main, "JD_FETCH_CAP", cap if i == 0 else 80)
+        assert main.main(["--state-file", str(state_file)]) == 0
+        states.append(st.load_state(state_file))
+    return states
+
+
+def _delivered(state, key):
+    return (st.was_notified(state, key, "example")
+            or key in {it["key"] for it in st.outbox_items(state, "example")})
+
+
+def test_jd_deferred_rows_twin_is_held_until_both_are_decided(
+        monkeypatch, tmp_path):
+    ats = _job(1, url="https://boards.greenhouse.io/acme/jobs/777")
+    ats.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/777"
+    twin = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/777")
+    twin.company = ats.company
+    s1, s2 = _jd_cap_run(monkeypatch, tmp_path, [[ats, twin], [ats, twin]])
+    ka, kt = dedup_key(ats), dedup_key(twin)
+    assert ka != kt
+    # run 1: the ATS row waits on its JD and its twin waits with it
+    assert st.pending_keys(s1, "example") == {ka, kt}
+    assert not _delivered(s1, ka) and not _delivered(s1, kt)
+    # run 2: decided together, delivered once
+    assert st.pending_keys(s2, "example") == set()
+    # delivered once: one spelling survives, the other is its dup
+    dups = {k: s2["jobs"][k].get("dup_of") for k in (ka, kt)}
+    assert sorted(v is None for v in dups.values()) == [False, True]
+    survivor = next(k for k, v in dups.items() if v is None)
+    assert set(dups.values()) == {None, survivor}
+    assert _delivered(s2, survivor)
+
+
+def test_jd_deferred_row_that_vanishes_is_still_evaluated_on_relist(
+        monkeypatch, tmp_path):
+    job = _job(1, url="https://boards.greenhouse.io/acme/jobs/888")
+    job.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/888"
+    other = _job(2)
+    s1, s2, s3 = _jd_cap_run(monkeypatch, tmp_path,
+                             [[job], [other], [job]])
+    key = dedup_key(job)
+    assert key in st.pending_keys(s1, "example")
+    assert key in st.pending_keys(s2, "example")      # gone, but not dropped
+    assert key not in st.pending_keys(s3, "example")  # relisted: decided
+    assert _delivered(s3, key)
+    assert "jd_deferred" not in s3["jobs"][key]
