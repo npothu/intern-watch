@@ -1,8 +1,9 @@
 // Fill a freshly created preview Convex backend with synthetic data.
 //
-// Called by scripts/vercel-build.sh (phase 2) after the preview backend is
-// deployed and its TRACKER_SECRET is set. It only ever runs for Vercel preview
-// builds and only against the preview backend the build just created; it
+// Called by scripts/vercel-build.sh (phase 3) after `convex deploy` has pushed
+// the functions to the preview backend and its TRACKER_SECRET is set. It only
+// ever runs for Vercel preview builds and only against the preview backend the
+// build just created; it
 // writes through the normal public mutations, so it exercises the same code
 // paths the watcher and the web app use.
 //
@@ -17,7 +18,7 @@ import { buildPreviewSeed } from "./preview-seed-data.mjs";
 const { VERCEL_ENV, IW_PREVIEW_PHASE, CONVEX_URL, CONVEX_SECRET } = process.env;
 const user = process.env.PREVIEW_SEED_USER || "nathan";
 
-if (VERCEL_ENV !== "preview" || IW_PREVIEW_PHASE !== "build") {
+if (VERCEL_ENV !== "preview" || IW_PREVIEW_PHASE !== "seed") {
   console.error("seed-preview: refusing to run outside a Vercel preview build");
   process.exit(2);
 }
