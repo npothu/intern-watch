@@ -584,3 +584,17 @@ def test_jibe_honours_amd_crawl_delay(no_sleep):
     with _client(handler) as c:
         jibe.fetch_pages(c, {"slug": "careers.amd.com"})
     assert no_sleep == [5.0]          # 2 queries: one wait between them
+
+
+def test_canonical_url_smartrecruiters_digit_leading_uuid_is_not_a_numeric_id():
+    uuid = "12345678-5717-4562-b3fc-2c963f66afa6"
+    listing = canonical_url(f"https://jobs.smartrecruiters.com/Acme/{uuid}")
+    api = canonical_url(
+        f"https://api.smartrecruiters.com/v1/companies/Acme/postings/{uuid}")
+    assert listing == api == f"ats:sr:acme:{uuid}"
+    assert canonical_url("https://jobs.smartrecruiters.com/Acme/12345678") != listing
+    assert canonical_url("https://jobs.smartrecruiters.com/Acme/12345678-"
+                         "aaaa-bbbb-cccc-dddddddddddd") not in (listing, None)
+    # a numeric id with a title slug still keeps only the number
+    assert canonical_url("https://jobs.smartrecruiters.com/Acme/744000149367234-"
+                         "software-intern") == "ats:sr:acme:744000149367234"
