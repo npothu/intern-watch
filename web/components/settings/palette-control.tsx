@@ -7,17 +7,11 @@ import {
   setPalette,
   type DarkPalette,
   type LightPalette,
-  type PaletteSwatch,
+  type PaletteSpec,
 } from "@/lib/palette";
 import { useDarkPalette, useLightPalette } from "@/components/settings/use-palette-preference";
 
-/**
- * Which palette light mode and dark mode each use. Independent of the Theme
- * row above it: that picks the mode, this picks the colours inside each mode,
- * so a choice here holds even while the other mode is showing.
- */
-
-function Swatch({ s }: { s: PaletteSwatch }) {
+function Swatch({ s }: { s: PaletteSpec }) {
   return (
     <span
       aria-hidden
@@ -27,7 +21,7 @@ function Swatch({ s }: { s: PaletteSwatch }) {
   );
 }
 
-function options(table: Record<string, PaletteSwatch>): PillOption[] {
+function options(table: Record<string, PaletteSpec>): PillOption[] {
   return Object.entries(table).map(([key, s]) => ({
     key,
     label: s.label,
@@ -38,6 +32,11 @@ function options(table: Record<string, PaletteSwatch>): PillOption[] {
 const LIGHT_OPTIONS = options(LIGHT_PALETTES);
 const DARK_OPTIONS = options(DARK_PALETTES);
 
+/**
+ * Which palette light mode and dark mode each use. Independent of the Theme
+ * row above it: that picks the mode, this picks the colours inside each mode,
+ * so a choice here holds even while the other mode is showing.
+ */
 export function PaletteControl() {
   const light = useLightPalette();
   const dark = useDarkPalette();

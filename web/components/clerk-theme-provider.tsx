@@ -9,7 +9,7 @@ export function ClerkThemeProvider({ children }: { children: React.ReactNode }) 
   const { resolvedTheme } = useTheme();
   const lightPalette = useLightPalette();
   const darkPalette = useDarkPalette();
-  const p =
+  const palette =
     resolvedTheme === "dark" ? DARK_PALETTES[darkPalette] : LIGHT_PALETTES[lightPalette];
 
   return (
@@ -18,10 +18,10 @@ export function ClerkThemeProvider({ children }: { children: React.ReactNode }) 
         variables: {
           // Clerk generates shade scales from these colors and needs concrete
           // values, so they come from the active palette's table entry.
-          colorPrimary: p.accent,
-          colorPrimaryForeground: p.accentInk,
-          colorNeutral: p.ink,
-          colorDanger: p.red,
+          colorPrimary: palette.accent,
+          colorPrimaryForeground: palette.accentInk,
+          colorNeutral: palette.ink,
+          colorDanger: palette.red,
           colorBackground: "var(--surface)",
           colorForeground: "var(--ink)",
           colorMutedForeground: "var(--ink-2)",

@@ -32,7 +32,7 @@ export const DEFAULT_DARK_PALETTE: DarkPalette = "obsidian-fern";
  * is not active) and Clerk (which derives shade scales from real colours).
  * KEEP IN SYNC with the token blocks in app/globals.css.
  */
-export type PaletteSwatch = {
+export type PaletteSpec = {
   label: string;
   bg: string;
   ink: string;
@@ -41,7 +41,7 @@ export type PaletteSwatch = {
   red: string;
 };
 
-export const LIGHT_PALETTES: Record<LightPalette, PaletteSwatch> = {
+export const LIGHT_PALETTES: Record<LightPalette, PaletteSpec> = {
   fern: {
     label: "Fern",
     bg: "#f4f2ed",
@@ -60,7 +60,7 @@ export const LIGHT_PALETTES: Record<LightPalette, PaletteSwatch> = {
   },
 };
 
-export const DARK_PALETTES: Record<DarkPalette, PaletteSwatch> = {
+export const DARK_PALETTES: Record<DarkPalette, PaletteSpec> = {
   "obsidian-fern": {
     label: "Obsidian",
     bg: "#0b0b0c",
