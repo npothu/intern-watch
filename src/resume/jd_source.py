@@ -22,7 +22,7 @@ import httpx
 
 from ..adapters.ats_boards import JD_MAX_CHARS
 from ..adapters.jobright_page import _PAGE_UA, fetch_description
-from ..normalize import extract_jobright_id, strip_html
+from ..normalize import extract_jobright_id
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ _NEXT_DATA_RE = re.compile(
 _JSON_LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.S | re.I)
-_WS_RE = re.compile(r"\s+")
 
 # Anti-bot / challenge / empty-SPA-shell tells. A 403 already raises, but many
 # blockers serve a 200 with one of these instead of the JD — building a resume
@@ -79,17 +78,130 @@ def _looks_like_jd(text: str) -> bool:
     return density < _JS_TOKEN_DENSITY_THRESHOLD
 
 
+# -- JD text (port of jd_acquire.ts stripJdHtml / ok; keep in lockstep) -----
+# Unlike normalize.strip_html (one line, for the watcher's filters), a stored
+# JD keeps its paragraph and list breaks: the resume tailor reads it, and the
+# TS ingest path stores the same text for the same posting.
+
+_JD_ENTITIES = {  # jd_acquire.ts JD_ENTITIES twin
+    "nbsp": " ", "lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'",
+    "rsquo": "\u2019", "lsquo": "\u2018", "rdquo": "\u201d", "ldquo": "\u201c",
+    "ndash": "\u2013", "mdash": "\u2014", "hellip": "\u2026", "bull": "\u2022",
+    "middot": "\u00b7", "copy": "\u00a9", "reg": "\u00ae", "trade": "\u2122",
+}
+_ENTITY_RE = re.compile(r"&(#\d+|#x[0-9a-f]+|[a-z]+);", re.I)
+_JD_PAIRED_RE = re.compile(r"<(script|style|noscript|svg)\b[\s\S]*?</\1>", re.I)
+_JD_UNCLOSED_RE = re.compile(r"<(?:script|style|noscript|svg)\b[\s\S]*$", re.I)
+_JD_BREAK_RE = re.compile(r"<(?:br|/p|/li|/div|/h[1-6]|/ul|/ol|/tr)\s*/?>", re.I)
+_JD_LI_RE = re.compile(r"<li[^>]*>", re.I)
+_SPACES_RE = re.compile(r"[ \t]+")
+_LINE_EDGE_RE = re.compile(r" ?\n ?")
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def _decode_entity(m: re.Match) -> str:
+    body = m[1]
+    if body[0] == "#":
+        try:
+            code = int(body[2:], 16) if body[1] in "xX" else int(body[1:])
+        except ValueError:
+            return m[0]
+        if code <= 0 or code > 0x10FFFF:
+            return m[0]
+        return " " if code == 0xA0 else chr(code)
+    return _JD_ENTITIES.get(body.lower(), m[0])
+
+
+def _tidy(text: str) -> str:
+    text = _SPACES_RE.sub(" ", text)
+    text = _LINE_EDGE_RE.sub("\n", text)
+    return _BLANK_LINES_RE.sub("\n\n", text).strip()
+
+
+def _strip_jd_html(s: str) -> str:
+    """HTML -> JD text with paragraph and list breaks kept. Entities decode
+    BEFORE tags strip (Greenhouse returns entity-escaped HTML)."""
+    t = _ENTITY_RE.sub(_decode_entity, s)
+    if _ENTITY_RE.search(t):
+        t = _ENTITY_RE.sub(_decode_entity, t)  # double-escaped payloads
+    t = _JD_PAIRED_RE.sub(" ", t)
+    t = _JD_UNCLOSED_RE.sub(" ", t)  # fetch cap cut mid-element
+    t = re.sub(r"<[^>]*$", " ", t)
+    t = _JD_BREAK_RE.sub("\n", t)
+    t = _JD_LI_RE.sub("\n- ", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return _tidy(t)
+
+
 def _ok(text: str | None) -> str | None:
-    """Capped, whitespace-collapsed text if it clears MIN_JD_CHARS, else None."""
+    """Capped text (spaces collapsed, line breaks kept) if it clears
+    MIN_JD_CHARS, else None."""
     if not text:
         return None
-    text = _WS_RE.sub(" ", text).strip()[:JD_MAX_CHARS]
+    text = _tidy(text)[:JD_MAX_CHARS]
     return text if len(text) >= MIN_JD_CHARS else None
 
 
 # -- ATS public-API tier (mirror of convex/jd_acquire.ts; keep in lockstep) --
 
 _WORKDAY_HOST_RE = re.compile(r"\.wd\d+\.myworkdayjobs\.com$")
+# <pod>.fa.<dc>.oraclecloud.com and fa-<x>-saasfaprod1.fa.ocs.oraclecloud.com
+_ORACLE_HOST_RE = re.compile(r"^[a-z0-9-]+\.fa(?:\.[a-z0-9-]+)*\.oraclecloud\.com$")
+# [/hcmUI/CandidateExperience]/<lang>[/sites/<site>]/job/<id>
+_ORACLE_PATH_RE = re.compile(
+    r"^(/hcmUI/CandidateExperience)?/[a-z]{2}(?:[-_][A-Za-z]{2})?/"
+    r"(?:sites/([A-Za-z0-9_]+)/)?(?:requisitions/preview|job)/(\d+)(?:/|$)")
+_ORACLE_POD_RE = re.compile(
+    r"\b([a-z0-9-]+\.fa(?:\.[a-z0-9-]+)*\.oraclecloud\.com)\b", re.I)
+_PHENOM_DDO_RE = re.compile(r"phApp\.ddo\s*=\s*\{")
+_CRAWLER_UA = "Mozilla/5.0 (compatible; intern-baddie/1.0)"
+
+
+def _oracle_api_url(host: str, site: str | None, job_id: str) -> str:
+    """Oracle Recruiting Cloud's public requisition-detail feed (the one its
+    CandidateExperience page calls). siteNumber is optional; only the quotes
+    are escaped -- the finder's `;` `,` `=` stay literal."""
+    finder = f"ById;Id=%22{job_id}%22" + (f",siteNumber={site}" if site else "")
+    return (f"https://{host}/hcmRestApi/resources/latest/"
+            "recruitingCEJobRequisitionDetails?expand=all&onlyData=true"
+            f"&finder={finder}")
+
+
+def _oracle_api_from_page(url: str, html: str) -> tuple[str, str] | None:
+    """Oracle CX on a custom domain (careers.<employer>.com/en/sites/<site>/
+    job/<id>): the fetched page names its oraclecloud pod."""
+    try:
+        path = httpx.URL(url).path
+    except Exception:  # noqa: BLE001
+        return None
+    m = _ORACLE_PATH_RE.match(path)
+    if not m or not m[2]:
+        return None
+    pod = _ORACLE_POD_RE.search(html)
+    if not pod or not _ORACLE_HOST_RE.match(pod[1].lower()):
+        return None
+    return ("oracle", _oracle_api_url(pod[1].lower(), m[2], m[3]))
+
+
+def _is_icims_posting(url: str) -> bool:
+    """<tenant>.icims.com/jobs/<id>/... -- with or without ?in_iframe=1."""
+    try:
+        parsed = httpx.URL(url)
+    except Exception:  # noqa: BLE001
+        return False
+    host = (parsed.host or "").lower()
+    return host.endswith(".icims.com") and bool(re.match(r"^/jobs/\d+(?:/|$)", parsed.path))
+
+
+def _page_fetch_url(url: str) -> str:
+    """The URL whose HTML carries the posting: iCIMS wraps the JD in an
+    iframe, whose `?in_iframe=1` page is the small one with the JSON-LD."""
+    if not _is_icims_posting(url):
+        return url
+    parsed = httpx.URL(url)
+    if parsed.params.get("in_iframe") == "1":
+        return url
+    return str(parsed.copy_set_param("in_iframe", "1"))
 
 
 def _ats_api_for(url: str) -> tuple[str, str] | None:
@@ -131,7 +243,31 @@ def _ats_api_for(url: str) -> tuple[str, str] | None:
         if m:
             return ("workable",
                     f"https://apply.workable.com/api/v1/accounts/{m[1]}/jobs/{m[2].upper()}")
+    if _ORACLE_HOST_RE.match(host):
+        m = _ORACLE_PATH_RE.match(path)
+        if m and m[1]:
+            return ("oracle", _oracle_api_url(host, m[2], m[3]))
+    # Eightfold (<org>.eightfold.ai, Microsoft's apply.careers.microsoft.com;
+    # robots.txt allows /api/apply).
+    if host.endswith(".eightfold.ai") or host == "apply.careers.microsoft.com":
+        m = re.match(r"^/careers/job/(\d+)", path)
+        job_id = m[1] if m else (parsed.params.get("pid") if path == "/careers" else None)
+        if job_id and job_id.isdigit():
+            return ("eightfold", f"https://{host}/api/apply/v2/jobs/{job_id}")
+    if host == "jobs.apple.com":
+        m = re.match(r"^(?:/[a-z]{2}-[a-z]{2})?/details/([A-Za-z0-9-]+)", path, re.I)
+        if m:
+            return ("apple", f"https://jobs.apple.com/api/v1/jobDetails/{m[1]}")
     return None
+
+
+def _join_sections(parts: list[tuple[str, object]]) -> str:
+    out = []
+    for heading, body in parts:
+        text = _strip_jd_html(body) if isinstance(body, str) else ""
+        if text:
+            out.append(f"{heading}\n{text}" if heading else text)
+    return "\n\n".join(out)
 
 
 def _jd_from_ats_payload(kind: str, payload) -> str | None:
@@ -139,13 +275,13 @@ def _jd_from_ats_payload(kind: str, payload) -> str | None:
     if not isinstance(payload, dict):
         return None
     if kind == "greenhouse":
-        return _ok(strip_html(payload.get("content") or ""))
+        return _ok(_strip_jd_html(payload.get("content") or ""))
     if kind == "lever":
         parts = [payload.get("descriptionPlain")
-                 or strip_html(payload.get("description") or "")]
+                 or _strip_jd_html(payload.get("description") or "")]
         for lst in payload.get("lists") or []:
             parts.extend([lst.get("text") or "",
-                          strip_html(lst.get("content") or "")])
+                          _strip_jd_html(lst.get("content") or "")])
         parts.append(payload.get("additionalPlain") or "")
         return _ok("\n".join(p for p in parts if p))
     if kind.startswith("ashby:"):
@@ -153,20 +289,41 @@ def _jd_from_ats_payload(kind: str, payload) -> str | None:
         for j in payload.get("jobs") or []:
             if str(j.get("id", "")).lower() == want:
                 return _ok(j.get("descriptionPlain")
-                           or strip_html(j.get("descriptionHtml") or ""))
+                           or _strip_jd_html(j.get("descriptionHtml") or ""))
         return None
     if kind == "smartrecruiters":
         sections = (payload.get("jobAd") or {}).get("sections") or {}
-        parts = [f"{sec.get('title') or ''}\n{strip_html(sec.get('text') or '')}"
+        parts = [f"{sec.get('title') or ''}\n{_strip_jd_html(sec.get('text') or '')}"
                  for sec in sections.values() if isinstance(sec, dict)]
         return _ok("\n\n".join(parts))
     if kind == "workday":
         info = payload.get("jobPostingInfo") or {}
-        return _ok(strip_html(info.get("jobDescription") or ""))
+        return _ok(_strip_jd_html(info.get("jobDescription") or ""))
     if kind == "workable":
-        parts = [strip_html(payload.get(k) or "")
+        parts = [_strip_jd_html(payload.get(k) or "")
                  for k in ("description", "requirements", "benefits")]
         return _ok("\n\n".join(p for p in parts if p))
+    if kind == "oracle":
+        items = payload.get("items") or []
+        if not items or not isinstance(items[0], dict):
+            return None  # closed, or the wrong site
+        it = items[0]
+        return _ok(_join_sections([
+            ("", it.get("ExternalDescriptionStr")),
+            ("Responsibilities", it.get("ExternalResponsibilitiesStr")),
+            ("Qualifications", it.get("ExternalQualificationsStr")),
+        ]))
+    if kind == "eightfold":
+        return _ok(_strip_jd_html(payload.get("job_description") or ""))
+    if kind == "apple":
+        inner = payload.get("res")
+        res: dict = inner if isinstance(inner, dict) else payload
+        return _ok(_join_sections([
+            ("Summary", res.get("jobSummary")),
+            ("Description", res.get("description")),
+            ("Minimum Qualifications", res.get("minimumQualifications")),
+            ("Preferred Qualifications", res.get("preferredQualifications")),
+        ]))
     return None
 
 
@@ -190,7 +347,7 @@ def _from_greenhouse(client: httpx.Client, jd_url: str) -> str | None:
     resp = client.get(jd_url)
     resp.raise_for_status()
     content = resp.json().get("content") or ""
-    return strip_html(content)[:JD_MAX_CHARS] or None
+    return _strip_jd_html(content)[:JD_MAX_CHARS] or None
 
 
 def _walk_json_descriptions(obj) -> list[str]:
@@ -208,9 +365,28 @@ def _walk_json_descriptions(obj) -> list[str]:
     return found
 
 
+def _phenom_description(html: str) -> str | None:
+    """Phenom career sites server-render the posting into `phApp.ddo = {...}`
+    (jobDetail.data.job.description). jd_acquire.ts phenomJob twin."""
+    m = _PHENOM_DDO_RE.search(html)
+    if not m:
+        return None
+    try:
+        ddo, _ = json.JSONDecoder().raw_decode(html, m.end() - 1)
+        job = ddo["jobDetail"]["data"]["job"]
+    except Exception:  # noqa: BLE001 - not a Phenom page after all
+        return None
+    desc = job.get("description") if isinstance(job, dict) else None
+    return _ok(_strip_jd_html(desc)) if isinstance(desc, str) else None
+
+
 def _embedded_description(html: str) -> str | None:
-    """Prefer a structured `description` from __NEXT_DATA__ or JSON-LD; these
-    carry the JD prose without the page's nav/footer chrome."""
+    """Prefer a structured `description` from Phenom's phApp.ddo,
+    __NEXT_DATA__ or JSON-LD; these carry the JD prose without the page's
+    nav/footer chrome."""
+    phenom = _phenom_description(html)
+    if phenom:
+        return phenom
     for pat in (_NEXT_DATA_RE, _JSON_LD_RE):
         for m in pat.finditer(html):
             try:
@@ -219,7 +395,7 @@ def _embedded_description(html: str) -> str | None:
                 continue
             for desc in _walk_json_descriptions(data):
                 # description values are often HTML themselves.
-                got = _ok(strip_html(desc))
+                got = _ok(_strip_jd_html(desc))
                 if got:
                     return got
     return None
@@ -232,19 +408,44 @@ def _generic_scrape(client: httpx.Client, url: str,
     When `html_out` is given, the fetched page is appended to it even on a
     miss, so the caller's LLM last-resort tier has something to extract
     from."""
-    resp = client.get(url, headers={"User-Agent": _PAGE_UA},
-                      follow_redirects=True)
+    page_url = _page_fetch_url(url)
+    # iCIMS's WAF captchas a desktop-Chrome UA that cannot run JS but serves
+    # the posting to an honest crawler UA (ingest_node.ts BROWSER_HEADERS).
+    # Chosen by host, not by whether the URL needed rewriting: a pasted
+    # `?in_iframe=1` URL is the same WAF.
+    ua = _CRAWLER_UA if _is_icims_posting(url) else _PAGE_UA
+    resp = client.get(page_url, headers={"User-Agent": ua}, follow_redirects=True)
     resp.raise_for_status()
+    # Avature answers bots with an (often empty) HTTP 202 WAF challenge;
+    # a 202 is never the posting (ingest_node.ts fetchOnce twin).
+    if (getattr(resp, "status_code", 200) == 202
+            or (getattr(resp, "headers", None) or {}).get("x-amzn-waf-action")):
+        log.debug("jd_source scrape blocked (HTTP 202 challenge): %s", url)
+        return None
     html = resp.text
     if html_out is not None:
         html_out.append(html)
+    # Oracle CX on a custom domain (checked before the blocked-page tells:
+    # its JS shell can say "enable JavaScript", and jd_acquire.ts runs the
+    # hint first too): the page names its pod, whose REST feed
+    # carries the JD the JS shell never renders server-side.
+    hinted = None if _ats_api_for(url) else _oracle_api_from_page(url, html)
+    if hinted:
+        try:
+            api = client.get(hinted[1], follow_redirects=True)
+            api.raise_for_status()
+            got = _jd_from_ats_payload(hinted[0], api.json())
+            if got:
+                return got
+        except Exception as exc:  # noqa: BLE001 - fall through to the page
+            log.debug("jd_source oracle page-hint miss for %s: %s", url, exc)
     if _BLOCKED_RE.search(html[:2000]):  # a challenge/denial page, not a JD
         log.debug("jd_source scrape blocked (anti-bot/JS shell): %s", url)
         return None
     embedded = _embedded_description(html)
     if embedded:
         return embedded
-    fallback = _ok(strip_html(html))
+    fallback = _ok(_strip_jd_html(html))
     if fallback and not _looks_like_jd(fallback):
         log.debug("jd_source scrape rejected (looks like JS, not a JD): %s",
                   url)
@@ -283,7 +484,7 @@ def _llm_extract(html: str, llm_cfg: dict | None, job) -> str | None:
     api_key = _os.environ.get(api_key_env_for(llm_cfg))
     if call is None or not api_key:
         return None
-    page_text = strip_html(html)[:28000]
+    page_text = _strip_jd_html(html)[:28000]
     if len(page_text) < MIN_JD_CHARS:
         return None
     try:
@@ -313,7 +514,8 @@ def acquire_jd(job, *, client: httpx.Client | None = None,
     """JD text for a Job, trying (first hit wins): in-memory description,
     the per-job content API named by `jd_url`, the ATS public API resolved
     from the apply URL's shape (Greenhouse/Lever/Ashby/SmartRecruiters/
-    Workday CXS/Workable -- full-fidelity, no scraping), then jobright info
+    Workday CXS/Workable/Oracle CX/Eightfold/Apple -- full-fidelity, no
+    scraping), then jobright info
     page and generic scrape of the apply URL -- scrape first when `url` is a
     real employer link, jobright page first when `url` is itself a jobright
     link -- and, when `llm_cfg` carries a keyed provider, LLM extraction from

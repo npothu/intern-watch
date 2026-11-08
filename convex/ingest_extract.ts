@@ -192,6 +192,35 @@ export function validateUrl(raw: string): void {
       if (host.includes(":")) throw new Error("private address not allowed");
     }
   }
+  if (isListingUrl(u)) {
+    throw new Error(
+      "this looks like a job search or listing page, not a single posting - open the job and paste its own URL",
+    );
+  }
+}
+
+// Last path segments that are a search/results page on every board seen
+// (careers.ibm.com/.../search, Avature SearchJobs, Phenom search-results).
+const LISTING_SEGMENTS = new Set([
+  "search", "searchjobs", "search-jobs", "search-results", "jobsearch", "job-search",
+  "results", "jobs", "careers", "openings", "positions", "job-openings",
+]);
+// Search-box parameters. A URL carrying one is a results page unless it
+// also names a posting (an id-looking path segment or an id parameter).
+const SEARCH_PARAMS = ["q", "query", "keyword", "keywords", "search", "searchtext"];
+const ID_PARAMS = /^(?:jobid|job_id|gh_jid|pid|id|reqid|req_id|jobreqid|requisitionid|ashby_jid|lever-via)$/i;
+
+/** A search/listing URL rather than one posting (#4 in the scrape issues:
+ * an IBM row saved with a search URL could never become a real match). */
+export function isListingUrl(u: URL): boolean {
+  const segs = u.pathname.split("/").filter(Boolean);
+  const keys = [...u.searchParams.keys()];
+  if (keys.some((k) => ID_PARAMS.test(k))) return false;
+  // Any segment carrying a 4+ digit run or a UUID is a posting id.
+  if (segs.some((seg) => /\d{4,}|[0-9a-f]{8}-[0-9a-f]{4}-/i.test(seg))) return false;
+  const last = (segs.at(-1) ?? "").toLowerCase();
+  if (LISTING_SEGMENTS.has(last)) return true;
+  return keys.some((k) => SEARCH_PARAMS.includes(k.toLowerCase()));
 }
 
 /**

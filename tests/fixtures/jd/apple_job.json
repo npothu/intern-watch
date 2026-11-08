@@ -1,0 +1,29 @@
+{
+ "res": {
+  "id": "PIPE-200676912",
+  "reqId": "PIPE-200676912",
+  "jobNumber": "200676912-3715",
+  "postingTitle": "Software Engineering Intern \u2013 AI Tools for Hardware Engineering",
+  "jobSummary": "Our System Hardware Engineering Team builds and validates next-generation hardware systems. We are looking for an intern passionate about AI and software engineering to help us design and implement internal AI-powered tools that accelerate hardware design, testing, and analysis workflows.  \n\nThis role offers a unique opportunity to work at the intersection of AI, software, and hardware engineering, learning how AI can transform engineering productivity at scale.",
+  "description": "As an intern, you will: \n- Design and prototype AI-driven tools that support hardware engineers in data analysis, test automation, and debugging workflows. \n- Implement backend services in Python and frontend interfaces in TypeScript (React/Next.js). \n- Integrate databases (SQL, vector databases) for data storage, search, and retrieval. \n- Explore AI/ML workflows (embeddings, retrieval, summarization, code assistance). \n- Collaborate with hardware and software engineers to translate requirements into working tools. \n- Write clear documentation, tests, and deployment scripts.",
+  "minimumQualifications": "Currently pursuing a Bachelor\u2019s or Master\u2019s degree in Computer Science, Electrical/Computer Engineering, or related fields.\nProficiency in Python with type hints and TypeScript (comfortable reading and writing code).\nBasic knowledge of web development (HTTP, REST APIs, frontend frameworks).\nFamiliarity with databases (SQL queries, schema design).\nStrong problem-solving skills and curiosity to learn.\nAble to commit to a minimum 4 months full-time internship (preference for 6 months).\nGood written and spoken English communication skills.",
+  "preferredQualifications": "Experience with AI/ML frameworks (e.g., Hugging Face, LangChain, TensorFlow/PyTorch, or LLM APIs).\nFamiliarity with at least one of FastAPI, Flask, Django or Node.js for web backend development.\nHands-on knowledge of React/Next.js for web frontend development.\nExperience with PostgreSQL, Redis, or vector databases (e.g., Qdrant, Pinecone, FAISS).\nInterest in system hardware engineering workflows (test automation, data analysis, hardware validation).\nEnthusiastic, self-driven, and comfortable working in a collaborative engineering environment.",
+  "employmentType": "Intern",
+  "postDateInGMT": "2026-08-10T17:33:18.694+00:00",
+  "positionId": "200676912",
+  "locations": [
+   {
+    "id": "postLocation-SGI",
+    "name": "Shanghai",
+    "city": "Shanghai",
+    "countryName": "China"
+   },
+   {
+    "id": "postLocation-SHZ",
+    "name": "Shenzhen",
+    "city": "Shenzhen",
+    "countryName": "China"
+   }
+  ]
+ }
+}
