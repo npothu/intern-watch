@@ -6,9 +6,21 @@
 import type { TriageRow } from "@/app/(app)/page";
 import type { ResumeReport } from "@/lib/convex";
 import { compare, dayFromIso, parseTerm, sortTerms, termStart, type Day } from "@/lib/terms";
-import type { StatusFilter } from "./status-select";
+import { isKnownTerm } from "@/lib/preferences";
 
-export type { StatusFilter };
+/**
+ * The status pills. "Has resume" filters on a built resume; "to apply" is
+ * the working queue (still open, not yet ticked). The Python web UI's
+ * "Agent touched" and "Likely closed" have no data in the hosted app.
+ */
+export type StatusFilter =
+  | "all"
+  | "priority"
+  | "todo"
+  | "applied"
+  | "saved"
+  | "resumes"
+  | "hidden";
 
 /** The term bucket for a row with no term at all. Never a real term. */
 export const UNKNOWN_TERM = "Unknown term";
@@ -112,6 +124,27 @@ export function passesTerm(row: TriageRow, term: string): boolean {
   return term === ALL_TERMS || termOf(row) === term;
 }
 
+/** A row in a real term the preferences no longer want (null = all wanted). */
+export function isUnwatched(row: Pick<TriageRow, "term">, wantedTerms: readonly string[] | null): boolean {
+  return wantedTerms !== null && Boolean(row.term) && isKnownTerm(row.term) && !wantedTerms.includes(row.term);
+}
+
+/** Splits rows into watched and unwatched (see isUnwatched), keeping order. */
+export function splitUnwatched(
+  rows: readonly TriageRow[],
+  wantedTerms: readonly string[] | null
+): { watched: TriageRow[]; unwatched: TriageRow[] } {
+  const watched: TriageRow[] = [];
+  const unwatched: TriageRow[] = [];
+  for (const r of rows) (isUnwatched(r, wantedTerms) ? unwatched : watched).push(r);
+  return { watched, unwatched };
+}
+
+/** The open row, if it is still on screen; otherwise nothing is open. */
+export function resolveOpen(open: string | null, visible: readonly Pick<TriageRow, "short">[]): string | null {
+  return open !== null && visible.some((r) => r.short === open) ? open : null;
+}
+
 export type FilterState = { filter: StatusFilter; term: string; query: string };
 
 export type FilterResult = {
@@ -120,8 +153,10 @@ export type FilterResult = {
   /** Per status pill: rows passing that status, the active term and query. */
   statusCounts: Record<StatusFilter, number>;
   /** Term pills (ALL_TERMS first). Counted against the active status and
-   *  query; offered for every term the rows carry, so the pill row keeps its
-   *  shape as the status changes and a zero count reads as "none here". */
+   *  query. Offered for every term with a live (not hidden) row - or any row
+   *  while viewing hidden - so the row keeps its shape as the status changes
+   *  and a zero count reads as "none here", while a term whose only rows are
+   *  hidden does not linger as a dead pill. */
   termCounts: { key: string; count: number }[];
   /** The term actually applied: a stored pick no longer on offer falls back
    *  to ALL_TERMS instead of filtering everything away. */
@@ -133,7 +168,8 @@ export type FilterResult = {
  * would show if that pill were picked with the other two axes unchanged.
  */
 export function composeFilters(rows: readonly TriageRow[], state: FilterState): FilterResult {
-  const terms = orderTerms(rows.map(termOf));
+  const offered = state.filter === "hidden" ? rows : rows.filter((r) => !r.dismissed);
+  const terms = orderTerms(offered.map(termOf));
   const term = state.term === ALL_TERMS || terms.includes(state.term) ? state.term : ALL_TERMS;
 
   const statusCounts = Object.fromEntries(STATUS_FILTERS.map((f) => [f.key, 0])) as Record<
@@ -238,7 +274,10 @@ export function cycleSort(current: Sort, key: SortKey): Sort {
   return current.dir === "asc" ? { key, dir: "desc" } : null;
 }
 
-export function ariaSortFor(sort: Sort, key: string): "ascending" | "descending" | "none" {
+export function ariaSortFor(
+  sort: { key: string; dir: SortDir } | null,
+  key: string
+): "ascending" | "descending" | "none" {
   if (!sort || sort.key !== key) return "none";
   return sort.dir === "asc" ? "ascending" : "descending";
 }
@@ -286,7 +325,7 @@ export function rowStatus(row: Pick<TriageRow, "applied" | "saved">): RowStatus 
   return row.applied ? "applied" : row.saved ? "saved" : "new";
 }
 
-/** The tag's text without brackets or the LLM star, lowercased. */
+/** The tag's text without brackets or the LLM star, lowercased: "[TOP*]" -> "top". */
 export function tagText(tag: string): string {
   return tag.replace(/[[\]*]/g, "").trim().toLowerCase();
 }
@@ -298,24 +337,16 @@ export function tagIsInformative(tag: string): boolean {
 }
 
 /**
- * The "Worth knowing" lines: signals a row carries that its cells do not
- * already say. Only what TriageRow knows today; nothing is inferred.
+ * The "Worth knowing" lines: plain facts the row carries that its cells do
+ * not already say. Only what TriageRow states; no reasons are inferred.
  */
 export function worthKnowing(row: TriageRow): string[] {
   const out: string[] = [];
-  if (row.priority) out.push("On your priority list, accepted for any wanted term.");
-  if (/^\[top/i.test(row.tag)) {
-    out.push(
-      row.tag.includes("*")
-        ? "Top company, as judged by the LLM against your definition."
-        : "Top company by your definition."
-    );
-  }
-  if (!row.term) out.push("No term stated; shown because it passes under every wanted term.");
+  if (row.priority) out.push("Priority employer on your list.");
+  if (!row.term) out.push("Term not stated in the posting.");
+  if (tagText(row.tag) === "top") out.push("Tagged as a top company.");
   if (!row.hasJobDescription) {
-    out.push(
-      "No job description found, so a resume built for it uses only the title, company and location."
-    );
+    out.push("No job description found; the resume uses only title, company and location.");
   }
   return out;
 }

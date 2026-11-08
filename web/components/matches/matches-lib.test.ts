@@ -16,10 +16,13 @@ import {
   orderTerms,
   parseUrlState,
   reportSummary,
+  resolveOpen,
   rowStatus,
   sortLabel,
   sortRows,
+  splitUnwatched,
   tagIsInformative,
+  tagText,
   termFromSlug,
   termShort,
   termSlug,
@@ -79,6 +82,13 @@ describe("term slugs", () => {
     expect(termFromSlug("sp31", terms)).toBe(ALL_TERMS);
     expect(termFromSlug(null, terms)).toBe(ALL_TERMS);
   });
+  test("an unparseable term sorts after real terms and before Unknown", () => {
+    expect(orderTerms([UNKNOWN_TERM, "Summer/Fall 2027", "Fall 2027"])).toEqual([
+      "Fall 2027",
+      "Summer/Fall 2027",
+      UNKNOWN_TERM,
+    ]);
+  });
   test("pill order is chronological with Unknown last", () => {
     expect(orderTerms([UNKNOWN_TERM, "Fall 2027", "Spring 2027", "Fall 2027"])).toEqual([
       "Spring 2027",
@@ -101,8 +111,15 @@ describe("foundAge / absoluteDate", () => {
     expect(foundAge("", today)).toBe("—");
     expect(foundAge("yesterday", today)).toBe("—");
   });
-  test("crosses a DST boundary without an off-by-one", () => {
-    expect(foundAge("2026-10-31", day(2026, 11, 2))).toBe("2d");
+  test("counts calendar days across month and year boundaries", () => {
+    expect(foundAge("2026-10-31", day(2026, 11, 1))).toBe("1d");
+    expect(foundAge("2026-02-28", day(2026, 3, 1))).toBe("1d");
+    expect(foundAge("2028-02-28", day(2028, 3, 1))).toBe("2d"); // leap year
+    expect(foundAge("2026-12-31", day(2027, 1, 1))).toBe("1d");
+    expect(foundAge("2026-12-25", day(2027, 1, 3))).toBe("9d");
+  });
+  test("a timestamp after the date is ignored, only the day counts", () => {
+    expect(foundAge("2026-11-07T23:59:00Z", day(2026, 11, 8))).toBe("1d");
   });
   test("absolute date", () => {
     expect(absoluteDate("2026-11-08")).toBe("Nov 8, 2026");
@@ -226,17 +243,25 @@ describe("row facts", () => {
     expect(rowStatus({ applied: false, saved: false })).toBe("new");
   });
   test("tags", () => {
+    expect(tagText("[TOP*]")).toBe("top");
+    expect(tagText(" [PRIORITY] ")).toBe("priority");
+    expect(tagText("[atl]")).toBe("atl");
+    expect(tagText("")).toBe("");
     expect(tagIsInformative("[PRIORITY]")).toBe(false);
     expect(tagIsInformative("")).toBe(false);
     expect(tagIsInformative("[TOP*]")).toBe(true);
   });
-  test("worth knowing lists only the signals present", () => {
+  test("worth knowing states plain facts only", () => {
     expect(worthKnowing(row("a"))).toEqual([]);
-    const lines = worthKnowing(
-      row("b", { priority: true, tag: "[TOP*]", term: "", hasJobDescription: false })
-    );
-    expect(lines).toHaveLength(4);
-    expect(lines[1]).toMatch(/LLM/);
+    expect(
+      worthKnowing(row("b", { priority: true, tag: "[TOP*]", term: "", hasJobDescription: false }))
+    ).toEqual([
+      "Priority employer on your list.",
+      "Term not stated in the posting.",
+      "Tagged as a top company.",
+      "No job description found; the resume uses only title, company and location.",
+    ]);
+    expect(worthKnowing(row("c", { tag: "[atl]" }))).toEqual([]);
   });
   test("report summary", () => {
     const report = {
@@ -248,6 +273,14 @@ describe("row facts", () => {
       ],
     } as unknown as ResumeReport;
     expect(reportSummary(report)).toBe("1 of 2 projects rewritten · 1 note · JD fetched");
+  });
+  test("report summary: singulars and an unknown JD source pass through", () => {
+    const report = {
+      jdSource: "scraped",
+      notes: ["only"],
+      projects: [{ name: "a", before: [], after: [], llmRewritten: false, overridden: true }],
+    } as unknown as ResumeReport;
+    expect(reportSummary(report)).toBe("1 of 1 project rewritten · 1 note · scraped");
   });
 });
 
@@ -277,5 +310,93 @@ describe("URL state", () => {
   });
   test("term slugs are lowercased", () => {
     expect(parseUrlState(new URLSearchParams("term=SU27")).term).toBe("su27");
+  });
+});
+
+describe("sort tie-breaks", () => {
+  test("an active sort's tie is broken by priority first", () => {
+    const rows = [
+      row("plain", { company: "Acme", term: "Fall 2027", added: "2026-11-05" }),
+      row("prio", { company: "Acme", term: "Fall 2027", added: "2026-11-05", priority: true }),
+    ];
+    for (const key of ["company", "term", "found"] as const) {
+      for (const dir of ["asc", "desc"] as const) {
+        expect(shorts(sortRows(rows, { key, dir }))).toEqual(["prio", "plain"]);
+      }
+    }
+  });
+  test("two rows with no term keep the default order between them", () => {
+    const rows = [
+      row("old", { term: "", added: "2026-10-01" }),
+      row("new", { term: "", added: "2026-11-01" }),
+      row("dated", { term: "Fall 2027" }),
+    ];
+    expect(shorts(sortRows(rows, { key: "term", dir: "asc" }))).toEqual(["dated", "new", "old"]);
+    expect(shorts(sortRows(rows, { key: "term", dir: "desc" }))).toEqual(["dated", "new", "old"]);
+  });
+  test("two rows with no date keep the default order between them", () => {
+    const rows = [
+      row("zed", { company: "Zed", added: "" }),
+      row("abe", { company: "Abe", added: "unknown" }),
+      row("dated", { added: "2026-11-01" }),
+    ];
+    expect(shorts(sortRows(rows, { key: "found", dir: "asc" }))).toEqual(["dated", "abe", "zed"]);
+    expect(shorts(sortRows(rows, { key: "found", dir: "desc" }))).toEqual(["dated", "abe", "zed"]);
+  });
+});
+
+describe("pill counts, more cases", () => {
+  test("a row both saved and applied counts in both pills", () => {
+    const r = composeFilters([row("both", { saved: true, applied: true })], {
+      filter: "all",
+      term: ALL_TERMS,
+      query: "",
+    });
+    expect(r.statusCounts.saved).toBe(1);
+    expect(r.statusCounts.applied).toBe(1);
+    expect(r.statusCounts.todo).toBe(0);
+  });
+  test("a term whose only rows are hidden is not offered, except while viewing hidden", () => {
+    const rows = [
+      row("live", { term: "Summer 2027" }),
+      row("gone", { term: "Fall 2026", dismissed: true }),
+    ];
+    const live = composeFilters(rows, { filter: "all", term: ALL_TERMS, query: "" });
+    expect(live.termCounts.map((t) => t.key)).toEqual([ALL_TERMS, "Summer 2027"]);
+    const hidden = composeFilters(rows, { filter: "hidden", term: ALL_TERMS, query: "" });
+    expect(hidden.termCounts.map((t) => t.key)).toEqual([ALL_TERMS, "Fall 2026", "Summer 2027"]);
+    // ...and a pick of that term stops applying outside the hidden view.
+    expect(composeFilters(rows, { filter: "all", term: "Fall 2026", query: "" }).term).toBe(ALL_TERMS);
+  });
+  test("a live term with nothing under the active status still shows a zero", () => {
+    const rows = [row("a", { term: "Summer 2027" }), row("b", { term: "Fall 2027", saved: true })];
+    const r = composeFilters(rows, { filter: "saved", term: ALL_TERMS, query: "" });
+    expect(r.termCounts).toEqual([
+      { key: ALL_TERMS, count: 1 },
+      { key: "Summer 2027", count: 0 },
+      { key: "Fall 2027", count: 1 },
+    ]);
+  });
+});
+
+describe("open row and unwatched terms", () => {
+  test("the open row closes when it is filtered out", () => {
+    const visible = [row("a"), row("b")];
+    expect(resolveOpen("a", visible)).toBe("a");
+    expect(resolveOpen("zzz", visible)).toBeNull();
+    expect(resolveOpen(null, visible)).toBeNull();
+    expect(resolveOpen("a", [])).toBeNull();
+  });
+  test("only real terms outside the wanted set are unwatched", () => {
+    const rows = [
+      row("want", { term: "Summer 2027" }),
+      row("past", { term: "Fall 2026" }),
+      row("none", { term: "" }),
+      row("odd", { term: "Summer/Fall 2027" }),
+    ];
+    const split = splitUnwatched(rows, ["Summer 2027"]);
+    expect(shorts(split.watched)).toEqual(["want", "none", "odd"]);
+    expect(shorts(split.unwatched)).toEqual(["past"]);
+    expect(splitUnwatched(rows, null).unwatched).toEqual([]);
   });
 });
