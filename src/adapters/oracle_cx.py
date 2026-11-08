@@ -23,14 +23,13 @@ gets the detail feed as jd_url for main.enrich_jds.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from urllib.parse import quote
 
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import INTERN_RE, Pacer, page_cap, request_text
+from .listing_http import INTERN_RE, Pacer, iso_date, page_cap, request_text
 
 PAGE_SIZE = 100
 QUERIES = ("intern", "co-op")
@@ -80,13 +79,6 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     return pages
 
 
-def _date(value: str | None) -> dt.date | None:
-    try:
-        return dt.date.fromisoformat((value or "")[:10])
-    except ValueError:
-        return None
-
-
 def rows(data: dict, slug: str) -> list[tuple]:
     """(title, url, location, date_posted, description, jd_url) per req."""
     host, site = split_slug(slug)
@@ -101,7 +93,7 @@ def rows(data: dict, slug: str) -> list[tuple]:
             r.get("Title"),
             POSTING_URL.format(host=host, site=site, req_id=req_id),
             " / ".join(loc for loc in locs if loc),
-            _date(r.get("PostedDate")),
+            iso_date(r.get("PostedDate")),
             None,
             DETAIL_URL.format(host=host, site=site, req_id=quote(req_id)),
         ))

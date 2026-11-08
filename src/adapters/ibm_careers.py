@@ -18,12 +18,11 @@ slug is unused (one board: IBM).
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 
 import httpx
 
-from .listing_http import Pacer, page_cap, request_text, spell_country
+from .listing_http import Pacer, iso_date, page_cap, request_text, spell_country
 
 SEARCH_URL = "https://www-api.ibm.com/search/api/v2"
 PAGE_SIZE = 100
@@ -36,8 +35,8 @@ def location(raw: str) -> str:
     by listing_http.spell_country; IBM upper-cases some city names)."""
     city, sep, code = (raw or "").rpartition(",")
     if not sep or not city.strip():
-        return spell_country(raw or "")
-    return spell_country(f"{city.strip().title()},{code}")
+        return spell_country(raw or "", min_parts=2)
+    return spell_country(f"{city.strip().title()},{code}", min_parts=2)
 
 
 def query_body(offset: int) -> dict:
@@ -88,10 +87,7 @@ def rows(data: dict, slug: str) -> list[tuple]:
         url = src.get("url") or ""
         if "JobDetail" not in url:
             continue
-        try:
-            posted = dt.date.fromisoformat((src.get("dcdate") or "")[:10])
-        except ValueError:
-            posted = None
+        posted = iso_date(src.get("dcdate"))
         out.append((src.get("title"), url,
                     location(src.get("field_keyword_19") or ""),
                     posted, None, None))

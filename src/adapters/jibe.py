@@ -14,14 +14,13 @@ row, at totalCount, or at the page cap.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from urllib.parse import quote
 
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import INTERN_RE, Pacer, page_cap, request_text
+from .listing_http import INTERN_RE, Pacer, iso_date, page_cap, request_text
 
 QUERIES = ("intern", "co-op")
 PAGE_SIZE = 100
@@ -66,13 +65,6 @@ def _location(job: dict) -> str:
     return " / ".join(parts)
 
 
-def _date(value: str | None) -> dt.date | None:
-    try:
-        return dt.date.fromisoformat((value or "")[:10])
-    except ValueError:
-        return None
-
-
 def rows(data: dict, slug: str) -> list[tuple]:
     """(title, url, location, date_posted, description, jd_url) per job."""
     out = []
@@ -84,6 +76,6 @@ def rows(data: dict, slug: str) -> list[tuple]:
             "description", "responsibilities", "qualifications")).strip()
         out.append((j.get("title"),
                     POSTING_URL.format(host=slug, req_id=req_id),
-                    _location(j), _date(j.get("posted_date")),
+                    _location(j), iso_date(j.get("posted_date")),
                     body or None, None))
     return out

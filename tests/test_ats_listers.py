@@ -506,3 +506,9 @@ def test_spell_country_fixes_iso_code_misreads(raw, want, country):
     from src.filters import location_country
     assert listing_http.spell_country(raw) == want
     assert location_country(want) == country
+
+
+@pytest.mark.parametrize("raw", ["San Jose, CA", "Boulder, CO", "Chicago, IL"])
+def test_spell_country_leaves_two_part_us_locations_alone(raw):
+    # the last part of "City, ST" is a state, not Canada/Colombia/Israel
+    assert listing_http.spell_country(raw) == raw

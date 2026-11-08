@@ -47,7 +47,7 @@ def _positions(data: dict) -> list[dict]:
 
 def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     host, domain = split_slug(board["slug"])
-    cap = page_cap({"max_pages": board.get("max_pages") or DEFAULT_PAGES})
+    cap = page_cap(board, DEFAULT_PAGES)
     pacer = Pacer()
     pages: list[str] = []
     for query in QUERIES:

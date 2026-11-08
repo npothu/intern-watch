@@ -16,6 +16,7 @@ one board costs several requests. These helpers keep that cheap and polite:
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import re
 import time
@@ -56,7 +57,13 @@ _COUNTRIES = {
 }
 
 
-def spell_country(raw: str) -> str:
+def spell_country(raw: str, *, min_parts: int = 3) -> str:
+    """Spell out a trailing ISO country code. Only a location with at least
+    `min_parts` comma parts is touched: in "San Jose, CA" the last part is a
+    state, not Canada. A feed whose last part is always a country (IBM's
+    "CITY, CC") passes min_parts=2."""
+    if (raw or "").count(",") + 1 < min_parts:
+        return raw or ""
     head, sep, code = (raw or "").rpartition(",")
     name = _COUNTRIES.get(code.strip().upper()) if sep else None
     if name is None:
@@ -95,9 +102,17 @@ def request_text(client: httpx.Client, pacer: Pacer, url: str, *,
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def page_cap(board: dict) -> int:
-    """Per-board override (`max_pages:` in ats_boards.yaml), else MAX_PAGES."""
+def page_cap(board: dict, default: int = MAX_PAGES) -> int:
+    """Per-board override (`max_pages:` in ats_boards.yaml), else `default`."""
     try:
-        return max(1, int(board.get("max_pages") or MAX_PAGES))
+        return max(1, int(board.get("max_pages") or default))
     except (TypeError, ValueError):
-        return MAX_PAGES
+        return default
+
+
+def iso_date(value: str | None) -> dt.date | None:
+    """Leading YYYY-MM-DD of a date or timestamp string, else None."""
+    try:
+        return dt.date.fromisoformat((value or "")[:10])
+    except ValueError:
+        return None
