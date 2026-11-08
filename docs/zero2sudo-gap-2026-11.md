@@ -33,7 +33,7 @@ Workstream letters refer to the parallel scraping-input work started on
 Avature, Eightfold, Phenom and iCIMS listing adapters; **C** JD acquisition
 for those ATSes; **E** term inference from JD text; **F** closed-posting
 liveness probe; **G** manual-add → suggested ats-boards row, gap report and
-link intake.
+link intake; **H** first-sight seeding of newly added sources.
 
 ## Headline
 
