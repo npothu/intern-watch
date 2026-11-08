@@ -8,6 +8,7 @@ from src.normalize import (
     apply_url_rank,
     canonical_url,
     extract_jobright_id,
+    infer_term,
     infer_terms,
     norm_company,
     normalize_url,
@@ -45,6 +46,22 @@ def test_infer_terms(title, terms, conf):
     got_terms, got_conf = infer_terms(title, TODAY)
     assert got_terms == terms
     assert got_conf == conf
+
+
+_TERM_CASES = json.loads(
+    (Path(__file__).parents[1] / "shared" / "term-inference-cases.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("case", _TERM_CASES, ids=[c["name"] for c in _TERM_CASES])
+def test_infer_term_shared_vectors(case):
+    # Same vectors as convex/ingest_extract.test.ts: the two implementations
+    # must agree rule for rule.
+    got = infer_term(case["title"], case.get("url"), case.get("jd"),
+                     dt.date.fromisoformat(case["today"]))
+    assert got.terms == case["terms"]
+    assert got.confidence == case["confidence"]
+    assert got.source == case["source"]
+    assert got.term == (case["terms"][0] if case["terms"] else "")
 
 
 def test_season_no_year_rolls_forward():

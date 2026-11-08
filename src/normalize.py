@@ -5,8 +5,11 @@ from __future__ import annotations
 import datetime as dt
 import html as html_mod
 import re
+from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from . import terms as terms_mod
 from .models import TermConfidence
 
 # ------------------------------------------------------------------- html
@@ -287,33 +290,97 @@ def extract_jobright_id(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------- terms
+#
+# Term inference spec. convex/ingest_extract.ts (inferTermDetailed) mirrors
+# this function rule for rule; both suites run the shared vectors in
+# shared/term-inference-cases.json, so change the two together.
+#
+# Tiers, first hit wins:
+#   1. explicit -- a season next to a year ("Summer 2027", "Summer '27",
+#      "2027 Summer", "fall-2026" in a URL slug), checked in the title, then
+#      the URL, then the JD body.
+#   2. inferred -- title: month+year, season with no year, bare year (the
+#      long-standing title rules); then JD body: a month range with a year
+#      ("May-August 2027", "Jan-Jun 2027"), a month+year in a clause that
+#      talks about starting ("June 2027 start"), a season next to an
+#      internship noun with no year ("12-week summer internship", "Fall
+#      co-op", "Spring semester"), its year taken from the anchor date.
+#   3. unknown.
+# JD clauses about graduation, degrees, returning to school or deadlines are
+# skipped: "graduating Spring 2028" is not the internship's term. A JD's
+# explicit term starting more than 180 days before the anchor is a past
+# cohort ("our Summer 2025 interns ...") and is ignored.
 
 _SEASONS = {"summer": "Summer", "fall": "Fall", "autumn": "Fall",
             "spring": "Spring", "winter": "Winter"}
+_SEASON_ALT = "summer|fall|autumn|spring|winter"
+_YY = "2[4-9]"  # same 2024-2029 window as before; widen with care ("spring 30 days")
 
-# "Fall 2026", "Fall '26", "Summer of 2027", "fall2026"
+# "Fall 2026", "Fall '26", "Summer of 2027", "fall2026", "summer-2027",
+# "intern_fall_2027" (lookarounds, not \b: "_" is a word character)
 _EXPLICIT_RE = re.compile(
-    r"\b(summer|fall|autumn|spring|winter)\s*(?:of\s+)?[‘’']?\s*(?:20)?(2[4-9])\b",
+    rf"(?<![a-z])({_SEASON_ALT})[\s_-]*(?:of\s+)?[‘’']?\s*(?:20)?({_YY})(?!\d)",
     re.I)
-# year-before-season: "2026 Summer", "2027 Spring Intern"
+# year-before-season: "2026 Summer", "2027 Spring Intern", "2027-summer"
 _EXPLICIT_REV_RE = re.compile(
-    r"\b20(2[4-9])\s+(summer|fall|autumn|spring|winter)\b", re.I)
+    rf"(?<!\d)20({_YY})[\s_-]+({_SEASON_ALT})(?![a-z])", re.I)
 
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
+_MONTH_ALT = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|"
+              r"july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|"
+              r"dec(?:ember)?")
+# title: "Sept 2026", "January 2027 Start"
 _MONTH_YEAR_RE = re.compile(
-    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
-    r"aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\.?\s*[‘’']?\s*(?:20)?(2[4-9])\b", re.I)
+    rf"\b({_MONTH_ALT})\.?\s*[‘’']?\s*(?:20)?({_YY})\b", re.I)
 
 # season with no year: "Fall Intern", "Fall Co-op"
-_SEASON_ONLY_RE = re.compile(r"\b(summer|fall|autumn|spring|winter)\b", re.I)
+_SEASON_ONLY_RE = re.compile(rf"\b({_SEASON_ALT})\b", re.I)
 
 # bare year next to intern-ish words: "2027 Software Engineer Intern".
 # Industry convention: a bare year on an internship means that year's Summer.
-_BARE_YEAR_RE = re.compile(r"\b20(2[4-9])\b")
+_BARE_YEAR_RE = re.compile(rf"\b20({_YY})\b")
+
+# --- JD body rules. Years must be 4-digit or apostrophe'd: in "May 18 -
+# Aug 27" the 27 is a day.
+_JD_YEAR = rf"(?:20|[‘’'])({_YY})"
+_DAY = r"(?:\s+\d{1,2}(?:st|nd|rd|th)?)?"
+_JD_RANGE_RE = re.compile(
+    rf"\b({_MONTH_ALT})\b\.?{_DAY},?(?:\s*{_JD_YEAR})?"
+    rf"\s*(?:-|–|—|to|through|thru|until)\s*"
+    rf"({_MONTH_ALT})\b\.?{_DAY},?\s*{_JD_YEAR}\b", re.I)
+_JD_MONTH_YEAR_RE = re.compile(
+    rf"\b({_MONTH_ALT})\b\.?{_DAY},?\s*{_JD_YEAR}\b", re.I)
+_JD_START_RE = re.compile(r"\b(?:start|starts|starting|begin|begins|beginning|"
+                          r"commence|commences|commencing|start date)\b", re.I)
+_JD_SEASON_NOUN_RE = re.compile(
+    rf"\b({_SEASON_ALT})\s+(?:intern(?:ship)?s?|co-?ops?|semester|term|"
+    rf"session|program(?:me)?|cohort|placement)\b", re.I)
+_JD_SKIP_RE = re.compile(
+    r"graduat|degree|class of|commencement|diploma|enrolled|returning to|"
+    r"return to (?:school|campus|university|college)|deadline|apply by|"
+    r"applications? (?:close|due|open)|posted|last updated", re.I)
+# Split a JD into clauses: newlines/bullets, or sentence punctuation
+# followed by a capital ("Aug. 7" stays whole).
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+")
+_PAST_COHORT_DAYS = 180
+
+TermSource = Literal["title", "url", "jd"]
+
+
+@dataclass(frozen=True)
+class TermInference:
+    terms: list[str]                 # chronological
+    confidence: TermConfidence
+    source: TermSource | None
+
+    @property
+    def term(self) -> str:
+        """The single term a one-term field (a hosted match row) stores:
+        the earliest. Empty when unknown."""
+        return self.terms[0] if self.terms else ""
 
 
 def _month_to_season(month: int) -> str:
@@ -332,38 +399,117 @@ def _next_occurrence(season: str, today: dt.date) -> int:
     return today.year if today.month <= start_month else today.year + 1
 
 
-def infer_terms(title: str, today: dt.date) -> tuple[list[str], TermConfidence]:
-    """Regex term inference from a job title.
+def _ordered(terms: list[str]) -> list[str]:
+    return terms_mod.sort_terms(list(dict.fromkeys(terms)))
 
-    Returns (terms, confidence). Priority per spec:
-    explicit season+year > month+year / season-only / bare-year (inferred) > unknown.
-    """
-    explicit = []
-    for m in _EXPLICIT_RE.finditer(title):
-        explicit.append(f"{_SEASONS[m.group(1).lower()]} 20{m.group(2)}")
-    for m in _EXPLICIT_REV_RE.finditer(title):
-        explicit.append(f"{_SEASONS[m.group(2).lower()]} 20{m.group(1)}")
-    if explicit:
-        return sorted(set(explicit)), "explicit"
 
-    inferred = []
-    for m in _MONTH_YEAR_RE.finditer(title):
-        month = _MONTHS[m.group(1).lower()[:3]]
-        inferred.append(f"{_month_to_season(month)} 20{m.group(2)}")
-    if inferred:
-        return sorted(set(inferred)), "inferred"
+def _explicit(text: str) -> list[str]:
+    found = [f"{_SEASONS[m.group(1).lower()]} 20{m.group(2)}"
+             for m in _EXPLICIT_RE.finditer(text)]
+    found += [f"{_SEASONS[m.group(2).lower()]} 20{m.group(1)}"
+              for m in _EXPLICIT_REV_RE.finditer(text)]
+    return found
 
+
+def _title_inferred(title: str, today: dt.date) -> list[str]:
+    found = [f"{_month_to_season(_MONTHS[m.group(1).lower()[:3]])} 20{m.group(2)}"
+             for m in _MONTH_YEAR_RE.finditer(title)]
+    if found:
+        return found
     season_m = _SEASON_ONLY_RE.search(title)
     if season_m:
         season = _SEASONS[season_m.group(1).lower()]
-        return [f"{season} {_next_occurrence(season, today)}"], "inferred"
-
+        return [f"{season} {_next_occurrence(season, today)}"]
     year_m = _BARE_YEAR_RE.search(title)
     if year_m:
-        return [f"Summer 20{year_m.group(1)}"], "inferred"
+        return [f"Summer 20{year_m.group(1)}"]
+    return []
 
-    return [], "unknown"
 
+def _range_seasons(m1: int, y1: int, m2: int, y2: int) -> list[str]:
+    """Seasons a month range covers: the start month's season, plus every
+    Jan-Apr / May-Aug / Sep-Dec block the range spends 2+ months in.
+    May-Aug -> Summer; Jan-Jun -> Spring + Summer; Aug-Dec -> Fall."""
+    out = [f"{_month_to_season(m1)} {y1}"]
+    counts: dict[str, int] = {}
+    month, year = m1, y1
+    for _ in range(24):
+        block = ("Spring", "Spring", "Spring", "Spring", "Summer", "Summer",
+                 "Summer", "Summer", "Fall", "Fall", "Fall", "Fall")[month - 1]
+        key = f"{block} {year}"
+        counts[key] = counts.get(key, 0) + 1
+        if (year, month) >= (y2, m2):
+            break
+        month, year = (1, year + 1) if month == 12 else (month + 1, year)
+    out += [k for k, n in counts.items() if n >= 2]
+    return out
+
+
+def _jd_clauses(jd: str) -> list[str]:
+    return [c for c in _CLAUSE_SPLIT_RE.split(jd)
+            if c.strip() and not _JD_SKIP_RE.search(c)]
+
+
+def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
+    cutoff = anchor - dt.timedelta(days=_PAST_COHORT_DAYS)
+    found = [t for c in clauses for t in _explicit(c)]
+    return [t for t in found if (terms_mod.term_start(t) or dt.date.max) >= cutoff]
+
+
+def _jd_inferred(clauses: list[str], anchor: dt.date) -> list[str]:
+    for c in clauses:
+        r = _JD_RANGE_RE.search(c)
+        if r:
+            m1 = _MONTHS[r.group(1).lower()[:3]]
+            m2 = _MONTHS[r.group(3).lower()[:3]]
+            y2 = 2000 + int(r.group(4))
+            y1 = (2000 + int(r.group(2)) if r.group(2)
+                  else y2 if m1 <= m2 else y2 - 1)
+            if (y1, m1) <= (y2, m2):
+                return _range_seasons(m1, y1, m2, y2)
+    for c in clauses:
+        if _JD_START_RE.search(c):
+            m = _JD_MONTH_YEAR_RE.search(c)
+            if m:
+                month = _MONTHS[m.group(1).lower()[:3]]
+                return [f"{_month_to_season(month)} 20{m.group(2)}"]
+    for c in clauses:
+        m = _JD_SEASON_NOUN_RE.search(c)
+        if m:
+            season = _SEASONS[m.group(1).lower()]
+            return [f"{season} {_next_occurrence(season, anchor)}"]
+    return []
+
+
+def infer_term(title: str, url: str | None = None, jd: str | None = None,
+               today: dt.date | None = None) -> TermInference:
+    """Term(s) for a posting from its title, URL and JD body (see the spec
+    above). `today` anchors yearless rules: pass the posting date when known."""
+    anchor = today or dt.date.today()
+    title = title or ""
+    clauses = _jd_clauses(jd) if jd else []
+    explicit_sources: list[tuple[TermSource, list[str]]] = [
+        ("title", _explicit(title)),
+        ("url", _explicit(url or "")),
+        ("jd", _jd_explicit(clauses, anchor)),
+    ]
+    for source, found in explicit_sources:
+        if found:
+            return TermInference(_ordered(found), "explicit", source)
+    inferred_sources: list[tuple[TermSource, list[str]]] = [
+        ("title", _title_inferred(title, anchor)),
+        ("jd", _jd_inferred(clauses, anchor)),
+    ]
+    for source, found in inferred_sources:
+        if found:
+            return TermInference(_ordered(found), "inferred", source)
+    return TermInference([], "unknown", None)
+
+
+def infer_terms(title: str, today: dt.date) -> tuple[list[str], TermConfidence]:
+    """Title-only inference, the shape the source adapters use."""
+    got = infer_term(title, today=today)
+    return got.terms, got.confidence
 
 # ------------------------------------------------------- "Mon DD" date parse
 

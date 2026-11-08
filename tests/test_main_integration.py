@@ -374,3 +374,60 @@ def test_cross_source_url_dupe_reaches_outbox_once(monkeypatch, tmp_path):
     (suppressed, points_to), = dups.items()
     assert points_to == survivor
     assert "dup_of" not in state["jobs"][survivor]
+
+
+# ------------------------------------- JD-body term inference before the LLM
+
+def test_jd_term_inference_resolves_unknown_terms_before_the_llm(monkeypatch, tmp_path):
+    # Three title-only-unknown jobs. Two carry a JD body already (as ATS
+    # boards deliver it); the third has none. Only the third reaches the LLM.
+    listed = [_job(i, term=None) for i in (1, 2, 3)]
+    for job in listed:
+        job.term_confidence = "unknown"
+    listed[0].description = "This is a 12-week summer internship in Atlanta."
+    listed[1].description = "Internship dates: May-August 2027. Pursuing a BS degree."
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return list(listed)
+
+    sources = [SourceConfig(name="ok-src", adapter="a")]
+    cfg = _user_cfg(terms=["Summer 2027"])
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "provider": "gemini",
+                  "tasks": ["term_inference"], "max_jobs_per_run": 10}
+    _wire(monkeypatch, sources, {"ok-src": OkAdapter}, [cfg])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+
+    classified: list[str] = []
+
+    def fake_classify(batch, top_def, terms, llm_cfg):
+        classified.extend(j.dedup_key for j in batch)
+        return {j.dedup_key: {"term": "Summer 2027"} for j in batch}
+
+    monkeypatch.setattr(main, "classify", fake_classify)
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+
+    assert main.main(["--state-file", str(state_file)]) == 0
+
+    assert classified == [_key(3)]
+    state = st.load_state(state_file)
+    for i in (1, 2, 3):
+        assert st.was_notified(state, _key(i), "example")
+
+
+def test_infer_terms_from_jds_only_touches_unknown_terms_with_a_jd():
+    known = _job(1)                                   # title term: untouched
+    known.description = "Our Fall 2027 co-op."
+    no_jd = _job(2, term=None)                        # nothing to read
+    jd = _job(3, term=None)
+    jd.description = "Start date: January 11, 2027."
+    jd.date_posted = dt.date(2026, 10, 1)
+    assert main.infer_terms_from_jds([known, no_jd, jd], TODAY) == 1
+    assert known.terms == ["Summer 2027"]
+    assert no_jd.terms == []
+    assert (jd.terms, jd.term_confidence) == (["Spring 2027"], "inferred")

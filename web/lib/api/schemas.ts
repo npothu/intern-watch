@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { MAX_PROFILE_BYTES } from "../../../shared/resume-compose";
-import { LIMITS, PRESETS, TERM_RE } from "../../../convex/watch_types";
+import { LIMITS, PRESETS, TERM_RE, canonicalTerm } from "../../../convex/watch_types";
 import { STATUS_ORDER } from "../../components/tracker/tracker-lib";
 import { validateUrl } from "../../../convex/ingest_extract";
 
@@ -36,6 +36,19 @@ export const ingest = z.strictObject({
 export const ticks = z.strictObject({
   writes: z.array(z.strictObject({ short, field: z.enum(["applied", "saved", "dismissed"]), value: z.boolean() })).max(500),
 });
+// PATCH /matches/{short}. Extension point: add `url` here (and in
+// convex/tracker.ts MATCH_PATCH_FIELDS) to allow URL corrections.
+export const matchPatch = z.strictObject({
+  term: z.string().max(40).nullable().transform((value, ctx) => {
+    if (value === null) return null;
+    const term = canonicalTerm(value);
+    if (!term) {
+      ctx.addIssue({ code: "custom", message: 'Use a term like "Summer 2027", or null to clear the correction.' });
+      return z.NEVER;
+    }
+    return term;
+  }).optional().describe('A term like "Summer 2027" (Spring, Summer, Fall or Winter plus a year), or null to clear the correction.'),
+}).refine((body) => Object.keys(body).length > 0, "Provide at least one field to change.");
 export const build = z.strictObject({
   jdText: z.string().trim().min(1).max(20_000).optional(),
   instructions: z.string().max(1000).optional(),

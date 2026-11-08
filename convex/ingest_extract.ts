@@ -430,21 +430,201 @@ function companyFromAtPhrase(text: string): string {
   return maybe.length >= 2 && maybe.length <= 60 ? maybe : "";
 }
 
-/**
- * Pull a "Fall 2026"-style term out of whichever text carries it. Manual adds
- * otherwise land under "Unknown term" even when the title spells the term out.
- */
-export function inferTerm(...texts: (string | undefined)[]): string {
-  const re = /\b(fall|spring|summer|winter)\s*'?\s*(20\d{2})\b/i;
-  for (const t of texts) {
-    if (!t) continue;
-    const m = re.exec(t);
+// -- term inference -------------------------------------------------------
+//
+// Mirror of src/normalize.py infer_term, rule for rule; both suites run the
+// vectors in shared/term-inference-cases.json, so change the two together.
+// The tiers (first hit wins):
+//   1. explicit: a season next to a year, in the title, then the URL, then
+//      the JD body.
+//   2. inferred: title month+year / season with no year / bare year; then JD
+//      month range with a year, month+year in a clause about starting, or a
+//      season next to an internship noun (year from the anchor date).
+//   3. unknown.
+// JD clauses about graduation, degrees, returning to school or deadlines are
+// skipped, and a JD's explicit term starting more than 180 days before the
+// anchor is treated as a past cohort.
+
+export type TermConfidence = "explicit" | "inferred" | "unknown";
+export type TermInference = {
+  /** Chronological. */
+  terms: string[];
+  /** The single stored term: the earliest, or "" when unknown. */
+  term: string;
+  confidence: TermConfidence;
+  source: "title" | "url" | "jd" | null;
+};
+
+const SEASON_NAMES: Record<string, string> = {
+  summer: "Summer", fall: "Fall", autumn: "Fall", spring: "Spring", winter: "Winter",
+};
+const SEASON_ALT = "summer|fall|autumn|spring|winter";
+const YY = "2[4-9]";
+const MONTH_NUM: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+const MONTH_ALT =
+  "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+const EXPLICIT_RE = new RegExp(`(?<![a-z])(${SEASON_ALT})[\\s_-]*(?:of\\s+)?[‘’']?\\s*(?:20)?(${YY})(?!\\d)`, "gi");
+const EXPLICIT_REV_RE = new RegExp(`(?<!\\d)20(${YY})[\\s_-]+(${SEASON_ALT})(?![a-z])`, "gi");
+const MONTH_YEAR_RE = new RegExp(`\\b(${MONTH_ALT})\\.?\\s*[‘’']?\\s*(?:20)?(${YY})\\b`, "gi");
+const SEASON_ONLY_RE = new RegExp(`\\b(${SEASON_ALT})\\b`, "i");
+const BARE_YEAR_RE = new RegExp(`\\b20(${YY})\\b`);
+const JD_YEAR = `(?:20|[‘’'])(${YY})`;
+const DAY = "(?:\\s+\\d{1,2}(?:st|nd|rd|th)?)?";
+const JD_RANGE_RE = new RegExp(
+  `\\b(${MONTH_ALT})\\b\\.?${DAY},?(?:\\s*${JD_YEAR})?\\s*(?:-|–|—|to|through|thru|until)\\s*(${MONTH_ALT})\\b\\.?${DAY},?\\s*${JD_YEAR}\\b`,
+  "i",
+);
+const JD_MONTH_YEAR_RE = new RegExp(`\\b(${MONTH_ALT})\\b\\.?${DAY},?\\s*${JD_YEAR}\\b`, "i");
+const JD_START_RE = /\b(?:start|starts|starting|begin|begins|beginning|commence|commences|commencing|start date)\b/i;
+const JD_SEASON_NOUN_RE = new RegExp(
+  `\\b(${SEASON_ALT})\\s+(?:intern(?:ship)?s?|co-?ops?|semester|term|session|program(?:me)?|cohort|placement)\\b`,
+  "i",
+);
+const JD_SKIP_RE =
+  /graduat|degree|class of|commencement|diploma|enrolled|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|posted|last updated/i;
+const CLAUSE_SPLIT_RE = /(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+/;
+const PAST_COHORT_DAYS = 180;
+const SEASON_START: Record<string, [number, number]> = {
+  Spring: [1, 10], Summer: [5, 20], Fall: [8, 20], Winter: [12, 1],
+};
+const SEASON_START_MONTH: Record<string, number> = { Spring: 1, Summer: 5, Fall: 8, Winter: 12 };
+const RANGE_BLOCK = ["Spring", "Spring", "Spring", "Spring", "Summer", "Summer", "Summer", "Summer", "Fall", "Fall", "Fall", "Fall"];
+
+/** Start date of "Summer 2027" as a UTC timestamp; null when not a term. */
+function termStartMs(term: string): number | null {
+  const m = /^(Spring|Summer|Fall|Winter) (\d{4})$/.exec(term);
+  if (!m) return null;
+  const [month, day] = SEASON_START[m[1]];
+  return Date.UTC(Number(m[2]), month - 1, day);
+}
+
+function orderedTerms(terms: string[]): string[] {
+  return [...new Set(terms)].sort((a, b) => (termStartMs(a) ?? Infinity) - (termStartMs(b) ?? Infinity));
+}
+
+function monthNum(name: string): number {
+  return MONTH_NUM[name.toLowerCase().slice(0, 3)];
+}
+
+function monthToSeason(month: number): string {
+  if (month <= 3) return "Spring";
+  if (month <= 7) return "Summer";
+  if (month <= 11) return "Fall";
+  return "Winter";
+}
+
+/** Year of the next start of `season` on/after the anchor (UTC calendar). */
+function nextOccurrence(season: string, anchor: Date): number {
+  const month = anchor.getUTCMonth() + 1;
+  return month <= SEASON_START_MONTH[season] ? anchor.getUTCFullYear() : anchor.getUTCFullYear() + 1;
+}
+
+function explicitTerms(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(EXPLICIT_RE)) out.push(`${SEASON_NAMES[m[1].toLowerCase()]} 20${m[2]}`);
+  for (const m of text.matchAll(EXPLICIT_REV_RE)) out.push(`${SEASON_NAMES[m[2].toLowerCase()]} 20${m[1]}`);
+  return out;
+}
+
+function titleInferred(title: string, anchor: Date): string[] {
+  const found = [...title.matchAll(MONTH_YEAR_RE)].map((m) => `${monthToSeason(monthNum(m[1]))} 20${m[2]}`);
+  if (found.length) return found;
+  const season = SEASON_ONLY_RE.exec(title);
+  if (season) {
+    const name = SEASON_NAMES[season[1].toLowerCase()];
+    return [`${name} ${nextOccurrence(name, anchor)}`];
+  }
+  const year = BARE_YEAR_RE.exec(title);
+  return year ? [`Summer 20${year[1]}`] : [];
+}
+
+/** Start month's season plus every Jan-Apr / May-Aug / Sep-Dec block covered 2+ months. */
+function rangeSeasons(m1: number, y1: number, m2: number, y2: number): string[] {
+  const out = [`${monthToSeason(m1)} ${y1}`];
+  const counts = new Map<string, number>();
+  let month = m1;
+  let year = y1;
+  for (let i = 0; i < 24; i++) {
+    const key = `${RANGE_BLOCK[month - 1]} ${year}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (year > y2 || (year === y2 && month >= m2)) break;
+    if (month === 12) { month = 1; year += 1; } else { month += 1; }
+  }
+  for (const [key, n] of counts) if (n >= 2) out.push(key);
+  return out;
+}
+
+function jdClauses(jd: string): string[] {
+  return jd.split(CLAUSE_SPLIT_RE).filter((c) => c.trim() && !JD_SKIP_RE.test(c));
+}
+
+function jdExplicit(clauses: string[], anchor: Date): string[] {
+  const cutoff = anchor.getTime() - PAST_COHORT_DAYS * 86_400_000;
+  return clauses.flatMap(explicitTerms).filter((t) => (termStartMs(t) ?? Infinity) >= cutoff);
+}
+
+function jdInferred(clauses: string[], anchor: Date): string[] {
+  for (const c of clauses) {
+    const r = JD_RANGE_RE.exec(c);
+    if (!r) continue;
+    const m1 = monthNum(r[1]);
+    const m2 = monthNum(r[3]);
+    const y2 = 2000 + Number(r[4]);
+    const y1 = r[2] ? 2000 + Number(r[2]) : m1 <= m2 ? y2 : y2 - 1;
+    if (y1 < y2 || (y1 === y2 && m1 <= m2)) return rangeSeasons(m1, y1, m2, y2);
+  }
+  for (const c of clauses) {
+    if (!JD_START_RE.test(c)) continue;
+    const m = JD_MONTH_YEAR_RE.exec(c);
+    if (m) return [`${monthToSeason(monthNum(m[1]))} 20${m[2]}`];
+  }
+  for (const c of clauses) {
+    const m = JD_SEASON_NOUN_RE.exec(c);
     if (m) {
-      const season = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
-      return `${season} ${m[2]}`;
+      const name = SEASON_NAMES[m[1].toLowerCase()];
+      return [`${name} ${nextOccurrence(name, anchor)}`];
     }
   }
-  return "";
+  return [];
+}
+
+/**
+ * The term(s) of a posting from its title, URL and JD body. `today` anchors
+ * the yearless rules: pass the posting/added date when known.
+ */
+export function inferTermDetailed(input: {
+  title?: string | null;
+  url?: string | null;
+  jd?: string | null;
+  today?: Date | string;
+}): TermInference {
+  const anchor = input.today instanceof Date ? input.today
+    : input.today ? new Date(`${input.today.slice(0, 10)}T00:00:00Z`) : new Date();
+  const title = input.title ?? "";
+  const clauses = input.jd ? jdClauses(input.jd) : [];
+  const done = (terms: string[], confidence: TermConfidence, source: TermInference["source"]): TermInference => {
+    const ordered = orderedTerms(terms);
+    return { terms: ordered, term: ordered[0] ?? "", confidence, source };
+  };
+  const explicit: [TermInference["source"], string[]][] = [
+    ["title", explicitTerms(title)],
+    ["url", explicitTerms(input.url ?? "")],
+    ["jd", jdExplicit(clauses, anchor)],
+  ];
+  for (const [source, found] of explicit) if (found.length) return done(found, "explicit", source);
+  const inferred: [TermInference["source"], string[]][] = [
+    ["title", titleInferred(title, anchor)],
+    ["jd", jdInferred(clauses, anchor)],
+  ];
+  for (const [source, found] of inferred) if (found.length) return done(found, "inferred", source);
+  return { terms: [], term: "", confidence: "unknown", source: null };
+}
+
+/** The single "Fall 2026"-style term a match row stores, or "". */
+export function inferTerm(title?: string, url?: string, jd?: string | null, today?: Date | string): string {
+  return inferTermDetailed({ title, url, jd, today }).term;
 }
 
 function hostFallback(url: string): string {

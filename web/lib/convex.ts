@@ -118,6 +118,10 @@ export type MatchItem = {
   title: string;
   location: string;
   term: string;
+  /** How `term` was found: "explicit" / "inferred" from the posting,
+   *  "manual" when corrected through PATCH /matches/<short>. Absent on
+   *  rows written before it existed. */
+  termConfidence?: "explicit" | "inferred" | "unknown" | "manual";
   added: string;
   tag: string;
   salary: string;
@@ -218,6 +222,19 @@ export type TrackerUserData = {
 export async function getMatches(user: string): Promise<MatchItem[]> {
   const value = await post("query", "getMatches", { user });
   return (value as MatchItem[] | null) ?? [];
+}
+
+/** Fields PATCH /matches/<short> may correct (see convex/tracker.ts patchMatch). */
+export type MatchPatch = { term?: string | null };
+
+/** Store hand corrections for one match; the item comes back with them applied. */
+export async function patchMatch(
+  user: string,
+  short: string,
+  patch: MatchPatch
+): Promise<{ ok: boolean; reason?: string; error?: string; item?: MatchItem }> {
+  const value = await post("mutation", "patchMatch", { user, short, patch });
+  return value as { ok: boolean; reason?: string; error?: string; item?: MatchItem };
 }
 
 /** The user's applied/saved/hidden tick rows. */

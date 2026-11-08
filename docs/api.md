@@ -115,6 +115,7 @@ Browser cookies alone never authorize these endpoints.
 | PUT | `/applications/{short}/snooze` | `{snoozedUntil}`, an ISO date or datetime, or null to clear |
 | GET | `/inbox` | `{actions,health}` |
 | POST | `/inbox/{id}/resolve` | `{short,status}` to resolve, or `{dismiss:true}` to dismiss |
+| PATCH | `/matches/{short}` | `{term}`: a term like `"Summer 2027"` (any case), or null to clear the correction; returns `{ok,item}`. The correction survives watcher runs; corrected rows read back with `termConfidence:"manual"` |
 | GET | `/matches/{short}/job-description` | `{text,updatedAt}`, with nulls when unavailable |
 | PUT | `/matches/{short}/job-description` | `{jdText}`, up to 20,000 characters |
 | GET | `/resumes` | Object keyed by short, containing download URLs and build reports |

@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import { applyStatus, removeIfUnprogressed } from "./ledger";
 import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
 import { isClosed } from "./liveness";
+import { canonicalTerm } from "./watch_types";
 import {
   createManualApplicationInLedger,
   manualApplicationDraftValidator,
@@ -246,6 +247,13 @@ export const pushMatches = mutation({
           && postingIdentity(existing.item.url) === postingIdentity(item.url)) {
         item.url = preferredApplyUrl(existing.item.url, item.url);
       }
+      // A blank incoming term never erases a known one: the stored term may
+      // come from the JD backfill (term_backfill.ts), which the watcher's
+      // title-only view of the job cannot see.
+      if (!item.term && existing?.item?.term) {
+        item.term = existing.item.term;
+        if (existing.item.termConfidence) item.termConfidence = existing.item.termConfidence;
+      }
       const row: WithoutSystemFields<Doc<"matches">> = { user, short, item, pushedAt: Date.now() };
       if (jd && !existing?.jobDescription) {
         row.jobDescription = jd;
@@ -364,10 +372,60 @@ export const getMatches = query({
     // Item payloads in by_user index order; patched rows keep their
     // position, so this is index order, not insertion order.
     return rows.map((r) => ({
-      ...r.item,
+      ...effectiveItem(r),
       hasJobDescription: Boolean(r.jobDescription?.trim()),
       ...(isClosed(r.liveness, r.item?.url) && !ledgerShorts.has(r.short) ? { closed: true } : {}),
     }));
+  },
+});
+
+/** A row's item with its hand corrections applied (see schema `overrides`). */
+export function effectiveItem(row: Pick<Doc<"matches">, "item" | "overrides">) {
+  const term = row.overrides?.term;
+  return term ? { ...row.item, term, termConfidence: "manual" } : row.item;
+}
+
+// Fields PATCH /matches/<short> may correct. Extension point: a new field
+// (e.g. `url`) gets a validator here, a slot in schema `overrides`, an
+// overlay in effectiveItem, and a key in web/lib/api/schemas.ts matchPatch.
+const MATCH_PATCH_FIELDS = {
+  // A term string sets the correction; null clears it (back to the inferred term).
+  term: v.optional(v.union(v.string(), v.null())),
+};
+
+/**
+ * Correct fields of one match (today: its term). Stored as an override beside
+ * the item so the next watcher push does not undo it. Returns the effective
+ * item, or { ok: false, reason: "not_found" }.
+ */
+export const patchMatch = mutation({
+  args: {
+    user: v.string(),
+    short: v.string(),
+    patch: v.object(MATCH_PATCH_FIELDS),
+    secret: v.string(),
+  },
+  handler: async (ctx, { user, short, patch, secret }) => {
+    checkSecret(secret);
+    const row = await ctx.db
+      .query("matches")
+      .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+      .first();
+    if (!row) return { ok: false as const, reason: "not_found", error: "Match not found." };
+    const overrides: NonNullable<Doc<"matches">["overrides"]> = { ...row.overrides, updatedAt: Date.now() };
+    if (patch.term !== undefined) {
+      if (patch.term === null) {
+        delete overrides.term;
+      } else {
+        const term = canonicalTerm(patch.term);
+        if (!term) {
+          return { ok: false as const, reason: "invalid", error: `"${patch.term}" is not a term like "Summer 2027".` };
+        }
+        overrides.term = term;
+      }
+    }
+    await ctx.db.patch(row._id, { overrides });
+    return { ok: true as const, item: effectiveItem({ item: row.item, overrides }) };
   },
 });
 

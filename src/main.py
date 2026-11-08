@@ -131,6 +131,32 @@ def enrich_jds(jobs: list[Job]) -> int:
     return fetched
 
 
+def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
+    """Fill the term of unknown-term jobs from a JD body already in hand
+    (ATS boards: Lever/Ashby inline, Greenhouse/SmartRecruiters via
+    enrich_jds). Fetches nothing. Runs before any user's filter, so the term
+    step sees the result and the LLM is only asked about jobs this could not
+    resolve; the filter order itself is unchanged. Returns jobs resolved."""
+    from .normalize import infer_term
+
+    resolved = 0
+    for job in jobs:
+        if job.terms or not job.description:
+            continue
+        # Anchor yearless rules on the run date, not date_posted: the job is
+        # live today, so "summer internship" means the next summer from now
+        # (evergreen postings keep a date_posted from a past cycle).
+        got = infer_term(job.title, job.url, job.description, today)
+        if got.terms:
+            job.terms, job.term_confidence = got.terms, got.confidence
+            resolved += 1
+            log.info("term from %s for %s: %s (%s)", got.source,
+                     job.dedup_key, ", ".join(got.terms), got.confidence)
+    if resolved:
+        log.info("inferred the term of %d job(s) from their JD", resolved)
+    return resolved
+
+
 class _JobrightEnricher:
     """Run-scoped lazy JD fetcher for jobright jobs that survive to an accept.
 
@@ -1065,6 +1091,7 @@ def explain(key: str, state: dict, today: dt.date, users: list[dict],
     # Enrich the JD so the elimination trace sees the same body a live run
     # would (jobright accepts fetch lazily; here we enrich up front, read-only).
     enrich_jds([job])
+    infer_terms_from_jds([job], today)
     entry = state["jobs"].get(key, {})
     out.append(f"job: {job.company} -- {job.title}")
     out.append(f"locations: {job.locations or '[]'}  sources: {job.sources}")
@@ -1179,7 +1206,9 @@ def main(argv: list[str] | None = None) -> int:
     relevant = {job.dedup_key for job in new_jobs}
     for user_cfg in users:
         relevant |= st.pending_keys(state, user_cfg["name"])
-    enrich_jds([merged_by_key[k] for k in relevant if k in merged_by_key])
+    relevant_jobs = [merged_by_key[k] for k in relevant if k in merged_by_key]
+    enrich_jds(relevant_jobs)
+    infer_terms_from_jds(relevant_jobs, today)
 
     from .adapters.jobright_auth import JobrightSession
     resolver = JobrightSession.from_env()
