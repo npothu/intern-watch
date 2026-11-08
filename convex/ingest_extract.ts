@@ -438,9 +438,12 @@ function companyFromAtPhrase(text: string): string {
 //   1. explicit: a season next to a year, in the title, then the URL, then
 //      the JD body.
 //   2. inferred: title month+year / season with no year / bare year; then JD
-//      month range with a year, month+year in a clause about starting, or a
-//      season next to an internship noun (year from the anchor date).
+//      placement dates (start statements and spans, which must all agree),
+//      else one yearless season next to an internship noun (year from the
+//      anchor date).
 //   3. unknown.
+// When in doubt the JD rules return unknown: in the watcher a wrong JD term
+// is a permanent rejection, unknown only defers to the LLM.
 // JD clauses must be about the role or its dates; clauses about graduation,
 // enrollment, returning to school, fiscal years or deadlines are skipped;
 // a JD's explicit term starting more than 90 days before the anchor is a past
@@ -488,8 +491,18 @@ const JD_SEASON_NOUN_RE = new RegExp(
   `\\b(${SEASON_ALT})\\s+(?:intern(?:ship)?s?|co-?ops?|semester|term|session|program(?:me)?|cohort|placement)\\b`,
   "i",
 );
+const JD_SEASON_NOUN_ALL_RE = new RegExp(JD_SEASON_NOUN_RE.source, "gi");
 const JD_SKIP_RE =
-  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal/i;
+  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal|accepting applications|applications? (?:are |will be )?(?:accepted|reviewed)|application (?:window|period)|apply (?:before|between|from|until)|benefit|interview|onboarding|orientation/i;
+// A month range counts only when the clause says it is the placement's span.
+const JD_SPAN_RE = /\b(?:runs?|running|ran|from|starts?|starting|begins?|beginning|duration|dates?|lasts?|between|join)\b/i;
+// Yearless season evidence is ambiguous when a JD lists seasons or runs year-round.
+const JD_SEASON_LIST_RE = new RegExp(`\\b(?:${SEASON_ALT})\\s*(?:,|/|&|\\band\\b|\\bor\\b)\\s*(?:${SEASON_ALT})\\b`, "i");
+const JD_YEAR_ROUND_RE = /year[\s-]round|all year|throughout the year|multiple (?:terms|seasons)|any (?:term|season)/i;
+// Months where a yearless "<season> internship" could mean this year's or next year's (see normalize.py).
+const SEASON_AMBIGUOUS_MONTHS: Record<string, number[]> = {
+  Spring: [12, 1, 2, 3, 4], Summer: [4, 5, 6, 7, 8], Fall: [7, 8, 9, 10, 11], Winter: [11, 12, 1, 2],
+};
 // A JD clause counts only when it is about the role or its dates.
 const JD_CONTEXT_RE = /intern|co-?op|program|placement|position|\brole\b|cohort|\bstart|\bbegin|commenc|duration|\bdates?\b/i;
 // Same set src/normalize.py _ascii_space folds to " " (newlines kept for clause splitting).
@@ -572,34 +585,72 @@ function jdClauses(jd: string): string[] {
   return jd.split(CLAUSE_SPLIT_RE).filter((c) => c.trim() && JD_CONTEXT_RE.test(c) && !JD_SKIP_RE.test(c));
 }
 
-function jdExplicit(clauses: string[], anchor: Date): string[] {
+/** False when the earliest term started more than PAST_COHORT_DAYS before the anchor. */
+function notPast(terms: string[], anchor: Date): boolean {
   const cutoff = anchor.getTime() - PAST_COHORT_DAYS * 86_400_000;
-  return clauses.flatMap((c) => explicitTerms(c, JD_EXPLICIT_RE)).filter((t) => (termStartMs(t) ?? Infinity) >= cutoff);
+  const starts = terms.map(termStartMs).filter((t): t is number => t !== null);
+  return starts.length > 0 && Math.min(...starts) >= cutoff;
+}
+
+function jdExplicit(clauses: string[], anchor: Date): string[] {
+  return clauses.flatMap((c) => explicitTerms(c, JD_EXPLICIT_RE)).filter((t) => notPast([t], anchor));
+}
+
+/**
+ * Term(s) from dates that describe the placement: start statements and spans.
+ * Past cohorts are dropped first; every remaining piece of evidence must agree
+ * (start statements win, each span must contain the start's term), else unknown.
+ */
+function jdDated(clauses: string[], anchor: Date): string[] {
+  const starts = new Set<string>();
+  const spans: string[][] = [];
+  for (const c of clauses) {
+    const r = JD_RANGE_RE.exec(c);
+    if (r && r[1] !== "may" && JD_SPAN_RE.test(c)) { // lowercase "may" is the verb
+      const m1 = monthNum(r[1]);
+      const m2 = monthNum(r[3]);
+      const y2 = 2000 + Number(r[4]);
+      const y1 = r[2] ? 2000 + Number(r[2]) : m1 <= m2 ? y2 : y2 - 1;
+      if (y1 < y2 || (y1 === y2 && m1 <= m2)) {
+        const span = orderedTerms(rangeSeasons(m1, y1, m2, y2));
+        if (notPast(span, anchor)) spans.push(span);
+      }
+      continue;
+    }
+    if (JD_START_RE.test(c)) {
+      const m = JD_MONTH_YEAR_RE.exec(c);
+      if (m && m[1] !== "may") {
+        const term = `${monthToSeason(monthNum(m[1]))} 20${m[2]}`;
+        if (notPast([term], anchor)) starts.add(term);
+      }
+    }
+  }
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((t, i) => t === b[i]);
+  if (starts.size > 1 || spans.some((s) => !same(s, spans[0]))) return [];
+  if (starts.size) {
+    const [start] = starts;
+    if (spans.length && !spans[0].includes(start)) return [];
+    return spans.length ? spans[0] : [start];
+  }
+  return spans.length ? spans[0] : [];
+}
+
+/** Yearless "<season> internship", unless seasons are listed, it runs year-round, or the year is a coin flip. */
+function jdSeasonOnly(clauses: string[], anchor: Date): string[] {
+  if (clauses.some((c) => JD_SEASON_LIST_RE.test(c) || JD_YEAR_ROUND_RE.test(c))) return [];
+  const seasons = new Set<string>();
+  for (const c of clauses) {
+    for (const m of c.matchAll(JD_SEASON_NOUN_ALL_RE)) seasons.add(SEASON_NAMES[m[1].toLowerCase()]);
+  }
+  if (seasons.size !== 1) return [];
+  const [season] = seasons;
+  if (SEASON_AMBIGUOUS_MONTHS[season].includes(anchor.getUTCMonth() + 1)) return [];
+  return [`${season} ${nextOccurrence(season, anchor)}`];
 }
 
 function jdInferred(clauses: string[], anchor: Date): string[] {
-  for (const c of clauses) {
-    const r = JD_RANGE_RE.exec(c);
-    if (!r || r[1] === "may") continue; // lowercase "may" is the verb
-    const m1 = monthNum(r[1]);
-    const m2 = monthNum(r[3]);
-    const y2 = 2000 + Number(r[4]);
-    const y1 = r[2] ? 2000 + Number(r[2]) : m1 <= m2 ? y2 : y2 - 1;
-    if (y1 < y2 || (y1 === y2 && m1 <= m2)) return rangeSeasons(m1, y1, m2, y2);
-  }
-  for (const c of clauses) {
-    if (!JD_START_RE.test(c)) continue;
-    const m = JD_MONTH_YEAR_RE.exec(c);
-    if (m && m[1] !== "may") return [`${monthToSeason(monthNum(m[1]))} 20${m[2]}`];
-  }
-  for (const c of clauses) {
-    const m = JD_SEASON_NOUN_RE.exec(c);
-    if (m) {
-      const name = SEASON_NAMES[m[1].toLowerCase()];
-      return [`${name} ${nextOccurrence(name, anchor)}`];
-    }
-  }
-  return [];
+  const dated = jdDated(clauses, anchor);
+  return dated.length ? dated : jdSeasonOnly(clauses, anchor);
 }
 
 /**

@@ -384,7 +384,9 @@ def test_jd_term_inference_resolves_unknown_terms_before_the_llm(monkeypatch, tm
     listed = [_job(i, term=None) for i in (1, 2, 3)]
     for job in listed:
         job.term_confidence = "unknown"
-    listed[0].description = "This is a 12-week summer internship in Atlanta."
+    # Dated: a yearless "summer internship" read in June is ambiguous by
+    # design (unknown -> LLM), so this one names its start.
+    listed[0].description = "This 12-week internship starts in June 2027."
     listed[1].description = "Internship dates: May-August 2027. Pursuing a BS degree."
 
     class OkAdapter:

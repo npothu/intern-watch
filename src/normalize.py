@@ -300,12 +300,19 @@ def extract_jobright_id(url: str) -> str | None:
 #      "2027 Summer", "fall-2026" in a URL slug), checked in the title, then
 #      the URL, then the JD body.
 #   2. inferred -- title: month+year, season with no year, bare year (the
-#      long-standing title rules); then JD body: a month range with a year
-#      ("May-August 2027", "Jan-Jun 2027"), a month+year in a clause that
-#      talks about starting ("June 2027 start"), a season next to an
-#      internship noun with no year ("12-week summer internship", "Fall
-#      co-op", "Spring semester"), its year taken from the anchor date.
+#      long-standing title rules); then JD body: dates that describe the
+#      placement -- start statements ("starts in June 2027") and spans
+#      ("runs May-August 2027", "Jan-Jun 2027") -- which must all agree;
+#      failing that, one yearless season next to an internship noun
+#      ("12-week summer internship", "Fall co-op", "Spring semester"), its
+#      year taken from the anchor date.
 #   3. unknown.
+# Governing rule for the JD body: when in doubt, unknown. In the watcher a
+# wrong JD term is a permanent term-not-wanted rejection, while unknown
+# just sends the job to the LLM. So conflicting dates, season lists,
+# year-round programs, application windows, perks, past cohorts and a
+# yearless season read inside its own window (Summer in Apr-Aug) all give
+# unknown.
 # JD clauses must be about the role or its dates (intern, co-op, program,
 # start, dates, ...); clauses about graduation, enrollment, returning to
 # school, fiscal years or deadlines are skipped: "graduating Spring 2028"
@@ -385,7 +392,31 @@ _JD_SKIP_RE = re.compile(
     r"return to (?:school|campus|university|college)|deadline|apply by|"
     r"applications? (?:close|due|open)|date posted|posted on|last updated|"
     r"on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?"
-    r"(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal", _RX)
+    r"(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal|"
+    # application windows and perks are dates, not the placement
+    r"accepting applications|applications? (?:are |will be )?(?:accepted|"
+    r"reviewed)|application (?:window|period)|apply (?:before|between|from|"
+    r"until)|benefit|interview|onboarding|orientation", _RX)
+# A month range counts only when the clause says it is the placement's span:
+# "the internship runs May-August 2027", "co-op dates: Jan-Jun 2027".
+_JD_SPAN_RE = re.compile(
+    r"\b(?:runs?|running|ran|from|starts?|starting|begins?|beginning|"
+    r"duration|dates?|lasts?|between|join)\b", _RX)
+# Yearless season evidence is ambiguous when a JD lists several seasons or
+# says the program runs all year: "offers spring, summer and fall internships".
+_JD_SEASON_LIST_RE = re.compile(
+    rf"\b(?:{_SEASON_ALT})\s*(?:,|/|&|\band\b|\bor\b)\s*(?:{_SEASON_ALT})\b", _RX)
+_JD_YEAR_ROUND_RE = re.compile(
+    r"year[\s-]round|all year|throughout the year|multiple (?:terms|seasons)|"
+    r"any (?:term|season)", _RX)
+# Months when a yearless "<season> internship" could mean this year's or
+# next year's: the month before the season starts through its end. The
+# answer flips overnight there (May 31 -> Summer 2027, June 1 -> Summer
+# 2028), so the rule returns unknown and the LLM decides.
+_SEASON_AMBIGUOUS_MONTHS = {
+    "Spring": {12, 1, 2, 3, 4}, "Summer": {4, 5, 6, 7, 8},
+    "Fall": {7, 8, 9, 10, 11}, "Winter": {11, 12, 1, 2},
+}
 # A JD clause counts only when it is about the role or its dates: "our office
 # renovation runs May-August 2027" or "tuition support during the Fall
 # semester" say nothing about the internship.
@@ -480,35 +511,76 @@ def _jd_clauses(jd: str) -> list[str]:
             if c.strip() and _JD_CONTEXT_RE.search(c) and not _JD_SKIP_RE.search(c)]
 
 
-def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
+def _not_past(terms: list[str], anchor: dt.date) -> bool:
+    """False when the earliest term started more than _PAST_COHORT_DAYS
+    before the anchor ("our Summer 2026 interns ..." read in November)."""
     cutoff = anchor - dt.timedelta(days=_PAST_COHORT_DAYS)
+    starts = [d for d in map(terms_mod.term_start, terms) if d is not None]
+    return bool(starts) and min(starts) >= cutoff
+
+
+def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
     found = [t for c in clauses for t in _explicit(c, _JD_EXPLICIT_RE)]
-    return [t for t in found if (terms_mod.term_start(t) or dt.date.max) >= cutoff]
+    return [t for t in found if _not_past([t], anchor)]
 
 
-def _jd_inferred(clauses: list[str], anchor: dt.date) -> list[str]:
+def _jd_dated(clauses: list[str], anchor: dt.date) -> list[str]:
+    """Term(s) from dates that describe the placement: start statements
+    ("starts in June 2027") and spans ("runs May-August 2027"). Past
+    cohorts are dropped first. Every remaining piece of evidence must
+    agree - start statements win, and each span must contain the start's
+    term - or the answer is unknown."""
+    starts: set[str] = set()
+    spans: list[list[str]] = []
     for c in clauses:
         r = _JD_RANGE_RE.search(c)
-        if r and r.group(1) != "may":   # lowercase "may" is the verb
+        if r and r.group(1) != "may" and _JD_SPAN_RE.search(c):   # "may": the verb
             m1 = _MONTHS[r.group(1).lower()[:3]]
             m2 = _MONTHS[r.group(3).lower()[:3]]
             y2 = 2000 + int(r.group(4))
             y1 = (2000 + int(r.group(2)) if r.group(2)
                   else y2 if m1 <= m2 else y2 - 1)
             if (y1, m1) <= (y2, m2):
-                return _range_seasons(m1, y1, m2, y2)
-    for c in clauses:
+                span = _ordered(_range_seasons(m1, y1, m2, y2))
+                if _not_past(span, anchor):
+                    spans.append(span)
+            continue
         if _JD_START_RE.search(c):
             m = _JD_MONTH_YEAR_RE.search(c)
             if m and m.group(1) != "may":
                 month = _MONTHS[m.group(1).lower()[:3]]
-                return [f"{_month_to_season(month)} 20{m.group(2)}"]
-    for c in clauses:
-        m = _JD_SEASON_NOUN_RE.search(c)
-        if m:
-            season = _SEASONS[m.group(1).lower()]
-            return [f"{season} {_next_occurrence(season, anchor)}"]
-    return []
+                term = f"{_month_to_season(month)} 20{m.group(2)}"
+                if _not_past([term], anchor):
+                    starts.add(term)
+    if len(starts) > 1 or any(s != spans[0] for s in spans):
+        return []
+    if starts:
+        (start,) = starts
+        if spans and start not in spans[0]:
+            return []
+        return spans[0] if spans else [start]
+    return spans[0] if spans else []
+
+
+def _jd_season_only(clauses: list[str], anchor: dt.date) -> list[str]:
+    """A yearless "<season> internship", its year from the anchor - unless
+    the JD lists several seasons, says the program runs year-round, or the
+    anchor sits where the year is a coin flip."""
+    if any(_JD_SEASON_LIST_RE.search(c) or _JD_YEAR_ROUND_RE.search(c)
+           for c in clauses):
+        return []
+    seasons = {_SEASONS[m.group(1).lower()]
+               for c in clauses for m in _JD_SEASON_NOUN_RE.finditer(c)}
+    if len(seasons) != 1:
+        return []
+    (season,) = seasons
+    if anchor.month in _SEASON_AMBIGUOUS_MONTHS[season]:
+        return []
+    return [f"{season} {_next_occurrence(season, anchor)}"]
+
+
+def _jd_inferred(clauses: list[str], anchor: dt.date) -> list[str]:
+    return _jd_dated(clauses, anchor) or _jd_season_only(clauses, anchor)
 
 
 def infer_term(title: str, url: str | None = None, jd: str | None = None,
