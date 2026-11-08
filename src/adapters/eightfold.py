@@ -9,10 +9,9 @@ page itself calls; robots.txt on those hosts explicitly allows /api/pcsx:
 
 `domain` is the tenant's company domain (microsoft.com, micron.com); a
 missing or wrong one is a 422. A board row's slug is "<host>/<domain>".
-Pages are fixed at 10 rows and relevancy-sorted, so paging stops at the first
-page with no intern-titled row, at `count`, or at the page cap (default
-DEFAULT_PAGES; Eightfold's small pages need more of them than the other
-listers).
+Pages are fixed at 10 rows. A query is read to `count` (listing_http.
+page_through); a short page before it, or the page cap (default
+DEFAULT_PAGES -- the small pages need more of them), fails the board.
 """
 
 from __future__ import annotations
@@ -24,10 +23,11 @@ from urllib.parse import quote
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import INTERN_RE, Pacer, page_cap, request_text, spell_country
+from .listing_http import Pacer, page_cap, page_through, request_text, spell_country
 
 QUERIES = ("intern", "co-op")
-DEFAULT_PAGES = 20
+DEFAULT_PAGES = 30
+PAGE_SIZE = 10        # fixed by the API (a num= parameter is ignored)
 SEARCH_URL = "https://{host}/api/pcsx/search?domain={domain}&query={query}&start={start}"
 DETAIL_URL = ("https://{host}/api/pcsx/position_details?position_id={pid}"
               "&domain={domain}&hl=en")
@@ -51,20 +51,15 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     pacer = Pacer()
     pages: list[str] = []
     for query in QUERIES:
-        start = 0
-        for _ in range(cap):
+        def fetch(start: int, query: str = query) -> tuple[str, list[str], int]:
             raw = request_text(client, pacer, SEARCH_URL.format(
                 host=host, domain=quote(domain), query=quote(query),
                 start=start))
-            pages.append(raw)
             data = json.loads(raw)
-            got = _positions(data)
-            start += len(got)
             total = int((data.get("data") or {}).get("count") or 0)
-            if (not got or 0 < total <= start
-                    or not any(INTERN_RE.search(p.get("name") or "")
-                               for p in got)):
-                break
+            return raw, [p.get("name") or "" for p in _positions(data)], total
+        pages += page_through(fetch, page_size=PAGE_SIZE, cap=cap,
+                              what=f"eightfold/{board['slug']} q={query}")
     return pages
 
 

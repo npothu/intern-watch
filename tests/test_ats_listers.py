@@ -96,18 +96,6 @@ def test_sr_pages_each_query_until_total_found():
     assert len(pages) == 3
 
 
-def test_sr_pages_respect_cap():
-    asked = []
-
-    def handler(req):
-        asked.append(req.url.params["q"])
-        return httpx.Response(200, json=_sr_page(100, 10_000))
-
-    with _client(handler) as c:
-        sr.fetch_pages(c, {"slug": "Acme", "max_pages": 2})
-    assert asked == ["intern", "intern", "co-op", "co-op"]
-
-
 def test_ats_boards_fetch_isolates_a_failing_board(tmp_path, monkeypatch):
     boards = tmp_path / "boards.yaml"
     boards.write_text(
@@ -214,27 +202,6 @@ def test_oracle_slug_must_name_a_site():
     from src.adapters import oracle_cx
     with pytest.raises(ValueError):
         oracle_cx.split_slug("egug.fa.us2.oraclecloud.com")
-
-
-def test_oracle_paging_stops_on_a_page_without_interns():
-    asked = []
-
-    def handler(req):
-        finder = req.url.params["finder"]
-        off = int(finder.split("offset=")[1].split(",")[0])
-        kw = finder.split("keyword=")[1].split(",")[0]
-        asked.append((kw, off))
-        title = "Software Intern" if off == 0 else "Internal Auditor"
-        return httpx.Response(200, json={"items": [{
-            "TotalJobsCount": 1000,
-            "requisitionList": [{"Id": str(off + i), "Title": title}
-                                for i in range(100)]}]})
-
-    from src.adapters import oracle_cx
-    with _client(handler) as c:
-        oracle_cx.fetch_pages(c, {"slug": ORACLE_SLUG})
-    assert asked == [("intern", 0), ("intern", 100),
-                     ("co-op", 0), ("co-op", 100)]
 
 
 def test_oracle_detail_jd_text(fixtures):
@@ -598,3 +565,171 @@ def test_canonical_url_smartrecruiters_digit_leading_uuid_is_not_a_numeric_id():
     # a numeric id with a title slug still keeps only the number
     assert canonical_url("https://jobs.smartrecruiters.com/Acme/744000149367234-"
                          "software-intern") == "ats:sr:acme:744000149367234"
+
+
+# ----------------------------------------- complete-or-nothing listings
+
+def _sr_body(n, total, off):
+    return {"totalFound": total, "content": [
+        {"id": str(744000000000 + off + i), "name": "Software Intern"}
+        for i in range(n)]}
+
+
+def _oracle_body(n, total, off):
+    return {"items": [{"TotalJobsCount": total, "requisitionList": [
+        {"Id": str(off + i), "Title": "Software Intern"} for i in range(n)]}]}
+
+
+def _eightfold_body(n, total, off):
+    return {"data": {"count": total, "positions": [
+        {"id": off + i, "name": "Software Intern"} for i in range(n)]}}
+
+
+def _ibm_body(n, total, off):
+    return {"hits": {"total": {"value": total}, "hits": [
+        {"_source": {"title": "Software Intern",
+                     "url": f"https://careers.ibm.com/careers/JobDetail?jobId={off + i}"}}
+        for i in range(n)]}}
+
+
+def _jibe_body(n, total, off):
+    return {"totalCount": total, "jobs": [
+        {"data": {"req_id": str(off + i), "title": "Software Intern"}}
+        for i in range(n)]}
+
+
+def _offset(req, ats):
+    if ats == "smartrecruiters":
+        return int(req.url.params["offset"])
+    if ats == "oracle":
+        return int(req.url.params["finder"].split("offset=")[1].split(",")[0])
+    if ats == "eightfold":
+        return int(req.url.params["start"])
+    if ats == "ibm":
+        return json.loads(req.content)["from"]
+    return (int(req.url.params["page"]) - 1) * 100
+
+
+# ats -> (board row, page size, body builder)
+LISTERS = {
+    "smartrecruiters": ({"slug": "Acme"}, 100, _sr_body),
+    "oracle": ({"slug": ORACLE_SLUG}, 100, _oracle_body),
+    "eightfold": ({"slug": MS_SLUG}, 10, _eightfold_body),
+    "ibm": ({"slug": "careers"}, 100, _ibm_body),
+    "jibe": ({"slug": "careers.amd.com"}, 100, _jibe_body),
+}
+
+
+def _lister(ats):
+    from src.adapters.ats_boards import _LISTERS
+    return _LISTERS[ats]
+
+
+@pytest.mark.parametrize("ats", sorted(LISTERS))
+def test_lister_reads_to_the_stated_total(ats):
+    board, size, body = LISTERS[ats]
+    total = 2 * size + 3
+
+    def handler(req):
+        off = _offset(req, ats)
+        return httpx.Response(200, json=body(min(size, total - off), total, off))
+
+    with _client(handler) as c:
+        pages = _lister(ats)(c, board)
+    per_query = 3                       # two full pages + the short last one
+    assert len(pages) % per_query == 0 and len(pages) >= per_query
+
+
+@pytest.mark.parametrize("ats", sorted(LISTERS))
+def test_lister_short_page_before_total_raises(ats):
+    from src.adapters.listing_http import IncompleteListing
+    board, size, body = LISTERS[ats]
+
+    def handler(req):
+        off = _offset(req, ats)
+        # claims 5 pages but the second one comes back short
+        return httpx.Response(200, json=body(size if off == 0 else 3,
+                                             5 * size, off))
+
+    with _client(handler) as c, pytest.raises(IncompleteListing):
+        _lister(ats)(c, board)
+
+
+@pytest.mark.parametrize("ats", sorted(LISTERS))
+def test_lister_page_cap_raises(ats):
+    from src.adapters.listing_http import IncompleteListing
+    board, size, body = LISTERS[ats]
+
+    def handler(req):
+        return httpx.Response(200, json=body(size, 10_000 * size,
+                                             _offset(req, ats)))
+
+    with _client(handler) as c, pytest.raises(IncompleteListing, match="cap"):
+        _lister(ats)(c, {**board, "max_pages": 2})
+
+
+@pytest.mark.parametrize("ats", sorted(LISTERS))
+def test_lister_failed_page_raises(ats):
+    board, size, body = LISTERS[ats]
+
+    def handler(req):
+        off = _offset(req, ats)
+        if off:
+            return httpx.Response(503)
+        return httpx.Response(200, json=body(size, 3 * size, off))
+
+    with _client(handler) as c, pytest.raises(httpx.HTTPStatusError):
+        _lister(ats)(c, board)
+
+
+@pytest.mark.parametrize("ats", ["oracle", "eightfold", "jibe"])
+def test_page_without_interns_is_not_the_end(ats):
+    board, size, body = LISTERS[ats]
+    offsets = []
+
+    def handler(req):
+        off = _offset(req, ats)
+        offsets.append(off)
+        data = body(size if off < 2 * size else 1, 2 * size + 1, off)
+        if off == size:                  # a whole page of non-interns ...
+            rows = (data.get("items", [{}])[0].get("requisitionList")
+                    or (data.get("data") or {}).get("positions")
+                    or data.get("jobs"))
+            for r in rows:
+                for k in ("Title", "name"):
+                    if k in r:
+                        r[k] = "Internal Auditor"
+                if "data" in r:
+                    r["data"]["title"] = "Internal Auditor"
+        return httpx.Response(200, json=data)   # ... then one more intern
+
+    with _client(handler) as c:
+        _lister(ats)(c, board)
+    assert 2 * size in offsets
+
+
+def test_incomplete_board_returns_no_rows_and_is_not_recorded(
+        tmp_path, monkeypatch):
+    boards = tmp_path / "boards.yaml"
+    boards.write_text(
+        "boards:\n"
+        "- {company: Short, ats: smartrecruiters, slug: Short}\n"
+        "- {company: Acme, ats: smartrecruiters, slug: Acme}\n")
+    monkeypatch.setattr("src.adapters.ats_boards.ROOT", tmp_path)
+
+    def handler(req):
+        off = int(req.url.params["offset"])
+        if "/Short/" in req.url.path:
+            return httpx.Response(200, json=_sr_body(100 if off == 0 else 7,
+                                                     900, off))
+        q = req.url.params["q"]
+        return httpx.Response(200, json=_sr_body(2 if q == "intern" else 0,
+                                                 2 if q == "intern" else 0, off))
+
+    adapter = AtsBoardsAdapter(SourceConfig(
+        name="ats-boards", adapter="ats_boards", boards_file="boards.yaml"))
+    with _client(handler) as c:
+        jobs = adapter.fetch(c, TODAY)
+    assert {j.company for j in jobs} == {"Acme"}
+    assert set(adapter.fetched_boards) == {"smartrecruiters:acme"}
+    assert all(j.board == "smartrecruiters:acme" for j in jobs)

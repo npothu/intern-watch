@@ -8,8 +8,9 @@ one board costs several requests. These helpers keep that cheap and polite:
   concurrent; one board's pages run back to back on the same host);
 - a 429 or 5xx gets ONE retry after RETRY_DELAY, then the error propagates so
   the per-board try/except in ats_boards.fetch skips just that board;
-- a missing total-count field never ends paging early (only an empty
-  page, the intern stop rule or the cap do);
+- a listing is all or nothing: page_through returns only a COMPLETE paged
+  query and raises IncompleteListing on a short page or the page cap, so a
+  board never hands first-sight seeding a partial backlog;
 - callers cap their own page count (MAX_PAGES unless a board row overrides
   it), so a misbehaving feed can never loop.
 
@@ -22,6 +23,7 @@ import datetime as dt
 import json
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -106,6 +108,43 @@ def request_text(client: httpx.Client, pacer: Pacer, url: str, *,
         resp.raise_for_status()
         return resp.text
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+class IncompleteListing(RuntimeError):
+    """A board's listing could not be read to the end this run: a short or
+    empty page before the stated total, or the page cap. The board fails
+    for the run (no rows): first-sight seeding (src/seeding.py) records a
+    board as known once it returns rows, so a partial first answer would be
+    seeded as the whole backlog and the unread rest delivered later as news."""
+
+
+def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
+                 page_size: int, cap: int, what: str) -> list[str]:
+    """Raw pages of one COMPLETE paged query, or IncompleteListing.
+
+    fetch(offset) returns (raw page, the page's titles, the stated total --
+    0 when the feed gives none). Complete means: the rows read reach the
+    stated total, or (no total) a page shorter than page_size arrives. A
+    short page before a stated total, or `cap` pages without finishing,
+    raises. A relevancy-sorted page with no intern title is NOT the end: on
+    a live Oracle board an intern title followed such a page."""
+    pages: list[str] = []
+    seen = 0
+    for _ in range(cap):
+        raw, titles, total = fetch(seen)
+        pages.append(raw)
+        seen += len(titles)
+        if total and seen >= total:
+            return pages
+        if len(titles) < page_size:
+            if total:
+                raise IncompleteListing(
+                    f"{what}: short page ({len(titles)} rows) at {seen} of "
+                    f"{total}")
+            return pages
+    raise IncompleteListing(
+        f"{what}: page cap {cap} reached at {seen} of {total or '?'} rows "
+        "(raise max_pages on its ats_boards.yaml row)")
 
 
 def page_cap(board: dict, default: int = MAX_PAGES) -> int:

@@ -57,6 +57,7 @@ boards:
   ats: smartrecruiters
   slug: BoschGroup
   manual: true
+  max_pages: 20
 - company: Brex
   ats: greenhouse
   slug: brex

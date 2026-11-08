@@ -8,8 +8,8 @@ from a public JSON search on its own host; robots.txt allows it:
 
 Rows ship the JD inline (description / responsibilities / qualifications),
 so no jd_url is needed. A board row's slug is the career-site host.
-Relevancy-sorted, so paging stops at the first page with no intern-titled
-row, at totalCount, or at the page cap.
+A query is read to totalCount (listing_http.page_through); a short page
+before it, or the page cap, fails the board.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from urllib.parse import quote
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import INTERN_RE, Pacer, iso_date, page_cap, request_text
+from .listing_http import Pacer, iso_date, page_cap, page_through, request_text
 
 QUERIES = ("intern", "co-op")
 PAGE_SIZE = 100
@@ -41,18 +41,15 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     pacer = Pacer(CRAWL_DELAY.get(host, 0.0))
     pages: list[str] = []
     for query in QUERIES:
-        seen = 0
-        for page in range(1, page_cap(board) + 1):
+        def fetch(seen: int, query: str = query) -> tuple[str, list[str], int]:
             raw = request_text(client, pacer, SEARCH_URL.format(
-                host=host, query=quote(query), page=page, limit=PAGE_SIZE))
-            pages.append(raw)
+                host=host, query=quote(query), page=seen // PAGE_SIZE + 1,
+                limit=PAGE_SIZE))
             data = json.loads(raw)
-            got = _jobs(data)
-            seen += len(got)
-            if (not got or 0 < int(data.get("totalCount") or 0) <= seen
-                    or not any(INTERN_RE.search(j.get("title") or "")
-                               for j in got)):
-                break
+            return (raw, [j.get("title") or "" for j in _jobs(data)],
+                    int(data.get("totalCount") or 0))
+        pages += page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board),
+                              what=f"jibe/{host} q={query}")
     return pages
 
 

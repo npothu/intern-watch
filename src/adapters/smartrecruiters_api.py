@@ -22,7 +22,7 @@ from urllib.parse import quote
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import Pacer, page_cap, request_text
+from .listing_http import Pacer, page_cap, page_through, request_text
 
 PAGE_SIZE = 100
 LIST_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}/postings"
@@ -37,21 +37,20 @@ DETAIL_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}"
 
 
 def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
-    """Every result page for each query, bounded by the board's page cap.
-    Pages stop at totalFound or the first empty page."""
+    """Every page of each query, complete or IncompleteListing (a short
+    page before totalFound, or the board's page cap)."""
     pacer = Pacer()
     pages: list[str] = []
     for query in QUERIES:
-        offset = 0
-        for _ in range(page_cap(board)):
+        def fetch(offset: int, query: str = query) -> tuple[str, list[str], int]:
             raw = request_text(client, pacer, LIST_URL.format(
                 slug=board["slug"], offset=offset, query=quote(query)))
-            pages.append(raw)
             data = json.loads(raw)
-            got = len(data.get("content") or [])
-            offset += got
-            if not got or 0 < int(data.get("totalFound") or 0) <= offset:
-                break
+            rows = data.get("content") or []
+            return (raw, [r.get("name") or "" for r in rows],
+                    int(data.get("totalFound") or 0))
+        pages += page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board),
+                              what=f"smartrecruiters/{board['slug']} q={query}")
     return pages
 
 

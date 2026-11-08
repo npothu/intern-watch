@@ -15,10 +15,12 @@ A board row's slug is "<host>/<site>" (e.g. "egug.fa.us2.oraclecloud.com/
 CX_1"). Requisition ids are per pod, shared by every site of that pod, so one
 site per pod is enough (the canonical URL identity ignores the site).
 
-The keyword search is fuzzy ("intern" also hits "Internal ..."), relevancy
-sorted, so paging stops at the first page with no intern-titled row, at
-TotalJobsCount, or at the board's page cap. The list carries no JD; each row
-gets the detail feed as jd_url for main.enrich_jds.
+The keyword search is fuzzy ("intern" also hits "Internal ..."), so a query
+is read all the way to TotalJobsCount (listing_http.page_through): a page
+with no intern title is not the end -- on a live board one followed. A short
+page before the total, or the page cap (default DEFAULT_PAGES), fails the
+board. The list carries no JD; each row gets the detail feed as jd_url for
+main.enrich_jds.
 """
 
 from __future__ import annotations
@@ -29,10 +31,13 @@ from urllib.parse import quote
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import INTERN_RE, Pacer, iso_date, page_cap, request_text
+from .listing_http import Pacer, iso_date, page_cap, page_through, request_text
 
 PAGE_SIZE = 100
 QUERIES = ("intern", "co-op")
+# The keyword search is fuzzy ("intern" also hits "Internal ..."), so totals
+# run to thousands on big pods (JPMorgan ~3,500): page to the stated total.
+DEFAULT_PAGES = 40
 _API = "https://{host}/hcmRestApi/resources/latest"
 LIST_URL = (_API + "/recruitingCEJobRequisitions?onlyData=true"
             "&expand=requisitionList.secondaryLocations"
@@ -61,21 +66,16 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     pacer = Pacer()
     pages: list[str] = []
     for query in QUERIES:
-        offset = 0
-        for _ in range(page_cap(board)):
+        def fetch(offset: int, query: str = query) -> tuple[str, list[str], int]:
             raw = request_text(client, pacer, LIST_URL.format(
                 host=host, site=site, limit=PAGE_SIZE, offset=offset,
                 query=quote(query)))
-            pages.append(raw)
             data = json.loads(raw)
-            reqs = _reqs(data)
-            offset += len(reqs)
             total = int(((data.get("items") or [{}])[0]).get("TotalJobsCount")
                         or 0)
-            if (not reqs or 0 < total <= offset
-                    or not any(INTERN_RE.search(r.get("Title") or "")
-                               for r in reqs)):
-                break
+            return raw, [r.get("Title") or "" for r in _reqs(data)], total
+        pages += page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board, DEFAULT_PAGES),
+                              what=f"oracle/{board['slug']} q={query}")
     return pages
 
 

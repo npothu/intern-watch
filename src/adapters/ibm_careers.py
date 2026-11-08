@@ -22,7 +22,14 @@ import json
 
 import httpx
 
-from .listing_http import Pacer, iso_date, page_cap, request_text, spell_country
+from .listing_http import (
+    Pacer,
+    iso_date,
+    page_cap,
+    page_through,
+    request_text,
+    spell_country,
+)
 
 SEARCH_URL = "https://www-api.ibm.com/search/api/v2"
 PAGE_SIZE = 100
@@ -68,16 +75,14 @@ def _hits(data: dict) -> tuple[list[dict], int]:
 
 def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     pacer = Pacer()
-    pages: list[str] = []
-    offset = 0
-    for _ in range(page_cap(board)):
+
+    def fetch(offset: int) -> tuple[str, list[str], int]:
         raw = request_text(client, pacer, SEARCH_URL, body=query_body(offset))
-        pages.append(raw)
         hits, total = _hits(json.loads(raw))
-        offset += len(hits)
-        if not hits or 0 < total <= offset:
-            break
-    return pages
+        return (raw, [(h.get("_source") or {}).get("title") or ""
+                      for h in hits], total)
+    return page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board),
+                        what="ibm/careers")
 
 
 def rows(data: dict, slug: str) -> list[tuple]:
