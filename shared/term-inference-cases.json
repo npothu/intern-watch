@@ -124,6 +124,9 @@
     {"name": "control: fall as a verb beside a summer internship", "title": "Software Engineer Intern", "jd": "Tasks that fall under this internship include testing. This is a 12-week summer internship.", "today": "2026-11-08", "terms": ["Summer 2027"], "confidence": "inferred", "source": "jd"},
     {"name": "control: deadline date beside a summer term", "title": "Software Engineer Intern", "jd": "Apply by March 1, 2027. Our Summer 2027 internship program is in Austin.", "today": "2026-11-08", "terms": ["Summer 2027"], "confidence": "explicit", "source": "jd"},
     {"name": "control: long co-op with a stated span", "title": "Software Engineer Intern", "jd": "This six-month co-op runs Jan-Jun 2027.", "today": "2026-11-08", "terms": ["Spring 2027", "Summer 2027"], "confidence": "inferred", "source": "jd"},
+    {"name": "control: duration outside the placement is not the placement's length", "title": "Software Engineer Intern", "jd": "Our Summer 2027 internship program is in Austin.\nApplication Limit: Candidates may submit a maximum of 3 applications within a 6-month period.", "today": "2026-11-08", "terms": ["Summer 2027"], "confidence": "explicit", "source": "jd"},
+    {"name": "control: experience duration is not the placement's length", "title": "Software Engineer Intern", "jd": "This Summer 2027 internship is on the sales team.\nAt least 6 months of sales experience.", "today": "2026-11-08", "terms": ["Summer 2027"], "confidence": "explicit", "source": "jd"},
+    {"name": "long internship in a placement clause is unknown", "title": "Software Engineer Intern", "jd": "Available to complete a 6-month internship beginning in February 2027.", "today": "2026-11-08", "terms": [], "confidence": "unknown", "source": null},
     {"name": "title inferred beats jd inferred", "title": "Fall Software Co-op", "jd": "Dates: January - June 2027.", "today": "2026-11-08", "terms": ["Fall 2027"], "confidence": "inferred", "source": "title"}
   ]
 }

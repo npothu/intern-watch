@@ -689,7 +689,7 @@ function jdSeasonOnly(clauses: string[], anchor: Date): string[] {
  * only if every other temporal mention outside graduation/deadline clauses
  * fits inside it, and a placement longer than one term came from a span.
  */
-function jdConsistent(terms: string[], gate: string[], fromSpan: boolean): boolean {
+function jdConsistent(terms: string[], gate: string[], placement: string[], fromSpan: boolean): boolean {
   const parsed = terms.map((t) => /^(Spring|Summer|Fall|Winter) (\d{4})$/.exec(t)).filter((m) => m !== null);
   const cover = new Set<string>();
   const months = new Set<number>();
@@ -701,7 +701,8 @@ function jdConsistent(terms: string[], gate: string[], fromSpan: boolean): boole
       months.add(month);
     }
   }
-  if (terms.length === 1 && !fromSpan && gate.some((c) => JD_LONG_DURATION_RE.test(c))) return false;
+  // Duration only from placement clauses: "a 6-month application limit" is not the placement.
+  if (terms.length === 1 && !fromSpan && placement.some((c) => JD_LONG_DURATION_RE.test(c))) return false;
   for (const c of gate) {
     if (explicitTerms(c, JD_EXPLICIT_RE).some((t) => !terms.includes(t))) return false;
     for (const m of c.matchAll(JD_MONTH_YEAR_ALL_RE)) {
@@ -743,7 +744,7 @@ export function inferTermDetailed(input: {
     return { terms: ordered, term: ordered[0] ?? "", confidence, source };
   };
   let jdExplicitTerms = jdExplicit(clauses, anchor);
-  if (jdExplicitTerms.length && !jdConsistent(jdExplicitTerms, gate, false)) jdExplicitTerms = [];
+  if (jdExplicitTerms.length && !jdConsistent(jdExplicitTerms, gate, clauses, false)) jdExplicitTerms = [];
   const explicit: [TermInference["source"], string[]][] = [
     ["title", explicitTerms(title)],
     ["url", explicitTerms(url)],
@@ -754,7 +755,7 @@ export function inferTermDetailed(input: {
   if (titleFound.length) return done(titleFound, "inferred", "title");
   const [dated, fromSpan] = jdDated(clauses, anchor);
   const jdFound = dated.length ? dated : jdSeasonOnly(clauses, anchor);
-  if (jdFound.length && jdConsistent(jdFound, gate, fromSpan)) return done(jdFound, "inferred", "jd");
+  if (jdFound.length && jdConsistent(jdFound, gate, clauses, fromSpan)) return done(jdFound, "inferred", "jd");
   return { terms: [], term: "", confidence: "unknown", source: null };
 }
 

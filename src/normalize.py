@@ -640,21 +640,23 @@ def _jd_season_only(clauses: list[str], anchor: dt.date) -> list[str]:
     return [f"{season} {_next_occurrence(season, anchor)}"]
 
 
-def _jd_consistent(terms: list[str], gate: list[str], from_span: bool) -> bool:
+def _jd_consistent(terms: list[str], gate: list[str], placement: list[str],
+                   from_span: bool) -> bool:
     """The consistency gate. A JD answer stands only if every other temporal
     mention in the JD (outside graduation/deadline clauses) fits inside it:
     each Season YYYY is one of the terms, each month+year and each bare
     month falls in a month the terms cover, each yearless season word is
     one of their seasons. One stray date - a benefits start, an application
     window, a class year, a past cohort - and the answer is unknown. A
-    placement longer than one term must come from a stated span."""
+    placement longer than one term (a duration in a placement clause, not
+    "a 6-month application limit") must come from a stated span."""
     parsed = [p for p in map(terms_mod.parse_term, terms) if p is not None]
     cover = {(year + dy, month) for season, year in parsed
              for dy, month in _TERM_COVER[season]}
     months = {month for _, month in cover}
     seasons = {season for season, _ in parsed}
     if len(terms) == 1 and not from_span and any(
-            _JD_LONG_DURATION_RE.search(c) for c in gate):
+            _JD_LONG_DURATION_RE.search(c) for c in placement):
         return False
     for c in gate:
         if any(t not in terms for t in _explicit(c, _JD_EXPLICIT_RE)):
@@ -686,7 +688,7 @@ def infer_term(title: str, url: str | None = None, jd: str | None = None,
     gate = [c for c in all_clauses if not _JD_HARD_SKIP_RE.search(c)]
     clauses = _jd_clauses(all_clauses)
     jd_explicit = _jd_explicit(clauses, anchor)
-    if jd_explicit and not _jd_consistent(jd_explicit, gate, False):
+    if jd_explicit and not _jd_consistent(jd_explicit, gate, clauses, False):
         jd_explicit = []
     explicit_sources: list[tuple[TermSource, list[str]]] = [
         ("title", _explicit(title)),
@@ -701,7 +703,7 @@ def infer_term(title: str, url: str | None = None, jd: str | None = None,
         return TermInference(_ordered(title_found), "inferred", "title")
     dated, from_span = _jd_dated(clauses, anchor)
     jd_found = dated or _jd_season_only(clauses, anchor)
-    if jd_found and _jd_consistent(jd_found, gate, from_span):
+    if jd_found and _jd_consistent(jd_found, gate, clauses, from_span):
         return TermInference(_ordered(jd_found), "inferred", "jd")
     return TermInference([], "unknown", None)
 
