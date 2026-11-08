@@ -6,9 +6,15 @@
 
 /*
  * intern-baddie identity: "Fern & Paper"
- * Palette ported verbatim from web-design/approved-spec.html (approved visual
- * mock). Light tokens are default; dark tokens activate via .dark class
- * (next-themes) or system preference before hydration.
+ * Light tokens are the default (fern); dark tokens (obsidian-fern) activate
+ * via the .dark class (next-themes) or system preference before hydration.
+ *
+ * Palettes: a second axis next to light/dark, stamped on <html> by
+ * lib/palette.ts as data-light-palette / data-dark-palette. Only the
+ * NON-default palettes get blocks, each keyed on the attribute AND the
+ * next-themes class, so the defaults stay the plain :root / .dark blocks.
+ * The concrete values are mirrored in lib/palette.ts (swatches + Clerk) -
+ * KEEP IN SYNC.
  */
 :root,
 :root.light {
@@ -23,39 +29,81 @@
   --amber: #96691e;
   --red: #a8402f;
   --chip: #ebe8de;
-  --mono: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   color-scheme: light;
 }
 
+/* Light palette: "Pine & Chalk". */
+:root.light[data-light-palette="pine"] {
+  --bg: #f3f3ee;
+  --surface: #fbfbf8;
+  --ink: #1c1f1e;
+  --ink-2: #646a68;
+  --line: #e0e1dc;
+  --line-2: #c9cbc5;
+  --accent: #1f4d4a;
+  --accent-ink: #eaf4f3;
+  --amber: #9a6a1c;
+  --red: #a63d33;
+  --chip: #e9eae4;
+  color-scheme: light;
+}
+
+/* Dark default: "Obsidian Fern". */
 :root.dark,
 .dark {
-  --bg: #171612;
-  --surface: #1e1c17;
-  --ink: #e9e5d9;
-  --ink-2: #9d977f;
-  --line: #2d2a22;
-  --line-2: #403c30;
+  --bg: #0b0b0c;
+  --surface: #141415;
+  --ink: #ede9e3;
+  --ink-2: #8c8984;
+  --line: #222224;
+  --line-2: #2e2e31;
   --accent: #83b79a;
   --accent-ink: #12211a;
-  --amber: #d0a04f;
+  --amber: #d4a24a;
   --red: #d3705d;
-  --chip: #2a2820;
+  --chip: #1d1d1f;
   color-scheme: dark;
 }
 
+/* Dark palette: "Obsidian Monochrome" - obsidian-fern with an ink accent. */
+:root.dark[data-dark-palette="obsidian-mono"] {
+  --accent: #ede9e3;
+  --accent-ink: #0b0b0c;
+}
+
+/* Dark palette: "Graphite Fern". */
+:root.dark[data-dark-palette="graphite-fern"] {
+  --bg: #121417;
+  --surface: #1a1d21;
+  --ink: #e6e8ea;
+  --ink-2: #8b929a;
+  --line: #272b31;
+  --line-2: #353b43;
+  --accent: #86c5a4;
+  --accent-ink: #0f2219;
+  --amber: #d6a24f;
+  --red: #e0706a;
+  --chip: #22262b;
+  color-scheme: dark;
+}
+
+/* No class yet (no JS): a dark system preference gets the obsidian-fern
+   defaults. Palette variants need no copy here - their attributes are only
+   ever set by script, and with script next-themes sets the class before
+   first paint. */
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not(.dark) {
-    --bg: #171612;
-    --surface: #1e1c17;
-    --ink: #e9e5d9;
-    --ink-2: #9d977f;
-    --line: #2d2a22;
-    --line-2: #403c30;
+    --bg: #0b0b0c;
+    --surface: #141415;
+    --ink: #ede9e3;
+    --ink-2: #8c8984;
+    --line: #222224;
+    --line-2: #2e2e31;
     --accent: #83b79a;
     --accent-ink: #12211a;
-    --amber: #d0a04f;
+    --amber: #d4a24a;
     --red: #d3705d;
-    --chip: #2a2820;
+    --chip: #1d1d1f;
     color-scheme: dark;
   }
 }
@@ -74,8 +122,9 @@
   --color-red: var(--red);
   --color-chip: var(--chip);
 
-  --font-sans: "Switzer", system-ui, sans-serif;
-  --font-mono: var(--mono);
+  /* next/font variables, set on <html> in app/layout.tsx. */
+  --font-sans: var(--font-instrument-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, Menlo, Consolas, monospace;
   --font-heading: var(--font-sans);
 
   /* shadcn semantic tokens -> Fern & Paper */

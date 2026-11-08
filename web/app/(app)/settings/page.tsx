@@ -1,6 +1,7 @@
 import { SettingsSection, SettingsRow } from "@/components/settings/settings-section";
 import { ThemeControl } from "@/components/settings/theme-control";
 import { MotionControl } from "@/components/settings/motion-control";
+import { PaletteControl } from "@/components/settings/palette-control";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 
@@ -31,6 +32,9 @@ export default function SettingsPage() {
       <SettingsSection title="Appearance">
         <SettingsRow label="Theme" description="Light, dark, or match your system.">
           <ThemeControl />
+        </SettingsRow>
+        <SettingsRow label="Palette" description="Colors used in light and dark mode, saved on this device.">
+          <PaletteControl />
         </SettingsRow>
         <SettingsRow
           label="Animation"
