@@ -61,7 +61,7 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
             got = _positions(data)
             start += len(got)
             total = int((data.get("data") or {}).get("count") or 0)
-            if (not got or start >= total
+            if (not got or 0 < total <= start
                     or not any(INTERN_RE.search(p.get("name") or "")
                                for p in got)):
                 break

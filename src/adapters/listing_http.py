@@ -8,6 +8,8 @@ one board costs several requests. These helpers keep that cheap and polite:
   concurrent; one board's pages run back to back on the same host);
 - a 429 or 5xx gets ONE retry after RETRY_DELAY, then the error propagates so
   the per-board try/except in ats_boards.fetch skips just that board;
+- a missing total-count field never ends paging early (only an empty
+  page, the intern stop rule or the cap do);
 - callers cap their own page count (MAX_PAGES unless a board row overrides
   it), so a misbehaving feed can never loop.
 

@@ -47,7 +47,7 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
             data = json.loads(raw)
             got = _jobs(data)
             seen += len(got)
-            if (not got or seen >= int(data.get("totalCount") or 0)
+            if (not got or 0 < int(data.get("totalCount") or 0) <= seen
                     or not any(INTERN_RE.search(j.get("title") or "")
                                for j in got)):
                 break

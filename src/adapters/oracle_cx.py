@@ -72,7 +72,7 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
             offset += len(reqs)
             total = int(((data.get("items") or [{}])[0]).get("TotalJobsCount")
                         or 0)
-            if (not reqs or offset >= total
+            if (not reqs or 0 < total <= offset
                     or not any(INTERN_RE.search(r.get("Title") or "")
                                for r in reqs)):
                 break

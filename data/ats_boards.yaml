@@ -66,6 +66,9 @@ boards:
 - company: CallRail
   ats: greenhouse
   slug: callrail
+- company: Canva
+  ats: smartrecruiters
+  slug: Canva
 - company: Carta
   ats: greenhouse
   slug: carta

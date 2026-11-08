@@ -512,3 +512,18 @@ def test_spell_country_fixes_iso_code_misreads(raw, want, country):
 def test_spell_country_leaves_two_part_us_locations_alone(raw):
     # the last part of "City, ST" is a state, not Canada/Colombia/Israel
     assert listing_http.spell_country(raw) == raw
+
+
+def test_missing_total_count_does_not_stop_paging_early():
+    asked = []
+
+    def handler(req):
+        off = int(req.url.params["offset"])
+        asked.append((req.url.params["q"], off))
+        n = 100 if off < 200 else 0
+        return httpx.Response(200, json={"content": _sr_page(n, 0, off)["content"]})
+
+    with _client(handler) as c:
+        sr.fetch_pages(c, {"slug": "Acme"})
+    assert [a for a in asked if a[0] == "intern"] == [
+        ("intern", 0), ("intern", 100), ("intern", 200)]

@@ -74,7 +74,7 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
         pages.append(raw)
         hits, total = _hits(json.loads(raw))
         offset += len(hits)
-        if not hits or offset >= total:
+        if not hits or 0 < total <= offset:
             break
     return pages
 
