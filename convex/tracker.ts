@@ -5,6 +5,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { applyStatus, removeIfUnprogressed } from "./ledger";
 import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
+import { isClosed } from "./liveness";
 import {
   createManualApplicationInLedger,
   manualApplicationDraftValidator,
@@ -350,6 +351,11 @@ export const getMatches = query({
     return rows.map((r) => ({
       ...r.item,
       hasJobDescription: Boolean(r.jobDescription?.trim()),
+      // Liveness probe (liveness_probe.ts): closed only for the URL the row
+      // shows now. Absent on rows the probe hasn't reached. A row marked
+      // before the user applied keeps the flag; readers mask it for applied
+      // rows (web/app/(app)/page.tsx).
+      ...(isClosed(r.liveness, r.item?.url) ? { closed: true } : {}),
     }));
   },
 });

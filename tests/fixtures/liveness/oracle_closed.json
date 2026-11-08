@@ -1,0 +1,12 @@
+{
+ "url": "https://iawmqy.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/careers/job/299002",
+ "expect": "closed",
+ "calls": [
+  {
+   "url": "https://iawmqy.fa.ocs.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails?onlyData=true&finder=ById;Id=%22299002%22,siteNumber=careers",
+   "status": 200,
+   "body": "{\n  \"items\" : [ ],\n  \"count\" : 0,\n  \"hasMore\" : false,\n  \"limit\" : 499,\n  \"offset\" : 0,\n  \"links\" : [ {\n    \"rel\" : \"self\",\n    \"href\" : \"https://iawmqy.fa.ocs.oraclecloud.com:443/hcmRestApi/resources/11.13.18.05/recruitingCEJobRequisitionDetails\",\n    \"name\" : \"recruitingCEJobRequisitionDetails\",\n    \"kind\" : \"collection\"\n  } ]\n}"
+  }
+ ],
+ "recorded": "2026-11-08"
+}

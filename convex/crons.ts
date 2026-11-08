@@ -23,4 +23,14 @@ crons.daily(
   {},
 );
 
+// Closed-posting probe: a small, paced batch of un-applied, visible matches
+// per run, oldest-due first (convex/liveness_probe.ts). Runs every 20 minutes
+// so each run stays short and the request rate stays low.
+crons.interval(
+  "posting liveness probe",
+  { minutes: 20 },
+  internal.liveness_probe.probeBatch,
+  {},
+);
+
 export default crons;

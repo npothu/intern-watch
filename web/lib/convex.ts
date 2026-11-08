@@ -130,6 +130,10 @@ export type MatchItem = {
   /** Set (only ever true) when the employer was on the user's priority
    *  list at match time; pins the row to the top of its term group. */
   priority?: boolean;
+  /** Set (only ever true) once the liveness probe has seen the posting gone
+   *  twice in a row. The probe never marks an applied row, but a row applied
+   *  after its mark keeps the flag - mask it with the applied state. */
+  closed?: boolean;
 };
 
 export type JobDescription = {
