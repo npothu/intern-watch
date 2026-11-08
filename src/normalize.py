@@ -315,11 +315,13 @@ def extract_jobright_id(url: str) -> str | None:
 # unknown.
 # JD clauses must be about the role or its dates (intern, co-op, program,
 # start, dates, ...); clauses about graduation, enrollment, returning to
-# school, fiscal years or deadlines are skipped: "graduating Spring 2028"
-# is not the internship's term. A JD's explicit term starting more than 90
-# days before the anchor is a past cohort ("our Summer 2026 interns ..."
-# read in November) and is ignored;
-# a JD year must be four digits or apostrophe'd; lowercase "may" is a verb.
+# school, fiscal years, deadlines, eligibility ("rising junior as of Fall
+# 2027"), recruiting, offers/conversion and past-tense history are skipped:
+# "graduating Spring 2028" is not the internship's term. Any JD term that
+# has already started by the anchor is a past cohort and is ignored. An
+# explicit JD term that the JD's placement dates contradict, or a start
+# clause offering several months, gives unknown. A JD year must be four
+# digits or apostrophe'd; lowercase "may" is a verb.
 
 # ASCII semantics for \b \s \d and case folding, so these patterns behave
 # exactly like the TS mirror's (JS regexes without the u flag). Input runs
@@ -396,11 +398,27 @@ _JD_SKIP_RE = re.compile(
     # application windows and perks are dates, not the placement
     r"accepting applications|applications? (?:are |will be )?(?:accepted|"
     r"reviewed)|application (?:window|period)|apply (?:before|between|from|"
-    r"until)|benefit|interview|onboarding|orientation", _RX)
+    r"until)|benefit|interview|onboarding|orientation|"
+    # eligibility, recruiting and conversion: "rising junior as of Fall
+    # 2027", "recruiting begins in September", "return offers for roles
+    # starting in Summer 2028", "our Fall 2027 extension program"
+    r"rising|as of|continu\w* (?:their |your |his |her )?(?:studies|"
+    r"education|degree)|eligib|full[- ]time (?:role|position|employment|"
+    r"offer|opportunit|hire)|return offer|offers? (?:will|are|may|is)|"
+    r"extension|recruit|reviewing applications|rolling basis|"
+    # past tense describes an earlier cohort, not this posting
+    r"\b(?:was|were|launched|built|shipped|ran|hosted|joined)\b", _RX)
+# Every month name in a clause, for "start in January 2027 or June 2027" and
+# "start between January and June 2027" (several options -> unknown).
+_JD_MONTH_WORD_RE = re.compile(rf"\b({_MONTH_ALT})\b", _RX)
+# "6-month co-op": a start date alone cannot say which later terms it spans.
+_JD_LONG_DURATION_RE = re.compile(
+    r"\b(?:[5-9]|1[0-2]|five|six|seven|eight|nine|ten|eleven|twelve)"
+    r"[\s-]*months?\b", _RX)
 # A month range counts only when the clause says it is the placement's span:
 # "the internship runs May-August 2027", "co-op dates: Jan-Jun 2027".
 _JD_SPAN_RE = re.compile(
-    r"\b(?:runs?|running|ran|from|starts?|starting|begins?|beginning|"
+    r"\b(?:runs?|running|from|starts?|starting|begins?|beginning|"
     r"duration|dates?|lasts?|between|join)\b", _RX)
 # Yearless season evidence is ambiguous when a JD lists several seasons or
 # says the program runs all year: "offers spring, summer and fall internships".
@@ -426,7 +444,6 @@ _JD_CONTEXT_RE = re.compile(
 # Split a JD into clauses: newlines/bullets, or sentence punctuation
 # followed by a capital ("Aug. 7" stays whole).
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+", re.A)
-_PAST_COHORT_DAYS = 90
 
 TermSource = Literal["title", "url", "jd"]
 
@@ -512,11 +529,11 @@ def _jd_clauses(jd: str) -> list[str]:
 
 
 def _not_past(terms: list[str], anchor: dt.date) -> bool:
-    """False when the earliest term started more than _PAST_COHORT_DAYS
-    before the anchor ("our Summer 2026 interns ..." read in November)."""
-    cutoff = anchor - dt.timedelta(days=_PAST_COHORT_DAYS)
+    """False when the earliest term has already started by the anchor: "our
+    Fall 2026 interns ..." read in November describes an earlier cohort, and
+    a term under way is no longer something to apply for."""
     starts = [d for d in map(terms_mod.term_start, terms) if d is not None]
-    return bool(starts) and min(starts) >= cutoff
+    return bool(starts) and min(starts) >= anchor
 
 
 def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
@@ -524,41 +541,64 @@ def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
     return [t for t in found if _not_past([t], anchor)]
 
 
+class _Conflict(Exception):
+    """JD date evidence disagrees with itself: the answer is unknown."""
+
+
+def _start_term(clause: str, anchor: dt.date) -> str | None:
+    """The single start term a start clause names, None when it names none
+    (or only a past one); raises _Conflict when it offers several months
+    ("January 2027 or June 2027", "between January and June 2027")."""
+    dated = [m for m in _JD_MONTH_YEAR_RE.finditer(clause) if m.group(1) != "may"]
+    if not dated:
+        return None
+    months = [m for m in _JD_MONTH_WORD_RE.finditer(clause) if m.group(1) != "may"]
+    terms = {f"{_month_to_season(_MONTHS[m.group(1).lower()[:3]])} 20{m.group(2)}"
+             for m in dated}
+    if len(months) > len(dated) or len(terms) > 1:
+        raise _Conflict
+    (term,) = terms
+    return term if _not_past([term], anchor) else None
+
+
 def _jd_dated(clauses: list[str], anchor: dt.date) -> list[str]:
     """Term(s) from dates that describe the placement: start statements
     ("starts in June 2027") and spans ("runs May-August 2027"). Past
     cohorts are dropped first. Every remaining piece of evidence must
     agree - start statements win, and each span must contain the start's
-    term - or the answer is unknown."""
+    term - or the answer is unknown. A start date alone on a 5+ month
+    placement is unknown too: it cannot say which later terms it covers."""
     starts: set[str] = set()
     spans: list[list[str]] = []
-    for c in clauses:
-        r = _JD_RANGE_RE.search(c)
-        if r and r.group(1) != "may" and _JD_SPAN_RE.search(c):   # "may": the verb
-            m1 = _MONTHS[r.group(1).lower()[:3]]
-            m2 = _MONTHS[r.group(3).lower()[:3]]
-            y2 = 2000 + int(r.group(4))
-            y1 = (2000 + int(r.group(2)) if r.group(2)
-                  else y2 if m1 <= m2 else y2 - 1)
-            if (y1, m1) <= (y2, m2):
-                span = _ordered(_range_seasons(m1, y1, m2, y2))
-                if _not_past(span, anchor):
-                    spans.append(span)
-            continue
-        if _JD_START_RE.search(c):
-            m = _JD_MONTH_YEAR_RE.search(c)
-            if m and m.group(1) != "may":
-                month = _MONTHS[m.group(1).lower()[:3]]
-                term = f"{_month_to_season(month)} 20{m.group(2)}"
-                if _not_past([term], anchor):
+    try:
+        for c in clauses:
+            r = _JD_RANGE_RE.search(c)
+            if r and r.group(1) != "may" and _JD_SPAN_RE.search(c):  # "may": the verb
+                m1 = _MONTHS[r.group(1).lower()[:3]]
+                m2 = _MONTHS[r.group(3).lower()[:3]]
+                y2 = 2000 + int(r.group(4))
+                y1 = (2000 + int(r.group(2)) if r.group(2)
+                      else y2 if m1 <= m2 else y2 - 1)
+                if (y1, m1) <= (y2, m2):
+                    span = _ordered(_range_seasons(m1, y1, m2, y2))
+                    if _not_past(span, anchor):
+                        spans.append(span)
+                continue
+            if _JD_START_RE.search(c):
+                term = _start_term(c, anchor)
+                if term:
                     starts.add(term)
+    except _Conflict:
+        return []
     if len(starts) > 1 or any(s != spans[0] for s in spans):
         return []
     if starts:
         (start,) = starts
-        if spans and start not in spans[0]:
+        if spans:
+            return spans[0] if start in spans[0] else []
+        if any(_JD_LONG_DURATION_RE.search(c) for c in clauses):
             return []
-        return spans[0] if spans else [start]
+        return [start]
     return spans[0] if spans else []
 
 
@@ -593,10 +633,18 @@ def infer_term(title: str, url: str | None = None, jd: str | None = None,
     title = _ascii_space(title or "")
     url = _ascii_space(url or "")
     clauses = _jd_clauses(_ascii_space(jd)) if jd else []
+    jd_explicit = _jd_explicit(clauses, anchor)
+    if jd_explicit:
+        # An explicit JD term that the JD's own placement dates contradict
+        # ("Fall 2027 ..." next to "starts in June 2027") is doubt: the JD
+        # then contributes nothing.
+        dated = _jd_dated(clauses, anchor)
+        if dated and not set(dated) & set(jd_explicit):
+            jd_explicit, clauses = [], []
     explicit_sources: list[tuple[TermSource, list[str]]] = [
         ("title", _explicit(title)),
         ("url", _explicit(url)),
-        ("jd", _jd_explicit(clauses, anchor)),
+        ("jd", jd_explicit),
     ]
     for source, found in explicit_sources:
         if found:
