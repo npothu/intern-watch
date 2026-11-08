@@ -19,7 +19,7 @@ import yaml
 from src.adapters.jobright_md import JobrightMdAdapter
 from src.adapters.speedyapply_md import SpeedyApplyMdAdapter
 from src.adapters.vanshb03_md import Vanshb03MdAdapter
-from src.filters import UserFilter
+from src.filters import UserFilter, role_text
 
 from .test_regression_leaked import _NON_SW_RE, _RESEARCH_RE, _cfg
 
@@ -87,7 +87,7 @@ def test_history_sweep_strict_mode_applies_to_jobright_eng(uf, date):
     for job in _day_jobs(date):
         if job.sources != ["jobright-eng"]:
             continue
-        title = job.title.casefold()
+        title = role_text(job.title)   # the matcher evaluate() uses
         if any(kw in title for kw in uf.strict_include):
             continue
         assert uf.evaluate(job).status == "reject", \

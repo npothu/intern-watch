@@ -328,6 +328,38 @@ class Verdict:
     needs: list[str] = field(default_factory=list)  # of: term, top_company, atlanta_metro
 
 
+# --- Role-filter keyword matching. Case-folded SUBSTRING matching on a
+# normalized title: every run of characters other than letters, digits, "+",
+# "#" and "&" becomes one space, and the title is padded with a space at each
+# end. A keyword is normalized the same way but keeps its own padding, so
+# - a bare keyword ("ml", "product manag") stays a plain substring test, and
+#   "data science" still does NOT match "Data Scientist";
+# - a keyword written with surrounding spaces (" ai ", " hr ") now matches at
+#   the start or end of a title and next to punctuation ("AI Intern",
+#   "Embodied AI", "(AI)", "AI/ML"), which the raw title never allowed.
+# Bump ROLE_MATCH_VERSION whenever this matching changes: it is part of the
+# role stage's recheck fingerprint, so still-listed jobs the old matching
+# rejected get re-evaluated (src/recheck.py).
+ROLE_MATCH_VERSION = 2
+_KW_SPLIT_RE = re.compile(r"[^0-9a-z+#&]+")
+
+
+def role_text(title: str) -> str:
+    """The form of a title that role keywords are matched against."""
+    return " " + _KW_SPLIT_RE.sub(" ", title.casefold()).strip() + " "
+
+
+def role_keyword(kw: str) -> str:
+    """A role keyword normalized like role_text, keeping its edge padding."""
+    folded = kw.casefold()
+    core = _KW_SPLIT_RE.sub(" ", folded).strip()
+    if not core:
+        return folded
+    lead = " " if folded[:1].isspace() or _KW_SPLIT_RE.match(folded[:1]) else ""
+    tail = " " if folded[-1:].isspace() or _KW_SPLIT_RE.match(folded[-1:]) else ""
+    return lead + core + tail
+
+
 def _accept(*reasons: str) -> Verdict:
     return Verdict("accept", list(reasons))
 
@@ -348,13 +380,13 @@ class UserFilter:
             today = date.today()
         self._company_lists: dict[str, CompanyList] = {}
         role = cfg.get("role_filter", {})
-        self.include = [k.casefold() for k in role.get("include_keywords", [])]
-        self.exclude = [k.casefold() for k in role.get("exclude_keywords", [])]
+        self.include = [role_keyword(k) for k in role.get("include_keywords", [])]
+        self.exclude = [role_keyword(k) for k in role.get("exclude_keywords", [])]
         # Sources listed here must also match strict_include_keywords (a tighter
         # subset of include_keywords that excludes bare "engineer"). This lets
         # broad non-SW engineering repos pass only clearly SW-titled roles.
         self.strict_sources: set[str] = set(role.get("strict_sources", []))
-        self.strict_include = [k.casefold()
+        self.strict_include = [role_keyword(k)
                                for k in role.get("strict_include_keywords", [])]
         # Chronological list for grouping/ordering; the set for membership.
         self.terms_order: list[str] = terms_mod.wanted_terms(cfg, today)
@@ -534,7 +566,7 @@ class UserFilter:
         If the LLM supplied a term for an unknown-term job, the caller has
         already written it onto job.terms. `today` (default date.today())
         anchors the optional stale-posting elimination."""
-        title = job.title.casefold()
+        title = role_text(job.title)
         for kw in self.exclude:
             if kw in title:
                 return _reject(f"excluded-keyword:{kw}")

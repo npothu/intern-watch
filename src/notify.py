@@ -43,6 +43,15 @@ def display_term(job: Job, terms_order: list[str]) -> str:
 
 
 def _tag(reasons: list[str]) -> str:
+    """Display tag. A re-evaluated rejection (main.RECHECK_REASON) adds
+    [RECHECK] after the regular tag, so delivery order is unchanged."""
+    base = _base_tag(reasons)
+    if "recheck" in reasons:
+        return f"{base}[RECHECK] "
+    return base
+
+
+def _base_tag(reasons: list[str]) -> str:
     if "company:priority" in reasons:
         return "[PRIORITY] "
     for r in reasons:
@@ -129,6 +138,8 @@ def outbox_item(job: Job, reasons: list[str], terms_order: list[str]) -> dict:
     if "company:priority" in reasons:
         # Only ever True; absent otherwise so older snapshots read the same.
         item["priority"] = True
+    if "recheck" in reasons:
+        item["recheck"] = True       # same convention as "priority"
     return item
 
 

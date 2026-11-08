@@ -19,13 +19,13 @@ from pathlib import Path
 import httpx
 import yaml
 
-from . import content_dedup, dashboard, ledger, seeding
+from . import content_dedup, dashboard, ledger, recheck, seeding
 from . import prefs as prefs_mod
 from . import state as st
 from .adapters import make_adapter
 from .dedupe import _merge_pair, dedupe
 from .envfile import load_dotenv
-from .filters import UserFilter, Verdict, load_users
+from .filters import UserFilter, Verdict, load_users, role_text
 from .llm import api_key_env_for, classify
 from .models import Job, SourceConfig
 from .normalize import (
@@ -234,10 +234,14 @@ class _JobrightEnricher:
 
 def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
                      enricher: _JobrightEnricher | None,
-                     today: dt.date | None = None) -> list[tuple[Job, list[str]]]:
+                     today: dt.date | None = None,
+                     state: dict | None = None) -> list[tuple[Job, list[str]]]:
     """Second-chance elimination: for jobright accepts with no JD yet, fetch
     the info page and re-run the rule engine; drop (logging the reason) any job
-    that now eliminates on its fetched description."""
+    that now eliminates on its fetched description. With `state`, a drop is
+    recorded as an elim-stage rejection (src/recheck.py), and a RECHECK accept
+    whose JD could not be fetched only because the per-run cap ran out is
+    held back for a later run rather than delivered unchecked."""
     if enricher is None:
         return accepted
     kept: list[tuple[Job, list[str]]] = []
@@ -247,9 +251,16 @@ def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
         # earlier user this run -- per-user rules can differ).
         if job.jobright_id:
             enricher.keeps(job)
+            if (RECHECK_REASON in reasons and not job.description
+                    and job.dedup_key not in enricher.attempted):
+                log.info("user %s: recheck of %s waits for a JD fetch "
+                         "(cap reached)", uf.name, job.dedup_key)
+                continue
             if job.description and (reason := uf._eliminate_reason(job, today)):
                 log.info("user %s: dropped %s after jobright JD fetch (%s)",
                          uf.name, job.dedup_key, reason)
+                if state is not None:
+                    recheck.record(state, uf, job, "elim")
                 continue
         kept.append((job, reasons))
     return kept
@@ -555,10 +566,55 @@ def _restamp_priority(state: dict, name: str, uf: UserFilter) -> int:
     return n
 
 
+RECHECK_REASON = "recheck"   # reasons marker on a re-evaluated rejection
+
+
+def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
+              candidates: list[Job], today: dt.date) -> list[Job]:
+    """Still-listed rejected jobs whose rejecting config changed (see
+    src/recheck.py). A deterministic reject is re-fingerprinted here for
+    free; the rest (now accepted, or needing the LLM) are returned, capped,
+    for the full pipeline. Rechecks needing a Greenhouse-style JD fetch are
+    limited to what enrich_jds will fetch this run, so none is judged
+    without its JD."""
+    skip = {job.dedup_key for job in candidates}
+    recheck.bootstrap(state, uf.name, listed, skip, today)
+    stale = recheck.stale(state, uf, listed, skip)
+    out: list[Job] = []
+    refreshed = 0
+    for job in stale:
+        verdict = uf.evaluate(job, today=today)
+        if verdict.status == "reject":
+            recheck.record(state, uf, job, recheck.stage_of(verdict))
+            refreshed += 1
+        else:
+            out.append(job)
+    selected: list[Job] = []
+    jd_budget = JD_FETCH_CAP
+    for job in out:
+        if len(selected) >= recheck.RECHECK_CAP:
+            break
+        if job.jd_url and not job.description:
+            if jd_budget <= 0:
+                continue
+            jd_budget -= 1
+        selected.append(job)
+    if stale:
+        log.info("user %s: recheck: %d stale rejection(s); %d still rejected "
+                 "(re-fingerprinted), %d re-run now, %d left for later runs",
+                 uf.name, len(stale), refreshed, len(selected),
+                 len(out) - len(selected))
+    enrich_jds(selected)
+    return selected
+
+
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
                  enricher: _JobrightEnricher | None = None,
-                 resolver=None, store: TrackerStore | None = None) -> None:
+                 resolver=None, store: TrackerStore | None = None,
+                 listed: dict[str, Job] | None = None) -> None:
+    """`listed` (this run's deduped jobs by key) enables the recheck of
+    still-listed rejected jobs; without it only `candidates` are judged."""
     today = now.date()
     # Settings > Watch (hosted store) overlays the yaml: terms window,
     # per-season presets, priority companies, remote, digest time/recipients.
@@ -591,20 +647,36 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
 
     accepted: list[tuple[Job, list[str]]] = []
     llm_queue: list[Job] = []
+    # Rechecks run after this run's new/pending jobs: they queue behind them
+    # for the LLM cap and are never parked as pending (a deferred recheck
+    # keeps its stale fingerprint and is picked up again next run).
+    rechecks = (_rechecks(uf, state, listed, candidates, today)
+                if listed is not None else [])
+    recheck_keys = {job.dedup_key for job in rechecks}
 
-    for job in candidates:
+    def _accept(job: Job, reasons: list[str]) -> None:
+        if job.dedup_key in recheck_keys:
+            reasons = [*reasons, RECHECK_REASON]
+        accepted.append((job, reasons))
+        recheck.clear(state, job.dedup_key, name)
+
+    for job in [*candidates, *rechecks]:
         verdict = uf.evaluate(job, today=today)
         if verdict.status == "accept":
-            accepted.append((_delivered(uf, job), verdict.reasons))
+            _accept(_delivered(uf, job), verdict.reasons)
             st.clear_pending(state, job.dedup_key, name)
         elif verdict.status == "reject":
+            recheck.record(state, uf, job, recheck.stage_of(verdict))
             st.clear_pending(state, job.dedup_key, name)
         else:  # ambiguous
             cached = _cached_facts(state, job, name)
             if _cache_covers(verdict.needs, cached):
                 final, judged = _finalize(uf, job, cached)
                 if final.status == "accept":
-                    accepted.append((_delivered(uf, judged), final.reasons))
+                    _accept(_delivered(uf, judged), final.reasons)
+                else:
+                    recheck.record(state, uf, judged,
+                                   recheck.stage_of(final, after_llm=True))
                 st.clear_pending(state, job.dedup_key, name)
             else:
                 llm_queue.append(job)
@@ -647,21 +719,26 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         for job in batch:
             facts = results.get(job.dedup_key)
             if facts is None:
-                st.set_pending(state, job.dedup_key, name)
+                if job.dedup_key not in recheck_keys:
+                    st.set_pending(state, job.dedup_key, name)
                 continue
             st.llm_cache_put(state, job.dedup_key, facts)
             merged_facts = _cached_facts(state, job, name)
             final, judged = _finalize(uf, job, merged_facts)
             if final.status == "accept":
-                accepted.append((_delivered(uf, judged), final.reasons))
+                _accept(_delivered(uf, judged), final.reasons)
+            else:
+                recheck.record(state, uf, judged,
+                               recheck.stage_of(final, after_llm=True))
             st.clear_pending(state, job.dedup_key, name)
         for job in deferred:
-            st.set_pending(state, job.dedup_key, name)
+            if job.dedup_key not in recheck_keys:
+                st.set_pending(state, job.dedup_key, name)
 
     # ---- Lazy jobright JD check: title-only sources can't reveal a grad-only/
     # unpaid/clearance requirement, so fetch the info page for jobs that made it
     # to accept and drop any that now eliminate on the fetched JD.
-    accepted = _drop_eliminated(uf, accepted, enricher, today)
+    accepted = _drop_eliminated(uf, accepted, enricher, today, state)
 
     # ---- Cross-source dedup, before resume build / notify so a suppressed dup
     # neither builds a resume nor reaches the email/dashboard. Resolve employer
@@ -682,7 +759,9 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # ---- Notify: instant Discord and/or slot-batched email, per user config
     notify_cfg = user_cfg.get("notify", {})
     if accepted:
-        log.info("user %s: %d new match(es) this run", name, len(accepted))
+        n_re = sum(RECHECK_REASON in r for _j, r in accepted)
+        log.info("user %s: %d new match(es) this run%s", name, len(accepted),
+                 f" ({n_re} from rechecks)" if n_re else "")
     if user_cfg.get("dashboard"):
         for job, reasons in accepted:
             item = match_item(job, reasons, terms_order)
@@ -900,7 +979,10 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
     # waiting in the outbox from earlier runs.
     pri_cfg = user_cfg.get("priority") or {}
     if pri_cfg.get("email_immediately"):
-        found_now = {job.dedup_key for job, _ in accepted}
+        # Recheck acceptances wait for the digest: a config change can
+        # recover many at once, and that must not become an alert burst.
+        found_now = {job.dedup_key for job, reasons in accepted
+                     if RECHECK_REASON not in reasons}
         alerts = [it for it in st.outbox_items(state, name)
                   if it.get("priority") and it["key"] in found_now]
         if alerts:
@@ -1043,7 +1125,7 @@ def _explain_user(uf: UserFilter, job: Job, state: dict) -> list[str]:
 
     # Role filter (which include/exclude keyword fired), reusing the same
     # case-folded substring logic evaluate() runs.
-    title = job.title.casefold()
+    title = role_text(job.title)
     fired_exclude = next((kw for kw in uf.exclude if kw in title), None)
     if fired_exclude:
         lines.append(f"role filter: REJECT (excluded keyword '{fired_exclude}')")
@@ -1295,7 +1377,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,
-                         resolver=resolver)
+                         resolver=resolver, listed=merged_by_key)
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()
