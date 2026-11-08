@@ -67,6 +67,28 @@ def test_payloads_from_recorded_fixtures():
     assert "Minimum Qualifications" in apple and "Preferred Qualifications" in apple
 
 
+def test_jd_text_matches_the_ts_twin_byte_for_byte():
+    """expected_text.json is asserted by convex/jd_acquire_adapters.test.ts
+    too: the same posting stores the same JD whichever runtime acquired it,
+    paragraph and list breaks included."""
+    expected = _json("expected_text.json")
+    got = {
+        "oracle": jd_source._jd_from_ats_payload("oracle", _json("oracle_cx_detail.json")),
+        "eightfold": jd_source._jd_from_ats_payload("eightfold", _json("eightfold_job.json")),
+        "apple": jd_source._jd_from_ats_payload("apple", _json("apple_job.json")),
+        "phenom": jd_source._embedded_description(_text("phenom_job.html")),
+        "icims": jd_source._embedded_description(_text("icims_iframe.html")),
+    }
+    assert got == expected
+    assert "\n- " in got["oracle"] and got["oracle"].count("\n") > 20
+
+
+def test_strip_jd_html_entities_and_breaks():
+    html = "<p>A&nbsp;&amp;amp;B&rsquo;s&#8212;x</p><ul><li>one</li><li>two</li></ul>c<br/>d"
+    # Same input and output as the stripJdHtml case in jd_acquire_adapters.test.ts.
+    assert jd_source._strip_jd_html(html) == "A &B\u2019s\u2014x\n\n- one\n\n- two\n\nc\nd"
+
+
 def test_phenom_ddo_is_an_embedded_description():
     got = jd_source._embedded_description(_text("phenom_job.html"))
     assert got and "Splunk" in got

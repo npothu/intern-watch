@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as store from "../convex";
 import * as s from "./schemas";
 import { ApiError } from "./auth";
+import { withBackedShort } from "../ingest-short";
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
 type Params = Record<string, string>;
@@ -66,13 +67,8 @@ async function waitForIngest(user: string, ingestId: string): Promise<store.Inge
   return row;
 }
 
-/** An ingest's short names a match only once the match exists. A short
- * handed out while fetching (or after a failure) looks usable and is not:
- * resume builds against it 404. */
-function publicIngestRow(row: store.IngestRow) {
-  const { short, ...rest } = row;
-  return row.status === "done" || row.status === "already_exists" ? { ...rest, short } : rest;
-}
+/** The ingest row as the API shows it: no short until a match backs it. */
+const publicIngestRow = (row: store.IngestRow) => withBackedShort(row);
 
 function ingestResponse(row: store.IngestRow | null, ingestId: string): unknown {
   if (row?.status === "failed") {

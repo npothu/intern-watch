@@ -167,25 +167,30 @@ export async function resolveIngest(
   } catch (e) {
     console.warn("jd acquisition failed", e);
   }
-  let jobDescription: string | null = manual.jdText?.trim() || null;
-  const jdIsManual = !!jobDescription;
-  if (!jobDescription) {
-    jobDescription = acquired.text;
-    if (!jobDescription && (acquired.html || pageHtml)) {
-      jobDescription = await llmExtractJd(acquired.html ?? pageHtml);
-    }
-  }
-
   const meta = acquired.meta ?? {};
-  // An Oracle CX page is a JS shell whose <title> is the employer, never the
-  // role: only the requisition feed (meta) or the caller can name the job.
+  // An Oracle CX page is a JS shell: its <title> is the employer, never the
+  // role, and its body (footer, cookie notice) is never the JD. Only the
+  // requisition feed (or the caller) names the job or supplies the JD, so the
+  // scrape and LLM tiers do not run on it.
   const oracle = atsApiUrl(canonical)?.kind === "oracle" || !!oracleApiFromPage(canonical, pageHtml);
   const scrapedTitle = !oracle && extracted && extracted.title !== "Unknown" ? extracted.title : "";
 
+  let jobDescription: string | null = manual.jdText?.trim() || null;
+  const jdIsManual = !!jobDescription;
+  if (!jobDescription) {
+    if (oracle) {
+      jobDescription = acquired.source === "ats:oracle" ? acquired.text : null;
+    } else {
+      jobDescription = acquired.text;
+      if (!jobDescription && (acquired.html || pageHtml)) {
+        jobDescription = await llmExtractJd(acquired.html ?? pageHtml);
+      }
+    }
+  }
+
   // Acquisition failed - the page could not be fetched, or an Oracle feed
-  // had no such posting - and no tier produced a JD: caller-supplied
-  // title/company/location alone must not turn that into a match. Only a
-  // pasted JD does.
+  // had no such posting - and no JD was pasted: caller-supplied
+  // title/company/location alone must not turn that into a match.
   if (!jobDescription && (pageError || (oracle && !meta.title))) {
     const base = pageError
       ? (pageError instanceof Error ? pageError.message : String(pageError))

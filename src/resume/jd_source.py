@@ -22,7 +22,7 @@ import httpx
 
 from ..adapters.ats_boards import JD_MAX_CHARS
 from ..adapters.jobright_page import _PAGE_UA, fetch_description
-from ..normalize import extract_jobright_id, strip_html
+from ..normalize import extract_jobright_id
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ _NEXT_DATA_RE = re.compile(
 _JSON_LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.S | re.I)
-_WS_RE = re.compile(r"\s+")
 
 # Anti-bot / challenge / empty-SPA-shell tells. A 403 already raises, but many
 # blockers serve a 200 with one of these instead of the JD — building a resume
@@ -79,11 +78,67 @@ def _looks_like_jd(text: str) -> bool:
     return density < _JS_TOKEN_DENSITY_THRESHOLD
 
 
+# -- JD text (port of jd_acquire.ts stripJdHtml / ok; keep in lockstep) -----
+# Unlike normalize.strip_html (one line, for the watcher's filters), a stored
+# JD keeps its paragraph and list breaks: the resume tailor reads it, and the
+# TS ingest path stores the same text for the same posting.
+
+_JD_ENTITIES = {  # jd_acquire.ts JD_ENTITIES twin
+    "nbsp": " ", "lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'",
+    "rsquo": "\u2019", "lsquo": "\u2018", "rdquo": "\u201d", "ldquo": "\u201c",
+    "ndash": "\u2013", "mdash": "\u2014", "hellip": "\u2026", "bull": "\u2022",
+    "middot": "\u00b7", "copy": "\u00a9", "reg": "\u00ae", "trade": "\u2122",
+}
+_ENTITY_RE = re.compile(r"&(#\d+|#x[0-9a-f]+|[a-z]+);", re.I)
+_JD_PAIRED_RE = re.compile(r"<(script|style|noscript|svg)\b[\s\S]*?</\1>", re.I)
+_JD_UNCLOSED_RE = re.compile(r"<(?:script|style|noscript|svg)\b[\s\S]*$", re.I)
+_JD_BREAK_RE = re.compile(r"<(?:br|/p|/li|/div|/h[1-6]|/ul|/ol|/tr)\s*/?>", re.I)
+_JD_LI_RE = re.compile(r"<li[^>]*>", re.I)
+_SPACES_RE = re.compile(r"[ \t]+")
+_LINE_EDGE_RE = re.compile(r" ?\n ?")
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def _decode_entity(m: re.Match) -> str:
+    body = m[1]
+    if body[0] == "#":
+        try:
+            code = int(body[2:], 16) if body[1] in "xX" else int(body[1:])
+        except ValueError:
+            return m[0]
+        if code <= 0 or code > 0x10FFFF:
+            return m[0]
+        return " " if code == 0xA0 else chr(code)
+    return _JD_ENTITIES.get(body.lower(), m[0])
+
+
+def _tidy(text: str) -> str:
+    text = _SPACES_RE.sub(" ", text)
+    text = _LINE_EDGE_RE.sub("\n", text)
+    return _BLANK_LINES_RE.sub("\n\n", text).strip()
+
+
+def _strip_jd_html(s: str) -> str:
+    """HTML -> JD text with paragraph and list breaks kept. Entities decode
+    BEFORE tags strip (Greenhouse returns entity-escaped HTML)."""
+    t = _ENTITY_RE.sub(_decode_entity, s)
+    if _ENTITY_RE.search(t):
+        t = _ENTITY_RE.sub(_decode_entity, t)  # double-escaped payloads
+    t = _JD_PAIRED_RE.sub(" ", t)
+    t = _JD_UNCLOSED_RE.sub(" ", t)  # fetch cap cut mid-element
+    t = re.sub(r"<[^>]*$", " ", t)
+    t = _JD_BREAK_RE.sub("\n", t)
+    t = _JD_LI_RE.sub("\n- ", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return _tidy(t)
+
+
 def _ok(text: str | None) -> str | None:
-    """Capped, whitespace-collapsed text if it clears MIN_JD_CHARS, else None."""
+    """Capped text (spaces collapsed, line breaks kept) if it clears
+    MIN_JD_CHARS, else None."""
     if not text:
         return None
-    text = _WS_RE.sub(" ", text).strip()[:JD_MAX_CHARS]
+    text = _tidy(text)[:JD_MAX_CHARS]
     return text if len(text) >= MIN_JD_CHARS else None
 
 
@@ -209,7 +264,7 @@ def _ats_api_for(url: str) -> tuple[str, str] | None:
 def _join_sections(parts: list[tuple[str, object]]) -> str:
     out = []
     for heading, body in parts:
-        text = strip_html(body) if isinstance(body, str) else ""
+        text = _strip_jd_html(body) if isinstance(body, str) else ""
         if text:
             out.append(f"{heading}\n{text}" if heading else text)
     return "\n\n".join(out)
@@ -220,13 +275,13 @@ def _jd_from_ats_payload(kind: str, payload) -> str | None:
     if not isinstance(payload, dict):
         return None
     if kind == "greenhouse":
-        return _ok(strip_html(payload.get("content") or ""))
+        return _ok(_strip_jd_html(payload.get("content") or ""))
     if kind == "lever":
         parts = [payload.get("descriptionPlain")
-                 or strip_html(payload.get("description") or "")]
+                 or _strip_jd_html(payload.get("description") or "")]
         for lst in payload.get("lists") or []:
             parts.extend([lst.get("text") or "",
-                          strip_html(lst.get("content") or "")])
+                          _strip_jd_html(lst.get("content") or "")])
         parts.append(payload.get("additionalPlain") or "")
         return _ok("\n".join(p for p in parts if p))
     if kind.startswith("ashby:"):
@@ -234,18 +289,18 @@ def _jd_from_ats_payload(kind: str, payload) -> str | None:
         for j in payload.get("jobs") or []:
             if str(j.get("id", "")).lower() == want:
                 return _ok(j.get("descriptionPlain")
-                           or strip_html(j.get("descriptionHtml") or ""))
+                           or _strip_jd_html(j.get("descriptionHtml") or ""))
         return None
     if kind == "smartrecruiters":
         sections = (payload.get("jobAd") or {}).get("sections") or {}
-        parts = [f"{sec.get('title') or ''}\n{strip_html(sec.get('text') or '')}"
+        parts = [f"{sec.get('title') or ''}\n{_strip_jd_html(sec.get('text') or '')}"
                  for sec in sections.values() if isinstance(sec, dict)]
         return _ok("\n\n".join(parts))
     if kind == "workday":
         info = payload.get("jobPostingInfo") or {}
-        return _ok(strip_html(info.get("jobDescription") or ""))
+        return _ok(_strip_jd_html(info.get("jobDescription") or ""))
     if kind == "workable":
-        parts = [strip_html(payload.get(k) or "")
+        parts = [_strip_jd_html(payload.get(k) or "")
                  for k in ("description", "requirements", "benefits")]
         return _ok("\n\n".join(p for p in parts if p))
     if kind == "oracle":
@@ -259,7 +314,7 @@ def _jd_from_ats_payload(kind: str, payload) -> str | None:
             ("Qualifications", it.get("ExternalQualificationsStr")),
         ]))
     if kind == "eightfold":
-        return _ok(strip_html(payload.get("job_description") or ""))
+        return _ok(_strip_jd_html(payload.get("job_description") or ""))
     if kind == "apple":
         inner = payload.get("res")
         res: dict = inner if isinstance(inner, dict) else payload
@@ -292,7 +347,7 @@ def _from_greenhouse(client: httpx.Client, jd_url: str) -> str | None:
     resp = client.get(jd_url)
     resp.raise_for_status()
     content = resp.json().get("content") or ""
-    return strip_html(content)[:JD_MAX_CHARS] or None
+    return _strip_jd_html(content)[:JD_MAX_CHARS] or None
 
 
 def _walk_json_descriptions(obj) -> list[str]:
@@ -322,7 +377,7 @@ def _phenom_description(html: str) -> str | None:
     except Exception:  # noqa: BLE001 - not a Phenom page after all
         return None
     desc = job.get("description") if isinstance(job, dict) else None
-    return _ok(strip_html(desc)) if isinstance(desc, str) else None
+    return _ok(_strip_jd_html(desc)) if isinstance(desc, str) else None
 
 
 def _embedded_description(html: str) -> str | None:
@@ -340,7 +395,7 @@ def _embedded_description(html: str) -> str | None:
                 continue
             for desc in _walk_json_descriptions(data):
                 # description values are often HTML themselves.
-                got = _ok(strip_html(desc))
+                got = _ok(_strip_jd_html(desc))
                 if got:
                     return got
     return None
@@ -390,7 +445,7 @@ def _generic_scrape(client: httpx.Client, url: str,
     embedded = _embedded_description(html)
     if embedded:
         return embedded
-    fallback = _ok(strip_html(html))
+    fallback = _ok(_strip_jd_html(html))
     if fallback and not _looks_like_jd(fallback):
         log.debug("jd_source scrape rejected (looks like JS, not a JD): %s",
                   url)
@@ -429,7 +484,7 @@ def _llm_extract(html: str, llm_cfg: dict | None, job) -> str | None:
     api_key = _os.environ.get(api_key_env_for(llm_cfg))
     if call is None or not api_key:
         return None
-    page_text = strip_html(html)[:28000]
+    page_text = _strip_jd_html(html)[:28000]
     if len(page_text) < MIN_JD_CHARS:
         return None
     try:

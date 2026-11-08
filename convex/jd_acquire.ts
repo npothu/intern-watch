@@ -29,14 +29,27 @@ export const JD_MAX_CHARS = 20_000; // full JD; tailor excerpts separately
 
 // -- text helpers -----------------------------------------------------------
 
+// Named entities seen in board payloads (Oracle/Eightfold JDs are full of
+// typographic ones). jd_source.py _JD_ENTITIES is the twin - keep the two
+// tables identical, they are what makes the TS and Python JD text match.
+const JD_ENTITIES: Record<string, string> = {
+  nbsp: " ", lt: "<", gt: ">", amp: "&", quot: '"', apos: "'",
+  rsquo: "\u2019", lsquo: "\u2018", rdquo: "\u201d", ldquo: "\u201c",
+  ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", bull: "\u2022",
+  middot: "\u00b7", copy: "\u00a9", reg: "\u00ae", trade: "\u2122",
+};
+
+// One pass: `&amp;lt;` becomes `&lt;`, which the caller's second pass
+// (double-escaped payloads) turns into `<`.
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, '"')
-    .replace(/&amp;/gi, "&"); // last: unlocks double-escaped payloads
+  return s.replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (whole, body: string) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return whole;
+      return code === 0xa0 ? " " : String.fromCodePoint(code);
+    }
+    return JD_ENTITIES[body.toLowerCase()] ?? whole;
+  });
 }
 
 export function stripJdHtml(s: string): string {
@@ -60,10 +73,11 @@ export function stripJdHtml(s: string): string {
     // means truncation, so drop from there to end-of-text.
     .replace(/<(script|style|noscript|svg)\b[\s\S]*$/gi, " ")
     .replace(/<[^>]*$/, " ")
-    .replace(/<(br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)>/gi, "\n")
+    .replace(/<(?:br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)\s*\/?>/gi, "\n")
     .replace(/<li[^>]*>/gi, "\n- ")
     .replace(/<[^>]+>/g, " ")
     .replace(/[ \t]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -82,7 +96,9 @@ export function looksLikeJd(text: string): boolean {
 
 function ok(text: string | null | undefined): string | null {
   if (!text) return null;
-  const t = text.replace(/[ \t]+/g, " ").trim().slice(0, JD_MAX_CHARS);
+  // Spaces collapse; line breaks survive (jd_source.py _ok twin).
+  const t = text.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n")
+    .trim().slice(0, JD_MAX_CHARS);
   return t.length >= JD_MIN_CHARS ? t : null;
 }
 

@@ -4,12 +4,14 @@ import { describe, expect, test } from "vitest";
 import {
   acquireJdFromUrl,
   atsApiUrl,
+  embeddedDescription,
   jdFromAtsPayload,
   metaFromAtsPayload,
   oracleApiFromPage,
   oracleApiUrl,
   pageFetchUrl,
   phenomJob,
+  stripJdHtml,
 } from "./jd_acquire";
 
 // JD adapters for the JS-rendered boards (Oracle CX, Eightfold, Apple,
@@ -107,6 +109,31 @@ describe("JD + metadata from recorded payloads", () => {
       company: "Cisco",
       location: "Research Triangle Park, North Carolina, United States of America",
     });
+  });
+});
+
+describe("JD text matches the Python twin byte for byte", () => {
+  // tests/fixtures/jd/expected_text.json is asserted by
+  // tests/test_jd_source_adapters.py too: the same posting must store the
+  // same JD whichever runtime acquired it.
+  const expected = json("expected_text.json");
+  const got: Record<string, string | null> = {
+    oracle: jdFromAtsPayload("oracle", json("oracle_cx_detail.json")),
+    eightfold: jdFromAtsPayload("eightfold", json("eightfold_job.json")),
+    apple: jdFromAtsPayload("apple", json("apple_job.json")),
+    phenom: embeddedDescription(fixture("phenom_job.html")),
+    icims: embeddedDescription(fixture("icims_iframe.html")),
+  };
+  for (const kind of Object.keys(expected)) {
+    test(kind, () => expect(got[kind]).toBe(expected[kind]));
+  }
+  test("entities and breaks, the same as _strip_jd_html", () => {
+    expect(stripJdHtml("<p>A&nbsp;&amp;amp;B&rsquo;s&#8212;x</p><ul><li>one</li><li>two</li></ul>c<br/>d"))
+      .toBe("A &B\u2019s\u2014x\n\n- one\n\n- two\n\nc\nd");
+  });
+  test("list and paragraph breaks survive", () => {
+    expect(got.oracle).toContain("\n- ");
+    expect(got.oracle!.split("\n").length).toBeGreaterThan(20);
   });
 });
 

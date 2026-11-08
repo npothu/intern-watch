@@ -87,6 +87,11 @@ describe("resolveIngest", () => {
       .rejects.toMatchObject({ code: "blocked", message: expect.stringMatching(/paste the job description/) });
   });
 
+  const cachedFree = (routes: Record<string, string>) => async (u: string) => {
+    if (u in routes) return routes[u];
+    throw new FetchError("fetch_failed", "fetch failed: HTTP 404");
+  };
+
   test("an empty Oracle feed is not a posting, even with an employer <title>", async () => {
     const url = "https://ehtl.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/19813";
     const routes: Record<string, string> = {
@@ -101,6 +106,12 @@ describe("resolveIngest", () => {
       code: "fetch_failed", message: expect.stringMatching(/Oracle requisition feed has no such posting/),
     });
     await expect(resolveIngest(url, { title: "Firmware Intern" }, fetchText)).rejects.toThrow(/no such posting/);
+    // A long shell footer that reads like prose is still not the JD.
+    const footer = "<footer><p>" + ("About Example Corp. We are an equal opportunity employer and value "
+      + "diversity at our company. Our responsibilities to candidates include privacy and accessibility. ").repeat(4)
+      + "</p></footer>";
+    routes[url] = `<html><head><title>Example Corp</title></head><body><div id=app></div>${footer}</body></html>`;
+    await expect(resolveIngest(url, { title: "Firmware Intern" }, cachedFree(routes))).rejects.toThrow(/no such posting/);
     // A pasted JD (with the title) still adds it.
     const jdText = "Responsibilities: firmware for embedded products. ".repeat(6);
     expect(await resolveIngest(url, { jdText, title: "Firmware Intern" }, fetchText))
