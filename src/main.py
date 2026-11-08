@@ -255,6 +255,8 @@ def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
                     and job.dedup_key not in enricher.attempted):
                 log.info("user %s: recheck of %s waits for a JD fetch "
                          "(cap reached)", uf.name, job.dedup_key)
+                if state is not None:
+                    recheck.mark_stale(state, job.dedup_key, uf.name)
                 continue
             if job.description and (reason := uf._eliminate_reason(job, today)):
                 log.info("user %s: dropped %s after jobright JD fetch (%s)",
@@ -566,7 +568,31 @@ def _restamp_priority(state: dict, name: str, uf: UserFilter) -> int:
     return n
 
 
-RECHECK_REASON = "recheck"   # reasons marker on a re-evaluated rejection
+RECHECK_REASON = recheck.RECHECK_REASON
+
+
+def _hold_over_budget(state: dict, name: str,
+                      accepted: list[tuple[Job, list[str]]],
+                      today: dt.date) -> list[tuple[Job, list[str]]]:
+    """Enforce the daily recheck delivery budget: recheck accepts beyond what
+    is left of it today are held back (stale, re-run tomorrow). Runs before
+    the dedupe gates, which record what they let through."""
+    left = recheck.RECHECK_DAILY_DELIVERIES - recheck.delivered_today(
+        state, name, today)
+    kept: list[tuple[Job, list[str]]] = []
+    held = 0
+    for job, reasons in accepted:
+        if RECHECK_REASON in reasons:
+            if left <= 0:
+                recheck.mark_stale(state, job.dedup_key, name)
+                held += 1
+                continue
+            left -= 1
+        kept.append((job, reasons))
+    if held:
+        log.info("user %s: daily recheck budget reached -- %d recheck "
+                 "match(es) wait for tomorrow", name, held)
+    return kept
 
 
 def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
@@ -741,6 +767,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # unpaid/clearance requirement, so fetch the info page for jobs that made it
     # to accept and drop any that now eliminate on the fetched JD.
     accepted = _drop_eliminated(uf, accepted, enricher, today, state)
+    accepted = _hold_over_budget(state, name, accepted, today)
 
     # ---- Cross-source dedup, before resume build / notify so a suppressed dup
     # neither builds a resume nor reaches the email/dashboard. Resolve employer

@@ -90,6 +90,15 @@ def test_bare_keywords_stay_substrings():
     assert role_keyword("r&d") in role_text("R&D Software Intern")
 
 
+def test_punctuated_keywords_keep_the_old_raw_match():
+    # Only plain keywords are normalized; ".net" must not turn into " net"
+    # and start matching "Network".
+    assert role_keyword(".net") not in role_text("Network Engineer Intern")
+    assert role_keyword(".net") in role_text("ASP.NET Developer Intern")
+    assert role_keyword("full-stack") not in role_text("Full Stack Intern")
+    assert role_keyword("full-stack") in role_text("Full-Stack Intern")
+
+
 def test_exclude_padding_mirrors_include():
     uf = UserFilter(_cfg(), ROOT, today=TODAY)
     assert uf.evaluate(_job(1, "HR Software Intern"), today=TODAY).status == "reject"
@@ -252,11 +261,13 @@ def test_daily_delivery_budget(monkeypatch):
     state = _state(*jobs)
     _run(_cfg(), state, [], candidates=jobs)
     phd = _cfg(eliminate={"grad_only": "phd"})
-    _run(phd, state, jobs)          # one run may overshoot by its own cap
-    n = len(st.outbox_items(state, "example"))
+    _run(phd, state, jobs)
+    assert len(st.outbox_items(state, "example")) == 2   # hard cap
     _run(phd, state, jobs)          # budget spent: nothing more today
-    assert len(st.outbox_items(state, "example")) == n
-    assert recheck.delivered_today(state, "example", TODAY) == n
+    assert len(st.outbox_items(state, "example")) == 2
+    assert recheck.delivered_today(state, "example", TODAY) == 2
+    held = [j for j in jobs if recheck.get(state, j.dedup_key, "example")]
+    assert len(held) == 3           # still queued (stale), not lost
     assert recheck.delivered_today(state, "example",
                                    TODAY + dt.timedelta(days=1)) == 0
 
@@ -286,3 +297,42 @@ def test_llm_rechecks_queue_behind_new_jobs_and_never_go_pending(monkeypatch):
     assert recheck.get(state, old.dedup_key, "example") == ("legacy", "")
     _run(cfg, state, [old, new])
     assert seen[-1] == [old.dedup_key]
+
+
+def test_llm_inferred_term_fingerprint_is_stable_across_runs(monkeypatch):
+    # The LLM's term lands on this run's Job; next run's fresh Job has none.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    cfg = _cfg(unknown_term_policy="llm",
+               llm={"enabled": True, "provider": "gemini",
+                    "tasks": ["term_inference"]})
+    job = _job(1)
+    job.terms, job.term_confidence = [], "unknown"
+    state = _state(job)
+    monkeypatch.setattr(main, "classify", lambda batch, *a: {
+        j.dedup_key: {"term": "Fall 2031"} for j in batch})
+    _run(cfg, state, [], candidates=[job])
+    assert recheck.get(state, job.dedup_key, "example")[0] == "llm"
+    fresh = _job(1)
+    fresh.terms, fresh.term_confidence = [], "unknown"
+    uf = UserFilter(cfg, ROOT, today=TODAY)
+    assert recheck.stale(state, uf, {fresh.dedup_key: fresh}, set()) == []
+
+
+def test_jd_capped_recheck_stays_queued(monkeypatch):
+    job = _job(1, "Software Engineer Intern (Masters)",
+               jobright_id="a" * 24)
+    state = _state(job)
+    _run(_cfg(), state, [], candidates=[job])
+
+    class CappedEnricher:
+        attempted: set = set()
+
+        def keeps(self, j):
+            return True
+
+    phd = _cfg(eliminate={"grad_only": "phd"})
+    main.process_user(phd, [], state, dry_run=False, now=NOW,
+                      enricher=CappedEnricher(),
+                      listed={job.dedup_key: job})
+    assert st.outbox_items(state, "example") == []
+    assert recheck.get(state, job.dedup_key, "example") == ("legacy", "")

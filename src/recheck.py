@@ -11,9 +11,10 @@ Stages, in pipeline order (filters.UserFilter.evaluate, then the LLM):
 - ``role``  include / exclude / strict keyword lists, whether this job comes
   from a strict source, and filters.ROLE_MATCH_VERSION (the matching code).
 - ``elim``  the resolved `eliminate:` knobs (grad_only, unpaid, clearance,
-  veteran, max age, countries).
-- ``term``  the term policy and which of this job's terms are wanted now (so
-  a rolling window only touches jobs whose season just entered it).
+  veteran, max age, countries) and filters.ELIM_MATCH_VERSION.
+- ``term``  the term policy and which of this job's terms (its source term,
+  else its cached LLM term) are wanted now, so a rolling window only touches
+  jobs whose season just entered it.
 - ``rules`` the rule conditions that apply to this job's terms, whether its
   company is a priority company, and whether it is on each company list the
   rules name (so adding one tracker company only touches that employer).
@@ -48,6 +49,10 @@ evaluation: an `llm` entry, or a `first_seen` later than the oldest
 `first_seen` in state (the first run seeds everything without evaluating it).
 Keys recorded under a content signature (state["content"]) are skipped: they
 were accepted and then delivered or suppressed as a content duplicate.
+Limits: the bootstrap runs once, so a legacy rejection not listed on that run
+(its source failed, or it rotated out) stays final if it reappears; and the
+evidence is per job, not per user, so a user added to an instance after a
+job's first_seen can get it via the bootstrap.
 """
 
 from __future__ import annotations
@@ -59,7 +64,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from . import state as st
-from .filters import ROLE_MATCH_VERSION
+from .filters import ELIM_MATCH_VERSION, ROLE_MATCH_VERSION
 from .models import Job
 
 if TYPE_CHECKING:
@@ -75,6 +80,7 @@ RECHECK_CAP = 50   # rechecked jobs entering the full pipeline per user per run
 # fingerprint stays stale, so nothing is lost).
 RECHECK_DAILY_DELIVERIES = 40
 LEGACY = "legacy"  # bootstrap stage marker; its empty fingerprint never matches
+RECHECK_REASON = "recheck"   # reasons marker on a re-evaluated rejection
 
 _ROLE_REASONS = ("excluded-keyword", "no-role-keyword", "no-strict-role-keyword")
 _TERM_REASONS = ("unknown-term", "term-not-wanted")
@@ -99,15 +105,15 @@ def _h(*parts: object) -> str:
     return hashlib.sha1(blob.encode()).hexdigest()[:8]
 
 
-def _role_fp(uf: UserFilter, job: Job) -> str:
+def _role_fp(uf: UserFilter, job: Job, state: dict) -> str:
     strict = bool(set(job.sources) & uf.strict_sources)
     return _h("role", ROLE_MATCH_VERSION, uf.include, uf.exclude,
               uf.strict_include if strict else [], strict)
 
 
-def _elim_fp(uf: UserFilter) -> str:
-    return _h("elim", uf.elim_unpaid, uf.elim_grad_only, uf.elim_phd_only,
-              uf.elim_active_clearance, uf.elim_veteran_only,
+def _elim_fp(uf: UserFilter, job: Job, state: dict) -> str:
+    return _h("elim", ELIM_MATCH_VERSION, uf.elim_unpaid, uf.elim_grad_only,
+              uf.elim_phd_only, uf.elim_active_clearance, uf.elim_veteran_only,
               uf.elim_max_age_days, sorted(uf.elim_countries or ()))
 
 
@@ -119,23 +125,32 @@ def _llm_configured(uf: UserFilter) -> bool:
     return bool(llm.get("enabled"))
 
 
-def _matched_terms(uf: UserFilter, job: Job) -> set[str]:
-    return set(job.terms) & uf.terms_wanted if job.terms else set(uf.terms_wanted)
-
-
-def _term_fp(uf: UserFilter, job: Job) -> str:
+def _terms(job: Job, state: dict) -> list[str]:
+    """The job's terms as the pipeline judged them. A source term, else the
+    cached LLM term: main._finalize writes that onto the run's Job, but the
+    next run's freshly fetched Job has no term, and both must hash alike."""
     if job.terms:
-        return _h("term", sorted(set(job.terms) & uf.terms_wanted))
+        return list(job.terms)
+    term = st.llm_cache_get(state, job.dedup_key).get("term")
+    return [term] if term else []
+
+
+def _term_fp(uf: UserFilter, job: Job, state: dict) -> str:
+    terms = _terms(job, state)
+    if terms:
+        return _h("term", sorted(set(terms) & uf.terms_wanted))
     return _h("term", "unknown", uf.unknown_term_policy, _llm_configured(uf),
               "term_inference" in uf.llm_tasks)
 
 
-def _rules_fp(uf: UserFilter, job: Job) -> str:
-    matched = _matched_terms(uf, job)
-    conds = [c for r in uf.rules
-             if not set(r.get("when", {}).get("term", []))
-             or set(r.get("when", {}).get("term", [])) & matched
-             for c in r.get("accept_if_any", [])]
+def _rules_fp(uf: UserFilter, job: Job, state: dict) -> str:
+    terms = _terms(job, state)
+    matched = set(terms) & uf.terms_wanted if terms else set(uf.terms_wanted)
+    conds = []
+    for rule in uf.rules:
+        when = set(rule.get("when", {}).get("term", []))
+        if not when or when & matched:
+            conds.extend(rule.get("accept_if_any", []))
     lists = sorted({c["company_in_file"] for c in conds if "company_in_file" in c})
     on_lists = [uf._company_list(p).match(job.company) for p in lists]
     return _h("rules", conds, uf.is_priority(job.company), lists, on_lists)
@@ -143,23 +158,18 @@ def _rules_fp(uf: UserFilter, job: Job) -> str:
 
 def _llm_fp(uf: UserFilter, job: Job, state: dict) -> str:
     llm = uf.cfg.get("llm") or {}
-    return _h("llm", _rules_fp(uf, job), _term_fp(uf, job),
+    return _h("llm", _rules_fp(uf, job, state), _term_fp(uf, job, state),
               llm.get("top_company_definition", ""),
               st.company_top_get(state, job.company, uf.name))
 
 
+_FINGERPRINTS = {"role": _role_fp, "elim": _elim_fp, "term": _term_fp,
+                 "rules": _rules_fp, "llm": _llm_fp}
+
+
 def fingerprint(uf: UserFilter, stage: str, job: Job, state: dict) -> str:
-    if stage == "role":
-        return _role_fp(uf, job)
-    if stage == "elim":
-        return _elim_fp(uf)
-    if stage == "term":
-        return _term_fp(uf, job)
-    if stage == "rules":
-        return _rules_fp(uf, job)
-    if stage == "llm":
-        return _llm_fp(uf, job, state)
-    return ""
+    fp = _FINGERPRINTS.get(stage)
+    return fp(uf, job, state) if fp else ""
 
 
 # ------------------------------------------------------------ state record
@@ -177,6 +187,12 @@ def record(state: dict, uf: UserFilter, job: Job, stage: str) -> None:
     fp = fingerprint(uf, stage, job, state)
     entry = state["jobs"].setdefault(job.dedup_key, {})
     entry.setdefault("rj", {})[uf.name] = f"{stage}:{fp}"
+
+
+def mark_stale(state: dict, key: str, user: str) -> None:
+    """Keep a recheck that was accepted but held back (JD cap, daily budget)
+    queued for the next run: a fingerprint that never matches."""
+    state["jobs"].setdefault(key, {}).setdefault("rj", {})[user] = f"{LEGACY}:"
 
 
 def clear(state: dict, key: str, user: str) -> None:

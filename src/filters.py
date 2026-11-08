@@ -328,36 +328,49 @@ class Verdict:
     needs: list[str] = field(default_factory=list)  # of: term, top_company, atlanta_metro
 
 
-# --- Role-filter keyword matching. Case-folded SUBSTRING matching on a
-# normalized title: every run of characters other than letters, digits, "+",
-# "#" and "&" becomes one space, and the title is padded with a space at each
-# end. A keyword is normalized the same way but keeps its own padding, so
+# --- Role-filter keyword matching. Case-folded SUBSTRING matching, against
+# two forms of the title joined by a NUL (so no match spans both):
+#   1. normalized: every run of characters other than letters, digits, "+",
+#      "#" and "&" becomes one space, padded with a space at each end;
+#   2. the raw case-folded title, exactly what older code matched.
+# A "plain" keyword (only letters, digits, spaces, "+#&") is matched against
+# form 1 with its own edge padding kept, so
 # - a bare keyword ("ml", "product manag") stays a plain substring test, and
 #   "data science" still does NOT match "Data Scientist";
 # - a keyword written with surrounding spaces (" ai ", " hr ") now matches at
 #   the start or end of a title and next to punctuation ("AI Intern",
 #   "Embodied AI", "(AI)", "AI/ML"), which the raw title never allowed.
+# A keyword with any other character (".net", "full-stack", "r&d" is plain)
+# can only ever match form 2, i.e. behaves exactly as before.
 # Bump ROLE_MATCH_VERSION whenever this matching changes: it is part of the
 # role stage's recheck fingerprint, so still-listed jobs the old matching
 # rejected get re-evaluated (src/recheck.py).
 ROLE_MATCH_VERSION = 2
+# Same contract for the elimination patterns (grad-only, unpaid, clearance,
+# veteran regexes below): bump it with a pattern fix so still-listed jobs the
+# old patterns eliminated are rechecked.
+ELIM_MATCH_VERSION = 1
 _KW_SPLIT_RE = re.compile(r"[^0-9a-z+#&]+")
+_KW_PLAIN_RE = re.compile(r"[0-9a-z+#& ]+")
 
 
 def role_text(title: str) -> str:
     """The form of a title that role keywords are matched against."""
-    return " " + _KW_SPLIT_RE.sub(" ", title.casefold()).strip() + " "
+    folded = title.casefold()
+    return (" " + _KW_SPLIT_RE.sub(" ", folded).strip() + " \x00"
+            + folded.replace("\x00", ""))
 
 
 def role_keyword(kw: str) -> str:
-    """A role keyword normalized like role_text, keeping its edge padding."""
+    """A role keyword in the form role_text matches: a plain keyword with
+    whitespace runs collapsed (edge padding kept as one space); any other
+    keyword case-folded and otherwise untouched."""
     folded = kw.casefold()
-    core = _KW_SPLIT_RE.sub(" ", folded).strip()
-    if not core:
+    if not _KW_PLAIN_RE.fullmatch(folded) or not folded.strip():
         return folded
-    lead = " " if folded[:1].isspace() or _KW_SPLIT_RE.match(folded[:1]) else ""
-    tail = " " if folded[-1:].isspace() or _KW_SPLIT_RE.match(folded[-1:]) else ""
-    return lead + core + tail
+    lead = " " if folded[0] == " " else ""
+    tail = " " if folded[-1] == " " else ""
+    return lead + " ".join(folded.split()) + tail
 
 
 def _accept(*reasons: str) -> Verdict:

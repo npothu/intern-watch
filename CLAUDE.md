@@ -60,7 +60,9 @@ priority email), at most `recheck.RECHECK_CAP` re-runs per run and
 `RECHECK_DAILY_DELIVERIES` deliveries per day, behind new jobs for the LLM
 cap. Jobs no longer listed, delivered, or `seeded` are never
 rechecked, and nothing is ever un-delivered. A matching-code change must bump
-its stage's version (e.g. `filters.ROLE_MATCH_VERSION`) to recheck.
+its stage's version (`filters.ROLE_MATCH_VERSION`, `ELIM_MATCH_VERSION`) to
+recheck. An instant Discord webhook, if configured, still sends recheck
+accepts right away (only the priority email is suppressed).
 
 ## Sources (`sources.yaml`)
 
