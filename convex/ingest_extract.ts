@@ -444,13 +444,11 @@ function companyFromAtPhrase(text: string): string {
 //   3. unknown.
 // When in doubt the JD rules return unknown: in the watcher a wrong JD term
 // is a permanent rejection, unknown only defers to the LLM.
-// JD clauses must be about the role or its dates; clauses about graduation,
-// enrollment, returning to school, fiscal years, deadlines, eligibility,
-// recruiting, offers and past-tense history are skipped; a JD term that has
-// already started by the anchor is a past cohort; an explicit JD term its
-// placement dates contradict, or a start clause with several months, is
-// unknown; a JD year must be four digits or apostrophe'd; lowercase "may" is a
-// verb.
+// Only clauses about the placement (internship noun or a start-date / dates /
+// duration label) produce a JD term, and the consistency gate (jdConsistent)
+// rejects any answer another temporal mention in the JD disagrees with. A JD
+// term already started by the anchor is past; a JD year must be four digits
+// or apostrophe'd; lowercase "may" is a verb.
 
 /** How a term was found. Stored rows may also carry "manual" (match_overrides.ts). */
 export type TermConfidence = "explicit" | "inferred" | "unknown";
@@ -494,24 +492,41 @@ const JD_SEASON_NOUN_RE = new RegExp(
   "i",
 );
 const JD_SEASON_NOUN_ALL_RE = new RegExp(JD_SEASON_NOUN_RE.source, "gi");
-const JD_SKIP_RE =
-  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)|enroll|fiscal|accepting applications|applications? (?:are |will be )?(?:accepted|reviewed)|application (?:window|period)|apply (?:before|between|from|until)|benefit|interview|onboarding|orientation|rising|as of|continu\w* (?:their |your |his |her )?(?:studies|education|degree)|eligib|full[- ]time (?:role|position|employment|offer|opportunit|hire)|return offer|offers? (?:will|are|may|is)|extension|recruit|reviewing applications|rolling basis|\b(?:was|were|launched|built|shipped|ran|hosted|joined)\b/i;
+// Clauses whose dates are understood and never the placement (graduation,
+// degree completion, deadlines, posting dates): ignored, even by the gate.
+const JD_HARD_SKIP_RE =
+  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
+// Clauses whose dates are not the placement but may disagree with it: they
+// never produce a term, but the consistency gate still reads them.
+const JD_SOFT_SKIP_RE =
+  /enroll|fiscal|accepting applications|applications? (?:are |will be )?(?:accepted|reviewed)|application (?:window|period)|apply (?:before|between|from|until)|benefit|interview|onboarding|orientation|rising|as of|continu\w* (?:their |your |his |her )?(?:studies|education|degree)|eligib|full[- ]time|permanent|new grad|return offer|offers? (?:will|are|may|is)|extension|recruit|reviewing applications|rolling basis|\b(?:was|were|launched|built|shipped|ran|hosted|joined|took place)\b/i;
 // Every month name in a clause: several start options -> unknown.
 const JD_MONTH_WORD_RE = new RegExp(`\\b(${MONTH_ALT})\\b`, "gi");
-// "6-month co-op": a start date alone cannot say which later terms it spans.
-const JD_LONG_DURATION_RE = /\b(?:[5-9]|1[0-2]|five|six|seven|eight|nine|ten|eleven|twelve)[\s-]*months?\b/i;
 const JD_MONTH_YEAR_ALL_RE = new RegExp(JD_MONTH_YEAR_RE.source, "gi");
+// Yearless season words, for the gate. "fall" as a verb is not a season.
+const JD_SEASON_WORD_RE = new RegExp(
+  `\\b(${SEASON_ALT})\\b(?!\\s+(?:under|within|into|behind|short|through|off|apart|outside|in love)\\b)`, "gi");
+// A placement longer than one term: a single-term answer needs a stated span.
+const JD_LONG_DURATION_RE =
+  /\b(?:(?:[5-9]|1[0-2]|five|six|seven|eight|nine|ten|eleven|twelve)[\s-]*months?|(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|fifty[\w-]*)[\s-]*weeks?|half[\s-]+a[\s-]+year|(?:two|2|multi)[\s-]*(?:semesters?|terms))\b/i;
 // A month range counts only when the clause says it is the placement's span.
 const JD_SPAN_RE = /\b(?:runs?|running|from|starts?|starting|begins?|beginning|duration|dates?|lasts?|between|join)\b/i;
-// Yearless season evidence is ambiguous when a JD lists seasons or runs year-round.
-const JD_SEASON_LIST_RE = new RegExp(`\\b(?:${SEASON_ALT})\\s*(?:,|/|&|\\band\\b|\\bor\\b)\\s*(?:${SEASON_ALT})\\b`, "i");
 const JD_YEAR_ROUND_RE = /year[\s-]round|all year|throughout the year|multiple (?:terms|seasons)|any (?:term|season)/i;
 // Months where a yearless "<season> internship" could mean this year's or next year's (see normalize.py).
 const SEASON_AMBIGUOUS_MONTHS: Record<string, number[]> = {
   Spring: [12, 1, 2, 3, 4], Summer: [4, 5, 6, 7, 8], Fall: [7, 8, 9, 10, 11], Winter: [11, 12, 1, 2],
 };
-// A JD clause counts only when it is about the role or its dates.
-const JD_CONTEXT_RE = /intern|co-?op|program|placement|position|\brole\b|cohort|\bstart|\bbegin|commenc|duration|\bdates?\b/i;
+// Months a term plausibly covers, as [year offset, month], for the gate.
+const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const TERM_COVER: Record<string, [number, number][]> = {
+  Spring: range(1, 4).map((m) => [0, m]),
+  Summer: range(4, 9).map((m) => [0, m]),
+  Fall: range(8, 12).map((m) => [0, m]),
+  Winter: [[0, 12], [1, 1], [1, 2]],
+};
+// A clause can produce a term only when its subject is the placement.
+const JD_CONTEXT_RE =
+  /\b(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\b|\bstart date\b|\b(?:dates?|duration)\s*:/i;
 // Same set src/normalize.py _ascii_space folds to " " (newlines kept for clause splitting).
 const SPACE_RE = /[\t\v\f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff\x1c-\x1f\x85]/g;
 const CLAUSE_SPLIT_RE = /(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+/;
@@ -587,8 +602,13 @@ function rangeSeasons(m1: number, y1: number, m2: number, y2: number): string[] 
   return out;
 }
 
-function jdClauses(jd: string): string[] {
-  return jd.split(CLAUSE_SPLIT_RE).filter((c) => c.trim() && JD_CONTEXT_RE.test(c) && !JD_SKIP_RE.test(c));
+function splitClauses(jd: string): string[] {
+  return jd.split(CLAUSE_SPLIT_RE).filter((c) => c.trim());
+}
+
+/** Clauses that may produce a term. */
+function jdClauses(all: string[]): string[] {
+  return all.filter((c) => JD_CONTEXT_RE.test(c) && !JD_HARD_SKIP_RE.test(c) && !JD_SOFT_SKIP_RE.test(c));
 }
 
 /** False when the earliest term has already started by the anchor (past cohort, or under way). */
@@ -615,12 +635,11 @@ function startTerm(clause: string, anchor: Date): string | null | typeof CONFLIC
 }
 
 /**
- * Term(s) from dates that describe the placement: start statements and spans.
- * Past cohorts are dropped first; every remaining piece of evidence must agree
- * (start statements win, each span must contain the start's term), else
- * unknown. A start date alone on a 5+ month placement is unknown too.
+ * [terms, fromSpan] from dates that describe the placement: start statements
+ * and spans. Every piece of evidence must agree (start statements win, each
+ * span must contain the start's term), else unknown.
  */
-function jdDated(clauses: string[], anchor: Date): string[] {
+function jdDated(clauses: string[], anchor: Date): [string[], boolean] {
   const starts = new Set<string>();
   const spans: string[][] = [];
   for (const c of clauses) {
@@ -638,24 +657,23 @@ function jdDated(clauses: string[], anchor: Date): string[] {
     }
     if (JD_START_RE.test(c)) {
       const term = startTerm(c, anchor);
-      if (term === CONFLICT) return [];
+      if (term === CONFLICT) return [[], false];
       if (term) starts.add(term);
     }
   }
   const same = (a: string[], b: string[]) => a.length === b.length && a.every((t, i) => t === b[i]);
-  if (starts.size > 1 || spans.some((s) => !same(s, spans[0]))) return [];
-  if (starts.size) {
+  if (starts.size > 1 || spans.some((s) => !same(s, spans[0]))) return [[], false];
+  if (spans.length) {
     const [start] = starts;
-    if (spans.length) return spans[0].includes(start) ? spans[0] : [];
-    if (clauses.some((c) => JD_LONG_DURATION_RE.test(c))) return [];
-    return [start];
+    if (start && !spans[0].includes(start)) return [[], false];
+    return [spans[0], true];
   }
-  return spans.length ? spans[0] : [];
+  return [[...starts], false];
 }
 
-/** Yearless "<season> internship", unless seasons are listed, it runs year-round, or the year is a coin flip. */
+/** Yearless "<season> internship", unless the program runs year-round or the year is a coin flip. */
 function jdSeasonOnly(clauses: string[], anchor: Date): string[] {
-  if (clauses.some((c) => JD_SEASON_LIST_RE.test(c) || JD_YEAR_ROUND_RE.test(c))) return [];
+  if (clauses.some((c) => JD_YEAR_ROUND_RE.test(c))) return [];
   const seasons = new Set<string>();
   for (const c of clauses) {
     for (const m of c.matchAll(JD_SEASON_NOUN_ALL_RE)) seasons.add(SEASON_NAMES[m[1].toLowerCase()]);
@@ -666,9 +684,37 @@ function jdSeasonOnly(clauses: string[], anchor: Date): string[] {
   return [`${season} ${nextOccurrence(season, anchor)}`];
 }
 
-function jdInferred(clauses: string[], anchor: Date): string[] {
-  const dated = jdDated(clauses, anchor);
-  return dated.length ? dated : jdSeasonOnly(clauses, anchor);
+/**
+ * The consistency gate (see normalize.py _jd_consistent): a JD answer stands
+ * only if every other temporal mention outside graduation/deadline clauses
+ * fits inside it, and a placement longer than one term came from a span.
+ */
+function jdConsistent(terms: string[], gate: string[], fromSpan: boolean): boolean {
+  const parsed = terms.map((t) => /^(Spring|Summer|Fall|Winter) (\d{4})$/.exec(t)).filter((m) => m !== null);
+  const cover = new Set<string>();
+  const months = new Set<number>();
+  const seasons = new Set<string>();
+  for (const m of parsed) {
+    seasons.add(m[1]);
+    for (const [dy, month] of TERM_COVER[m[1]]) {
+      cover.add(`${Number(m[2]) + dy}-${month}`);
+      months.add(month);
+    }
+  }
+  if (terms.length === 1 && !fromSpan && gate.some((c) => JD_LONG_DURATION_RE.test(c))) return false;
+  for (const c of gate) {
+    if (explicitTerms(c, JD_EXPLICIT_RE).some((t) => !terms.includes(t))) return false;
+    for (const m of c.matchAll(JD_MONTH_YEAR_ALL_RE)) {
+      if (m[1] !== "may" && !cover.has(`${2000 + Number(m[2])}-${monthNum(m[1])}`)) return false;
+    }
+    for (const m of c.matchAll(JD_MONTH_WORD_RE)) {
+      if (m[1] !== "may" && !months.has(monthNum(m[1]))) return false;
+    }
+    for (const m of c.matchAll(JD_SEASON_WORD_RE)) {
+      if (!seasons.has(SEASON_NAMES[m[1].toLowerCase()])) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -689,31 +735,26 @@ export function inferTermDetailed(input: {
   const anchor = new Date(`${day.slice(0, 10)}T00:00:00Z`);
   const title = (input.title ?? "").replace(SPACE_RE, " ");
   const url = (input.url ?? "").replace(SPACE_RE, " ");
-  let clauses = input.jd ? jdClauses(input.jd.replace(SPACE_RE, " ")) : [];
-  let jdExplicitTerms = jdExplicit(clauses, anchor);
-  if (jdExplicitTerms.length) {
-    // An explicit JD term its own placement dates contradict is doubt: the JD contributes nothing.
-    const dated = jdDated(clauses, anchor);
-    if (dated.length && !dated.some((t) => jdExplicitTerms.includes(t))) {
-      jdExplicitTerms = [];
-      clauses = [];
-    }
-  }
+  const all = input.jd ? splitClauses(input.jd.replace(SPACE_RE, " ")) : [];
+  const gate = all.filter((c) => !JD_HARD_SKIP_RE.test(c));
+  const clauses = jdClauses(all);
   const done = (terms: string[], confidence: TermConfidence, source: TermInference["source"]): TermInference => {
     const ordered = orderedTerms(terms);
     return { terms: ordered, term: ordered[0] ?? "", confidence, source };
   };
+  let jdExplicitTerms = jdExplicit(clauses, anchor);
+  if (jdExplicitTerms.length && !jdConsistent(jdExplicitTerms, gate, false)) jdExplicitTerms = [];
   const explicit: [TermInference["source"], string[]][] = [
     ["title", explicitTerms(title)],
     ["url", explicitTerms(url)],
     ["jd", jdExplicitTerms],
   ];
   for (const [source, found] of explicit) if (found.length) return done(found, "explicit", source);
-  const inferred: [TermInference["source"], string[]][] = [
-    ["title", titleInferred(title, anchor)],
-    ["jd", jdInferred(clauses, anchor)],
-  ];
-  for (const [source, found] of inferred) if (found.length) return done(found, "inferred", source);
+  const titleFound = titleInferred(title, anchor);
+  if (titleFound.length) return done(titleFound, "inferred", "title");
+  const [dated, fromSpan] = jdDated(clauses, anchor);
+  const jdFound = dated.length ? dated : jdSeasonOnly(clauses, anchor);
+  if (jdFound.length && jdConsistent(jdFound, gate, fromSpan)) return done(jdFound, "inferred", "jd");
   return { terms: [], term: "", confidence: "unknown", source: null };
 }
 
