@@ -512,3 +512,57 @@ def test_jd_term_stage_verdicts():
     # the same term from title/source data keeps rejecting as term-not-wanted
     source = uf.evaluate(_job(1, term="Fall 2027"))
     assert (source.status, source.reasons) == ("reject", ["term-not-wanted"])
+
+
+def _two_user_run(monkeypatch, tmp_path, order):
+    """JD says Fall 2027; one user wants Summer 2027 (its LLM says Summer),
+    the other wants Fall 2027. Users run in `order`."""
+    job = _job(1, term=None)
+    job.term_confidence = "unknown"
+    job.description = "Join our Fall 2027 internship program in Atlanta."
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [job]
+
+    def cfg_for(name, term):
+        cfg = _user_cfg(name=name, terms=[term],
+                        rules=[{"when": {"term": [term]}, "accept_if_any": [{"always": True}]}])
+        cfg["unknown_term_policy"] = "llm"
+        cfg["llm"] = {"enabled": True, "provider": "gemini",
+                      "tasks": ["term_inference"], "max_jobs_per_run": 10}
+        return cfg
+
+    users = {"summer": cfg_for("summer", "Summer 2027"), "fall": cfg_for("fall", "Fall 2027")}
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": OkAdapter}, [users[n] for n in order])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main, "classify", lambda batch, *a: {
+        j.dedup_key: {"term": "Summer 2027"} for j in batch})
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    assert main.main(["--state-file", str(state_file)]) == 0
+    return st.load_state(state_file)
+
+
+def test_llm_term_replacing_a_jd_term_does_not_leak_to_other_users(monkeypatch, tmp_path):
+    # The summer user's LLM verdict must not overwrite the shared job's JD
+    # term for the fall user, whichever runs first.
+    for order in (("summer", "fall"), ("fall", "summer")):
+        state = _two_user_run(monkeypatch, tmp_path / "-".join(order), order)
+        assert st.was_notified(state, _key(1), "summer"), order
+        assert st.was_notified(state, _key(1), "fall"), order
+
+
+def test_url_slug_terms_are_source_data_not_accept_only():
+    job = _job(1, term=None, url="https://jobs.lever.co/acme/software-engineer-intern-fall-2027")
+    job.description = "Build backend services with the platform team in Austin."
+    assert main.infer_terms_from_jds([job], TODAY) == 1
+    assert (job.terms, job.terms_from_jd) == (["Fall 2027"], False)
+    jd = _job(2, term=None)
+    jd.description = "Join our Fall 2027 internship program."
+    main.infer_terms_from_jds([jd], TODAY)
+    assert (jd.terms, jd.terms_from_jd) == (["Fall 2027"], True)

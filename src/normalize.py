@@ -396,10 +396,10 @@ _JD_SEASON_NOUN_RE = re.compile(
 # degree completion, deadlines, posting dates. Ignored entirely, including
 # by the consistency gate below.
 _JD_HARD_SKIP_RE = re.compile(
-    # \b-anchored: "undergraduate", "postgraduate", "diplomacy" are not
-    # graduation; "returning to" needs a school-like object ("returning to
-    # the office" is not).
-    r"\bgraduat|class of|commencement|\bdiploma\b|"
+    # Anchored: "undergraduate", "postgraduate", "post-graduate",
+    # "diplomacy", "post-diploma" are not graduation; "returning to" needs a
+    # school-like object ("returning to the office" is not).
+    r"(?<![\w-])graduat|class of|commencement|(?<![\w-])diploma\b|"
     r"\breturn(?:ing)? to (?:school|campus|university|college|class(?:es)?)\b|"
     r"deadline|apply by|"
     r"applications? (?:close|due|open)|date posted|posted on|last updated|"
@@ -431,18 +431,29 @@ _JD_SEASON_WORD_RE = re.compile(
 # A placement longer than one term: a single-term answer cannot be trusted
 # unless it came from a stated span.
 _JD_LONG_DURATION_RE = re.compile(
-    r"\b(?:(?:[5-9]|1\d|2[0-4]|five|six|seven|eight|nine|ten|eleven|twelve|"
-    r"eighteen|twenty[\w-]*)\+?[\s-]*(?:calendar[\s-]+)?months?|"
-    r"(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|fifty[\w-]*)"
-    r"\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*"
-    r"(?:semesters?|terms))\b", _RX)
+    r"\b(?:(?:[5-9]|[1-9]\d|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"eighteen|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*)\+?[\s-]*"
+    r"(?:calendar[\s-]+)?months?|"
+    r"(?:2\d|[3-9]\d|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*|"
+    r"fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|"
+    r"(?:two|2|multi)[\s-]*(?:semesters?|terms)|"
+    r"(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|"
+    r"\d+[\s-]*years?)\b", _RX)
+# A duration that describes the applicant's history, not this posting:
+# "applicants with a previous 6-month internship are preferred".
+_JD_OTHER_DURATION_RE = re.compile(
+    r"\b(?:previous|prior|past|experience|completed|preferred)\b", _RX)
 # Placement evidence that keeps a hard-skipped clause in the gate: an
-# explicit season tied to an internship noun ("our Summer 2027 internship",
-# not "graduation date of Spring 2028"), a month range ("May 18 - Aug 7,
-# 2027"), or a season + internship noun ("spring co-op").
+# explicit season tied to an internship noun within four words, on either
+# side ("our Summer 2027 incoming software engineering internship", "the
+# internship for Summer 2027"; not "graduation date of Spring 2028"), a
+# month range ("May 18 - Aug 7, 2027"), or a season + internship noun
+# ("spring co-op").
+_JD_PLACEMENT_NOUN = (r"(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|"
+                      r"program(?:me)?s?)\b")
 _JD_PLACEMENT_EVIDENCE_RE = re.compile(
-    rf"(?:{_JD_EXPLICIT_RE.pattern})\W+(?:\w+\W+){{0,2}}?"
-    r"(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\b|"
+    rf"(?:{_JD_EXPLICIT_RE.pattern})\W+(?:\w+\W+){{0,4}}?{_JD_PLACEMENT_NOUN}|"
+    rf"\b{_JD_PLACEMENT_NOUN}\W+(?:\w+\W+){{0,4}}?(?:{_JD_EXPLICIT_RE.pattern})|"
     rf"(?:{_JD_RANGE_RE.pattern})|(?:{_JD_SEASON_NOUN_RE.pattern})", _RX)
 # A month range counts only when the clause says it is the placement's span:
 # "the internship runs May-August 2027", "co-op dates: Jan-Jun 2027".
@@ -582,6 +593,10 @@ def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
     return [t for t in found if _not_past([t], anchor)]
 
 
+# Start months that fall between seasons (see _start_term).
+_BETWEEN_SEASONS = {4, 12}
+
+
 class _Conflict(Exception):
     """JD date evidence disagrees with itself: the answer is unknown."""
 
@@ -594,9 +609,12 @@ def _start_term(clause: str, anchor: dt.date) -> str | None:
     if not dated:
         return None
     months = [m for m in _JD_MONTH_WORD_RE.finditer(clause) if m.group(1) != "may"]
+    start_months = {_MONTHS[m.group(1).lower()[:3]] for m in dated}
     terms = {f"{_month_to_season(_MONTHS[m.group(1).lower()[:3]])} 20{m.group(2)}"
              for m in dated}
-    if len(months) > len(dated) or len(terms) > 1:
+    # April and December starts sit between seasons (Spring/Summer,
+    # Fall/Winter/Spring): a coin flip, so unknown.
+    if len(months) > len(dated) or len(terms) > 1 or start_months & _BETWEEN_SEASONS:
         raise _Conflict
     (term,) = terms
     return term if _not_past([term], anchor) else None
@@ -618,6 +636,8 @@ def _jd_dated(clauses: list[str], anchor: dt.date) -> tuple[list[str], bool]:
                 y2 = 2000 + int(r.group(4))
                 y1 = (2000 + int(r.group(2)) if r.group(2)
                       else y2 if m1 <= m2 else y2 - 1)
+                if m1 in _BETWEEN_SEASONS:
+                    raise _Conflict   # "December 1 - February 26": winter or spring?
                 if (y1, m1) <= (y2, m2):
                     span = _ordered(_range_seasons(m1, y1, m2, y2))
                     if _not_past(span, anchor):
@@ -672,7 +692,8 @@ def _jd_consistent(terms: list[str], gate: list[str], placement: list[str],
     # A long duration in any placement clause is doubt, even beside a
     # one-term span ("this co-op is 12 months" + "May 18 - Aug 7"); only a
     # stated span covering several terms can account for it.
-    if any(_JD_LONG_DURATION_RE.search(c) for c in placement) and not (
+    if any(_JD_LONG_DURATION_RE.search(c) and not _JD_OTHER_DURATION_RE.search(c)
+           for c in placement) and not (
             from_span and len(terms) > 1):
         return False
     for c in gate:

@@ -151,7 +151,9 @@ def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
         got = infer_term(job.title, job.url, job.description, today)
         if got.terms:
             job.terms, job.term_confidence = got.terms, got.confidence
-            job.terms_from_jd = True
+            # Only a term read from the JD body is accept-only; one found
+            # in the URL slug is source data, like a title term.
+            job.terms_from_jd = got.source == "jd"
             resolved += 1
             log.info("term from %s for %s: %s (%s)", got.source,
                      job.dedup_key, ", ".join(got.terms), got.confidence)
@@ -405,15 +407,23 @@ def _backfill_apply_urls(state: dict, resolver,
     return resolved
 
 
-def _finalize(uf: UserFilter, job: Job, facts: dict) -> Verdict:
-    """Re-run the rule engine with LLM facts. Writes an LLM-supplied term onto
-    the job first (term is objective and shared across users). It replaces a
-    JD-derived term too: that term only reached the LLM because it was not
-    wanted, and the LLM read the same JD plus the title."""
-    if facts.get("term") and (not job.terms or job.terms_from_jd):
+def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
+    """Re-run the rule engine with LLM facts; returns the verdict and the Job
+    it judged (what the caller should deliver).
+
+    An LLM-supplied term for a job with NO term is written onto the shared
+    job (term is objective and shared across users). One that replaces a
+    JD-derived term is applied to a per-user copy instead: that JD term only
+    reached the LLM because THIS user did not want it, and another user who
+    does want it must still be able to accept on it, whatever order users
+    run in."""
+    if facts.get("term") and job.terms_from_jd:
+        job = job.model_copy(update={"terms": [facts["term"]],
+                                     "term_confidence": "inferred",
+                                     "terms_from_jd": False})
+    elif facts.get("term") and not job.terms:
         job.terms, job.term_confidence = [facts["term"]], "inferred"
-        job.terms_from_jd = False
-    return uf.evaluate(job, llm_facts=facts)
+    return uf.evaluate(job, llm_facts=facts), job
 
 
 def _cache_covers(needs: list[str], cached: dict) -> bool:
@@ -560,9 +570,9 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         else:  # ambiguous
             cached = _cached_facts(state, job, name)
             if _cache_covers(verdict.needs, cached):
-                final = _finalize(uf, job, cached)
+                final, judged = _finalize(uf, job, cached)
                 if final.status == "accept":
-                    accepted.append((job, final.reasons))
+                    accepted.append((judged, final.reasons))
                 st.clear_pending(state, job.dedup_key, name)
             else:
                 llm_queue.append(job)
@@ -609,9 +619,9 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                 continue
             st.llm_cache_put(state, job.dedup_key, facts)
             merged_facts = _cached_facts(state, job, name)
-            final = _finalize(uf, job, merged_facts)
+            final, judged = _finalize(uf, job, merged_facts)
             if final.status == "accept":
-                accepted.append((job, final.reasons))
+                accepted.append((judged, final.reasons))
             st.clear_pending(state, job.dedup_key, name)
         for job in deferred:
             st.set_pending(state, job.dedup_key, name)
@@ -1047,7 +1057,7 @@ def _explain_user(uf: UserFilter, job: Job, state: dict) -> list[str]:
     final = verdict
     if verdict.status == "ambiguous":
         if _cache_covers(verdict.needs, cached):
-            final = _finalize(uf, job, cached)
+            final, _ = _finalize(uf, job, cached)
             lines.append(f"final (with cached facts): {final.status} "
                          f"({', '.join(final.reasons) or '-'})")
         else:

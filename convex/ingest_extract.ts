@@ -495,7 +495,7 @@ const JD_SEASON_NOUN_ALL_RE = new RegExp(JD_SEASON_NOUN_RE.source, "gi");
 // Clauses whose dates are understood and never the placement (graduation,
 // degree completion, deadlines, posting dates): ignored, even by the gate.
 const JD_HARD_SKIP_RE =
-  /\bgraduat|class of|commencement|\bdiploma\b|\breturn(?:ing)? to (?:school|campus|university|college|class(?:es)?)\b|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
+  /(?<![\w-])graduat|class of|commencement|(?<![\w-])diploma\b|\breturn(?:ing)? to (?:school|campus|university|college|class(?:es)?)\b|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
 // Clauses whose dates are not the placement but may disagree with it: they
 // never produce a term, but the consistency gate still reads them.
 const JD_SOFT_SKIP_RE =
@@ -508,10 +508,13 @@ const JD_SEASON_WORD_RE = new RegExp(
   `\\b(${SEASON_ALT})\\b(?!\\s+(?:under|within|into|behind|short|through|off|apart|outside|in love)\\b)`, "gi");
 // A placement longer than one term: a single-term answer needs a stated span.
 const JD_LONG_DURATION_RE =
-  /\b(?:(?:[5-9]|1\d|2[0-4]|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\w-]*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-5]\d|twenty[\w-]*|thirty[\w-]*|forty[\w-]*|fifty[\w-]*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms))\b/i;
+  /\b(?:(?:[5-9]|[1-9]\d|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-9]\d|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*|fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms)|(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|\d+[\s-]*years?)\b/i;
+// A duration about the applicant's history, not this posting.
+const JD_OTHER_DURATION_RE = /\b(?:previous|prior|past|experience|completed|preferred)\b/i;
 // Placement evidence that keeps a hard-skipped clause in the gate (see normalize.py).
+const JD_PLACEMENT_NOUN = "(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\\b";
 const JD_PLACEMENT_EVIDENCE_RE = new RegExp(
-  `(?:${JD_EXPLICIT_RE.source})\\W+(?:\\w+\\W+){0,2}?(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\\b|(?:${JD_RANGE_RE.source})|(?:${JD_SEASON_NOUN_RE.source})`,
+  `(?:${JD_EXPLICIT_RE.source})\\W+(?:\\w+\\W+){0,4}?${JD_PLACEMENT_NOUN}|\\b${JD_PLACEMENT_NOUN}\\W+(?:\\w+\\W+){0,4}?(?:${JD_EXPLICIT_RE.source})|(?:${JD_RANGE_RE.source})|(?:${JD_SEASON_NOUN_RE.source})`,
   "i",
 );
 // A month range counts only when the clause says it is the placement's span.
@@ -627,6 +630,8 @@ function jdExplicit(clauses: string[], anchor: Date): string[] {
 }
 
 const CONFLICT = Symbol("conflict");
+// Start months between seasons (Spring/Summer, Fall/Winter/Spring): a coin flip.
+const BETWEEN_SEASONS = new Set([4, 12]);
 
 /** The one start term a start clause names; null when none (or past); CONFLICT when it offers several months. */
 function startTerm(clause: string, anchor: Date): string | null | typeof CONFLICT {
@@ -634,7 +639,9 @@ function startTerm(clause: string, anchor: Date): string | null | typeof CONFLIC
   if (!dated.length) return null;
   const months = [...clause.matchAll(JD_MONTH_WORD_RE)].filter((m) => m[1] !== "may");
   const terms = new Set(dated.map((m) => `${monthToSeason(monthNum(m[1]))} 20${m[2]}`));
-  if (months.length > dated.length || terms.size > 1) return CONFLICT;
+  if (months.length > dated.length || terms.size > 1 || dated.some((m) => BETWEEN_SEASONS.has(monthNum(m[1])))) {
+    return CONFLICT;
+  }
   const [term] = terms;
   return notPast([term], anchor) ? term : null;
 }
@@ -654,6 +661,7 @@ function jdDated(clauses: string[], anchor: Date): [string[], boolean] {
       const m2 = monthNum(r[3]);
       const y2 = 2000 + Number(r[4]);
       const y1 = r[2] ? 2000 + Number(r[2]) : m1 <= m2 ? y2 : y2 - 1;
+      if (BETWEEN_SEASONS.has(m1)) return [[], false]; // "December 1 - February 26": winter or spring?
       if (y1 < y2 || (y1 === y2 && m1 <= m2)) {
         const span = orderedTerms(rangeSeasons(m1, y1, m2, y2));
         if (notPast(span, anchor)) spans.push(span);
@@ -708,7 +716,9 @@ function jdConsistent(terms: string[], gate: string[], placement: string[], from
   }
   // Duration only from placement clauses: "a 6-month application limit" is not the placement.
   // A long duration in any placement clause is doubt unless a stated span covers several terms.
-  if (placement.some((c) => JD_LONG_DURATION_RE.test(c)) && !(fromSpan && terms.length > 1)) return false;
+  if (placement.some((c) => JD_LONG_DURATION_RE.test(c) && !JD_OTHER_DURATION_RE.test(c)) && !(fromSpan && terms.length > 1)) {
+    return false;
+  }
   for (const c of gate) {
     if (explicitTerms(c, JD_EXPLICIT_RE).some((t) => !terms.includes(t))) return false;
     for (const m of c.matchAll(JD_MONTH_YEAR_ALL_RE)) {
