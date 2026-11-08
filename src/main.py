@@ -25,7 +25,7 @@ from . import state as st
 from .adapters import make_adapter
 from .dedupe import _merge_pair, dedupe
 from .envfile import load_dotenv
-from .filters import UserFilter, Verdict, load_users, role_text
+from .filters import UserFilter, Verdict, keyword_label, load_users, role_text
 from .llm import api_key_env_for, classify
 from .models import Job, SourceConfig
 from .normalize import (
@@ -240,8 +240,8 @@ def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
     the info page and re-run the rule engine; drop (logging the reason) any job
     that now eliminates on its fetched description. With `state`, a drop is
     recorded as an elim-stage rejection (src/recheck.py), and a RECHECK accept
-    whose JD could not be fetched only because the per-run cap ran out is
-    held back for a later run rather than delivered unchecked."""
+    whose JD could not be fetched (cap or failure) is held back for a later
+    run rather than delivered unchecked."""
     if enricher is None:
         return accepted
     kept: list[tuple[Job, list[str]]] = []
@@ -251,10 +251,11 @@ def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
         # earlier user this run -- per-user rules can differ).
         if job.jobright_id:
             enricher.keeps(job)
-            if (RECHECK_REASON in reasons and not job.description
-                    and job.dedup_key not in enricher.attempted):
-                log.info("user %s: recheck of %s waits for a JD fetch "
-                         "(cap reached)", uf.name, job.dedup_key)
+            if RECHECK_REASON in reasons and not job.description:
+                # Capped or failed: a recheck is never delivered unjudged on
+                # its JD (a new job is; it has no earlier verdict to keep).
+                log.info("user %s: recheck of %s waits for its JD",
+                         uf.name, job.dedup_key)
                 if state is not None:
                     recheck.mark_stale(state, job.dedup_key, uf.name)
                 continue
@@ -609,7 +610,14 @@ def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
     out: list[Job] = []
     refreshed = 0
     for job in stale:
-        verdict = uf.evaluate(job, today=today)
+        # Judge with the cached LLM term, as _finalize would, so a still-
+        # unwanted inferred term is re-fingerprinted here for free.
+        term = None if job.terms else st.llm_cache_get(
+            state, job.dedup_key).get("term")
+        probe = (job.model_copy(update={"terms": [term],
+                                        "term_confidence": "inferred"})
+                 if term else job)
+        verdict = uf.evaluate(probe, today=today)
         if verdict.status == "reject":
             recheck.record(state, uf, job, recheck.stage_of(verdict))
             refreshed += 1
@@ -633,7 +641,9 @@ def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
                  uf.name, len(stale), refreshed, len(selected),
                  len(out) - len(selected))
     enrich_jds(selected)
-    return selected
+    # A JD that could not be fetched leaves the job unjudged on its body:
+    # keep its stale record (retried next run) rather than deliver it.
+    return [job for job in selected if not (job.jd_url and not job.description)]
 
 
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
@@ -1158,18 +1168,18 @@ def _explain_user(uf: UserFilter, job: Job, state: dict) -> list[str]:
     title = role_text(job.title)
     fired_exclude = next((kw for kw in uf.exclude if kw in title), None)
     if fired_exclude:
-        lines.append(f"role filter: REJECT (excluded keyword '{fired_exclude}')")
+        lines.append(f"role filter: REJECT (excluded keyword '{keyword_label(fired_exclude)}')")
     elif uf.include and not any(kw in title for kw in uf.include):
         lines.append("role filter: REJECT (no include keyword matched title)")
     else:
         hit = next((kw for kw in uf.include if kw in title), None)
         lines.append("role filter: pass"
-                     + (f" (include keyword '{hit}')" if hit else ""))
+                     + (f" (include keyword '{keyword_label(hit)}')" if hit else ""))
         if uf.strict_sources and uf.strict_include \
                 and set(job.sources) & uf.strict_sources:
             shit = next((kw for kw in uf.strict_include if kw in title), None)
             if shit:
-                lines.append(f"strict-source filter: pass (keyword '{shit}')")
+                lines.append(f"strict-source filter: pass (keyword '{keyword_label(shit)}')")
             else:
                 lines.append("strict-source filter: REJECT "
                              "(no strict include keyword for strict source)")

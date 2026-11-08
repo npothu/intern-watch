@@ -17,10 +17,12 @@ one YAML (see the README's fork checklist).
    that mix in hardware/business roles) additionally need a
    `strict_include_keywords` hit (bare "engineer" doesn't count there).
    Substring gotcha: "data science" does NOT match "Data Scientist" — that's
-   why both keywords exist. Titles and keywords are normalized first
-   (`filters.role_text` / `role_keyword`: punctuation runs become one space,
-   the title is space-padded), so a keyword written with spaces (`" ai "`)
-   matches at the start/end of a title and next to punctuation.
+   why both keywords exist. The one exception (`filters.role_keyword`): a
+   keyword written with edge spaces (`" ai "`, `" hr "`) means word
+   boundaries, so it also matches at the start/end of a title and next to
+   punctuation ("AI Intern", "Embodied AI", "AI/ML"). Every other keyword
+   is a plain substring of the raw title, so "new grad" does not match
+   "New-Grad".
 2. **Eliminations**: country allowlist (unknown locations kept), unpaid,
    grad-only (MS/PhD-only), active-clearance-required (obtainable kept),
    veteran-only. Titles and (for ATS jobs) JD bodies, separate patterns.

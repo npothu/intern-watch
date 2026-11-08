@@ -330,18 +330,17 @@ class Verdict:
 
 # --- Role-filter keyword matching. Case-folded SUBSTRING matching, against
 # two forms of the title joined by a NUL (so no match spans both):
-#   1. normalized: every run of characters other than letters, digits, "+",
-#      "#" and "&" becomes one space, padded with a space at each end;
-#   2. the raw case-folded title, exactly what older code matched.
-# A "plain" keyword (only letters, digits, spaces, "+#&") is matched against
-# form 1 with its own edge padding kept, so
-# - a bare keyword ("ml", "product manag") stays a plain substring test, and
-#   "data science" still does NOT match "Data Scientist";
-# - a keyword written with surrounding spaces (" ai ", " hr ") now matches at
-#   the start or end of a title and next to punctuation ("AI Intern",
-#   "Embodied AI", "(AI)", "AI/ML"), which the raw title never allowed.
-# A keyword with any other character (".net", "full-stack", "r&d" is plain)
-# can only ever match form 2, i.e. behaves exactly as before.
+#   1. the raw case-folded title, exactly what older code matched;
+#   2. word-split: every run of characters other than letters, digits, "+",
+#      "#" and "&" becomes one _WB separator, with one at each end.
+# Almost every keyword is matched against form 1 only, i.e. as before:
+# "data science" does NOT match "Data Scientist", "new grad" does not match
+# "New-Grad", ".net" and "full-stack" are literal. Only a keyword written
+# with edge spaces (" ai ", " hr ") and otherwise plain (letters, digits,
+# spaces, "+#&") is rewritten into form 2's alphabet, where its spaces mean
+# word boundaries: it now matches at the start or end of a title and next to
+# punctuation ("AI Intern", "Embodied AI", "(AI)", "AI/ML"), which the raw
+# title never allowed.
 # Bump ROLE_MATCH_VERSION whenever this matching changes: it is part of the
 # role stage's recheck fingerprint, so still-listed jobs the old matching
 # rejected get re-evaluated (src/recheck.py).
@@ -350,27 +349,32 @@ ROLE_MATCH_VERSION = 2
 # veteran regexes below): bump it with a pattern fix so still-listed jobs the
 # old patterns eliminated are rechecked.
 ELIM_MATCH_VERSION = 1
+_WB = "\x01"   # word boundary in form 2; never occurs in a raw title
 _KW_SPLIT_RE = re.compile(r"[^0-9a-z+#&]+")
 _KW_PLAIN_RE = re.compile(r"[0-9a-z+#& ]+")
 
 
 def role_text(title: str) -> str:
     """The form of a title that role keywords are matched against."""
-    folded = title.casefold()
-    return (" " + _KW_SPLIT_RE.sub(" ", folded).strip() + " \x00"
-            + folded.replace("\x00", ""))
+    folded = title.casefold().replace("\x00", "").replace(_WB, "")
+    words = _KW_SPLIT_RE.sub(_WB, folded).strip(_WB)
+    return f"{folded}\x00{_WB}{words}{_WB}"
 
 
 def role_keyword(kw: str) -> str:
-    """A role keyword in the form role_text matches: a plain keyword with
-    whitespace runs collapsed (edge padding kept as one space); any other
-    keyword case-folded and otherwise untouched."""
+    """A role keyword in the form role_text matches (see above)."""
     folded = kw.casefold()
-    if not _KW_PLAIN_RE.fullmatch(folded) or not folded.strip():
+    padded = folded[:1] == " " or folded[-1:] == " "
+    if not padded or not folded.strip() or not _KW_PLAIN_RE.fullmatch(folded):
         return folded
-    lead = " " if folded[0] == " " else ""
-    tail = " " if folded[-1] == " " else ""
-    return lead + " ".join(folded.split()) + tail
+    lead = _WB if folded[0] == " " else ""
+    tail = _WB if folded[-1] == " " else ""
+    return lead + _WB.join(folded.split()) + tail
+
+
+def keyword_label(kw: str) -> str:
+    """A role keyword as the user wrote it (for reasons and --explain)."""
+    return kw.replace(_WB, " ")
 
 
 def _accept(*reasons: str) -> Verdict:
@@ -582,7 +586,7 @@ class UserFilter:
         title = role_text(job.title)
         for kw in self.exclude:
             if kw in title:
-                return _reject(f"excluded-keyword:{kw}")
+                return _reject(f"excluded-keyword:{keyword_label(kw)}")
         if self.include and not any(kw in title for kw in self.include):
             return _reject("no-role-keyword")
         if self.strict_sources and self.strict_include \

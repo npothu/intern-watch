@@ -41,18 +41,20 @@ existing way to re-judge) also changes the fingerprint, and the re-run then
 asks the LLM again. Re-judging every employer on any wording tweak would
 spend the LLM budget on employers the edit was never about.
 
-Bootstrap: rejections recorded before this code have no fingerprint. Once per
-user, every still-listed, undelivered, non-seeded job with evidence that it
-was evaluated is marked ``legacy:`` (a fingerprint that never matches), and
-the normal recheck path then works through them under the caps. Evidence of
-evaluation: an `llm` entry, or a `first_seen` later than the oldest
-`first_seen` in state (the first run seeds everything without evaluating it).
+Bootstrap: rejections recorded before this code have no fingerprint. Every
+run, each still-listed, undelivered, non-seeded job first seen on or before
+the user's bootstrap date (`_meta.recheck_bootstrap`) with no record and
+evidence that it was evaluated is marked ``legacy:`` (a fingerprint that
+never matches), and the normal recheck path then works through them under
+the caps. Evidence of
+evaluation: an `llm` entry, or a `first_seen` later than the seed day (the
+oldest `first_seen` when the bootstrap first ran, stored then: the first run
+seeds everything without evaluating it). An entry with no `first_seen` is
+skipped.
 Keys recorded under a content signature (state["content"]) are skipped: they
 were accepted and then delivered or suppressed as a content duplicate.
-Limits: the bootstrap runs once, so a legacy rejection not listed on that run
-(its source failed, or it rotated out) stays final if it reappears; and the
-evidence is per job, not per user, so a user added to an instance after a
-job's first_seen can get it via the bootstrap.
+Limit: the evidence is per job, not per user, so a user added to an instance
+after a job's first_seen can get it via the bootstrap.
 """
 
 from __future__ import annotations
@@ -93,10 +95,10 @@ def stage_of(verdict: Verdict, after_llm: bool = False) -> str:
         return "role"
     if reason.startswith("eliminated:"):
         return "elim"
+    if reason.startswith(_TERM_REASONS):
+        return "term"   # also an LLM-inferred term that is not wanted
     if after_llm:
         return "llm"
-    if reason.startswith(_TERM_REASONS):
-        return "term"
     return "rules"
 
 
@@ -230,31 +232,42 @@ def owned_keys(state: dict, user: str) -> set[str]:
 
 def bootstrap(state: dict, user: str, listed: dict[str, Job],
               skip: set[str], today: dt.date) -> int:
-    """One-time per user: mark still-listed legacy rejections for recheck.
-    Returns how many were marked (0 once done)."""
-    done = state["_meta"].setdefault("recheck_bootstrap", {})
-    if user in done:
-        return 0
+    """Mark still-listed legacy rejections (judged before this code) for
+    recheck. Runs every run, so a legacy rejection that was off its list on
+    the first run is still picked up when it comes back. Returns how many
+    were marked this run."""
+    boot = state["_meta"].setdefault("recheck_bootstrap", {})
+    rec = boot.get(user)
+    if not isinstance(rec, dict):
+        # The first run's seed day, fixed once: after pruning, the oldest
+        # first_seen in state is just an ordinary evaluated day.
+        dates = [d for e in state["jobs"].values() if (d := e.get("first_seen"))]
+        rec = boot[user] = {
+            "since": rec if isinstance(rec, str) else today.isoformat(),
+            "seed_day": min(dates, default="")}
+    since, seed_day = rec["since"], rec["seed_day"]
     jobs = state["jobs"]
-    oldest = min((e.get("first_seen", "") for e in jobs.values()), default="")
     owned = owned_keys(state, user)
     # Keys a content signature already carries were delivered or suppressed
     # as a content duplicate of a delivery: accepted, not rejected.
-    owned |= {k for rec in state.get("content", {}).get(user, {}).values()
-              for k in rec.get("keys", [])}
+    owned |= {k for sig in state.get("content", {}).get(user, {}).values()
+              for k in sig.get("keys", [])}
     n = 0
     for key in listed:
         entry = jobs.get(key)
         if (key in skip or entry is None or user in entry.get("rj", {})
                 or not _eligible(state, key, user, owned)):
             continue
-        if "llm" not in entry and entry.get("first_seen", "") <= oldest:
+        first = entry.get("first_seen")
+        if not first or first > since:
+            continue  # unknown age, or judged by this code (it records rj)
+        if "llm" not in entry and first <= seed_day:
             continue  # seeded by the first run, never evaluated
         entry.setdefault("rj", {})[user] = f"{LEGACY}:"
         n += 1
-    done[user] = today.isoformat()
-    log.info("user %s: recheck bootstrap marked %d still-listed legacy "
-             "rejection(s) for re-evaluation", user, n)
+    if n:
+        log.info("user %s: recheck bootstrap marked %d still-listed legacy "
+                 "rejection(s) for re-evaluation", user, n)
     return n
 
 

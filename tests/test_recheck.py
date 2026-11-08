@@ -90,6 +90,24 @@ def test_bare_keywords_stay_substrings():
     assert role_keyword("r&d") in role_text("R&D Software Intern")
 
 
+@pytest.mark.parametrize("kw,title", [
+    ("new grad", "New-Grad Software Engineer Intern"),
+    ("research engineer", "Research-Engineer Intern"),
+    ("electrical engineer", "Electrical-Engineer Intern"),
+    ("supply chain", "Supply-Chain Engineer Intern"),
+    ("back end", "Back-End Engineer Intern")])
+def test_unpadded_phrases_keep_raw_matching(kw, title):
+    # Only edge-spaced keywords get word-boundary matching; a plain phrase
+    # must not start matching hyphenated titles (exclude lists would widen).
+    assert role_keyword(kw) not in role_text(title)
+
+
+def test_exclude_reason_reads_as_written():
+    uf = UserFilter(_cfg(), ROOT, today=TODAY)
+    v = uf.evaluate(_job(1, "HR Software Intern"), today=TODAY)
+    assert v.reasons == ["excluded-keyword: hr "]
+
+
 def test_punctuated_keywords_keep_the_old_raw_match():
     # Only plain keywords are normalized; ".net" must not turn into " net"
     # and start matching "Network".
@@ -115,6 +133,8 @@ def test_stage_of_maps_reasons():
     assert recheck.stage_of(Verdict("reject", ["rules-not-met"])) == "rules"
     assert recheck.stage_of(Verdict("reject", ["rules-not-met"]), after_llm=True) == "llm"
     assert recheck.stage_of(Verdict("reject", ["eliminated:x"]), after_llm=True) == "elim"
+    assert recheck.stage_of(Verdict("reject", ["term-not-wanted"]),
+                            after_llm=True) == "term"
 
 
 def test_fingerprints_track_only_their_stage():
@@ -311,7 +331,7 @@ def test_llm_inferred_term_fingerprint_is_stable_across_runs(monkeypatch):
     monkeypatch.setattr(main, "classify", lambda batch, *a: {
         j.dedup_key: {"term": "Fall 2031"} for j in batch})
     _run(cfg, state, [], candidates=[job])
-    assert recheck.get(state, job.dedup_key, "example")[0] == "llm"
+    assert recheck.get(state, job.dedup_key, "example")[0] == "term"
     fresh = _job(1)
     fresh.terms, fresh.term_confidence = [], "unknown"
     uf = UserFilter(cfg, ROOT, today=TODAY)
@@ -336,3 +356,53 @@ def test_jd_capped_recheck_stays_queued(monkeypatch):
                       listed={job.dedup_key: job})
     assert st.outbox_items(state, "example") == []
     assert recheck.get(state, job.dedup_key, "example") == ("legacy", "")
+
+
+def test_failed_jd_fetch_holds_recheck(monkeypatch):
+    job = _job(1, "Software Engineer Intern (Masters)",
+               jobright_id="b" * 24)
+    state = _state(job)
+    _run(_cfg(), state, [], candidates=[job])
+
+    class FailingEnricher:
+        attempted = {job.dedup_key}       # tried, fetch raised
+
+        def keeps(self, j):
+            return True
+
+    main.process_user(_cfg(eliminate={"grad_only": "phd"}), [], state,
+                      dry_run=False, now=NOW, enricher=FailingEnricher(),
+                      listed={job.dedup_key: job})
+    assert st.outbox_items(state, "example") == []
+    assert recheck.get(state, job.dedup_key, "example") == ("legacy", "")
+
+
+def test_failed_greenhouse_jd_keeps_stale_record(monkeypatch):
+    job = _job(1, "Software Engineer Intern (Masters)",
+               jd_url="https://boards-api.example/jobs/1")
+    state = _state(job)
+    _run(_cfg(), state, [], candidates=[job])
+    before = recheck.get(state, job.dedup_key, "example")
+    monkeypatch.setattr(main, "enrich_jds", lambda jobs: 0)   # fetch failed
+    _run(_cfg(eliminate={"grad_only": "phd"}), state, [job])
+    assert st.outbox_items(state, "example") == []
+    assert recheck.get(state, job.dedup_key, "example") == before
+
+
+def test_bootstrap_keeps_marking_later_runs_and_fixes_seed_day():
+    a = _job(1, "Software Engineer Intern (Masters)")
+    b = _job(2, "Software Engineer Intern (Masters)")
+    state = _state(a, b)
+    state["jobs"]["shell"] = {"apply_url": "x"}           # no first_seen
+    assert recheck.bootstrap(state, "example", {a.dedup_key: a}, set(),
+                             TODAY) == 1
+    rec = state["_meta"]["recheck_bootstrap"]["example"]
+    assert rec["seed_day"] == (TODAY - dt.timedelta(days=60)).isoformat()
+    # b was off its list on the bootstrap run; it is marked when it returns
+    assert recheck.bootstrap(state, "example", {b.dedup_key: b}, set(),
+                             TODAY + dt.timedelta(days=1)) == 1
+    # a job first seen after the bootstrap date was judged by this code
+    c = _job(3, "Software Engineer Intern (Masters)")
+    st.touch(state, c.dedup_key, ["s"], TODAY + dt.timedelta(days=2))
+    assert recheck.bootstrap(state, "example", {c.dedup_key: c}, set(),
+                             TODAY + dt.timedelta(days=2)) == 0
