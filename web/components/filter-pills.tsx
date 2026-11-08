@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,6 +19,8 @@ export type PillOption = {
   key: string;
   label: string;
   count?: number;
+  /** Optional leading glyph (e.g. the palette swatches in Settings). */
+  icon?: ReactNode;
 };
 
 export function FilterPills({
@@ -53,6 +56,7 @@ export function FilterPills({
             className={cn(
               "cursor-pointer rounded-full border px-3 py-[5px] text-[13px] leading-none whitespace-nowrap transition-colors",
               "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+              o.icon !== undefined && "inline-flex items-center gap-1.5",
               active
                 ? "border-accent bg-accent font-medium text-accent-ink"
                 : empty
@@ -60,6 +64,7 @@ export function FilterPills({
                   : "border-line-2 bg-surface text-ink-2 hover:border-ink-2 hover:text-ink"
             )}
           >
+            {o.icon}
             {o.label}
             {o.count !== undefined && (
               <span
