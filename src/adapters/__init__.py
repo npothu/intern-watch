@@ -4,6 +4,7 @@ from .jobright_md import JobrightMdAdapter
 from .simplify_json import SimplifyJsonAdapter
 from .speedyapply_md import SpeedyApplyMdAdapter
 from .vanshb03_md import Vanshb03MdAdapter
+from .zshah_json import ZshahJsonAdapter
 
 REGISTRY: dict[str, type[Adapter]] = {
     "simplify_json": SimplifyJsonAdapter,
@@ -11,6 +12,7 @@ REGISTRY: dict[str, type[Adapter]] = {
     "vanshb03_md": Vanshb03MdAdapter,
     "speedyapply_md": SpeedyApplyMdAdapter,
     "ats_boards": AtsBoardsAdapter,
+    "zshah_json": ZshahJsonAdapter,
 }
 
 
