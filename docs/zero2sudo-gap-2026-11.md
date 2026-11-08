@@ -27,14 +27,21 @@ Every fix below targets the public employer and list data.
 
 Only company and ATS names appear here. No personal data is included.
 
+Workstream letters refer to the parallel scraping-input work started on
+2026-11-08: **A** Workday listing adapter; **B** SmartRecruiters, Oracle CX,
+Avature, Eightfold, Phenom and iCIMS listing adapters; **C** JD acquisition
+for those ATSes; **E** term inference from JD text; **F** closed-posting
+liveness probe; **G** manual-add → suggested ats-boards row, gap report and
+link intake.
+
 ## Headline
 
 | class | n | meaning |
 |---|---:|---|
-| **b-grad**: rejected as grad-only by a config that has since changed | **22** | Ingested, then eliminated under `grad_only: true`. The config moved to `grad_only: phd` on 2026-10-05. Rejections are final, so nothing re-evaluated them. |
+| **b-grad**: rejected as grad-only by a config that has since changed | **22** | Ingested, then eliminated under `grad_only: true`. The user later loosened it to `grad_only: phd`. Rejections are final, so nothing re-evaluated them. |
 | **b-role**: rejected by the role filter | 7 | 5 are a keyword-matching bug (`" ai "`). 2 follow the keyword lists as configured. |
 | **b-term**: rejected on term | 5 | 3 got LLM term = null and fell to `term-unresolved`. 2 carried a wrong explicit term from Simplify. |
-| **delivered**: not a miss | 7 | Delivered before the manual add. The manual add used another URL for the same posting, so the ledger did not link it to the match. |
+| **delivered**: not a miss (a class added to a-d) | 7 | Delivered before the manual add. The manual add used another URL for the same posting, so the ledger did not link it to the match. |
 | **c**: latency | 1 | Ingested and delivered the day after it was applied to. |
 | **a**: never ingested | 7 | The employer's own career site or a small board. No list carried the posting, and there is no ats-boards row. |
 | **d**: genuinely private/unlisted | 0 | Every link was a public posting. Three are now closed (404/410), so their original status cannot be checked. |
@@ -46,11 +53,10 @@ one config change.
 
 ### b-grad scale beyond these 49
 
-We replayed every live Simplify row first seen before 2026-10-05 that was
-never delivered. 266 were rejected as grad-only under the old config. **94 of
-those pass the current config.** 69 of the 94 are at priority employers (Waymo
-12, AMD 9, ByteDance 6, Marvell 6, TikTok 4, GE Vernova 4, Intel 3, BlackRock
-3, ...). 22 of the 94 have a delivered company+title sibling, so about 72 are
+We replayed every live Simplify row first seen before the config change that
+was never delivered. 266 were rejected as grad-only under the old config. **94 of
+those pass the current config.** 69 of the 94 are at the user's priority employers. The most affected are
+large tech, semiconductor and quant employers with Master's-eligible programs. 22 of the 94 have a delivered company+title sibling, so about 72 are
 true silent misses. Simplify rows are only one source, so this is a lower
 bound.
 
@@ -78,15 +84,15 @@ ATS is the host of the URL that was applied to.
 | OpenGov | Ashby | b-term | no term in title, LLM term null → `term-unresolved` | E |
 | TensorWave | Ashby | b-term | LLM term null; Simplify later labelled it "Summer 2026" | E |
 | Armadin | Ashby | b-term | the posting says Summer 2027, but Simplify's row says **Winter 2026** with the term stripped from the title → `term-not-wanted` | E (JD term should override a source's "explicit" term) |
-| Root Insurance | Rippling | b-term | Simplify said Winter 2026 → `term-not-wanted`; ingested the day after the apply | E |
-| Texas Instruments | Oracle CX | c | ingested (Simplify) and delivered the day after it was applied to from the zero2sudo link | this PR (`zshah-2027` lists TI's Oracle CX reqs) |
+| Root Insurance | Rippling | b-term (also c) | Simplify said Winter 2026 → `term-not-wanted`. It was also ingested the day after the apply, so it was late as well as rejected. Counted once, as b-term. | E |
+| Texas Instruments | Oracle CX | c | ingested (Simplify) and delivered the day after it was applied to from the zero2sudo link | partly this PR: zshah101 first listed a TI "Software Engineering Intern" Oracle CX req on the evening of the apply day, so it would at best have tied. B (Oracle CX listing) is the real fix. |
 | Khan Academy, Stripe, Muon Space, T-Mobile, Datadog, General Motors (x2) | Greenhouse / Workday / own site | delivered | `notified_for` holds the user (Datadog via a content-signature sibling key) | G (link manual adds to existing matches) |
 | Tenet3 | Greenhouse | a | no list carried it, no ats-boards row, posting now gone | G (suggested ats-boards row) |
 | Sephora | Eightfold (`join.sephora.com`) | a | own site only | B (Eightfold listing) |
 | IBM | Avature (`ibm.com/careers`) | a | own site only (the manual entry's title was the search page) | B (Avature listing) |
 | CNH | SuccessFactors (`join.cnh.com`) | a | own site only | none (no SuccessFactors adapter planned) |
 | Entergy | SuccessFactors (`jobs.entergy.com`) | a | own site only; the title would also fail the role filter (no keyword) | none |
-| L3Harris | Radancy front (`careers.l3harris.com`) | a | own site only, now 404. Other L3Harris postings do arrive via the lists (83 delivered). | A/B if the backing ATS is identified |
+| L3Harris | Radancy front (`careers.l3harris.com`) | a | own site only, now 404. Other L3Harris postings do arrive via the lists. | A/B if the backing ATS is identified |
 | Shopify | own site (`shopify.com/careers`) | a | own site only, now 410 | none |
 
 ### Counts per ATS (host applied to)
@@ -94,11 +100,11 @@ ATS is the host of the URL that was applied to.
 | ATS | n | classes |
 |---|---:|---|
 | Oracle CX (incl. a custom-domain front) | 12 | b-grad 10, b-role 1, c 1 |
-| Workday (incl. Radancy fronts) | 12 | b-grad 4, b-role 5, delivered 3 |
+| Workday (incl. BlackRock's Radancy front, whose reqs were ingested via Workday) | 12 | b-grad 4, b-role 5, delivered 3 |
 | Greenhouse (incl. EU, embeds, own-domain `gh_jid`) | 9 | b-grad 5, b-role 1, delivered 2, a 1 |
 | Ashby | 3 | b-term 3 |
 | SmartRecruiters | 2 | b-grad 2 |
-| other: own site (6), Phenom, Rippling, Workable, Stripe/Datadog own sites | 11 | a 6, b-term 2, b-grad 1, delivered 2 |
+| other: own site (6, incl. the L3Harris Radancy front), Phenom, Rippling, Workable, Stripe/Datadog own sites | 11 | a 6, b-term 2, b-grad 1, delivered 2 |
 
 Takeaway: **Oracle CX and Workday account for 24 of the 49**, and in every
 one of those 24 the job *was* ingested. More ATS coverage alone would
@@ -159,9 +165,9 @@ Also consider adding `autonomy` to `include_keywords`/`strict_include_keywords`
 
 ### Fix 3: config, not code
 
-- `data analytics`: decide whether analytics internships are wanted. 2 of the
-  49 (Veeam, Entergy) were rejected for lacking it.
-- `exclude_keywords: supply chain` blocks "Supply Chain AI Co-op". If wanted,
+- `data analytics`: decide whether analytics internships are wanted. Veeam
+  was rejected for lacking it, and Entergy (never ingested) would have been.
+- `supply chain` in the exclude list blocks "Supply Chain AI Co-op". If wanted,
   replace the bare exclude with a narrower one.
 
 ### Fix 4: canonical identity for Oracle CX and SmartRecruiters aliases (B/C)
@@ -198,8 +204,8 @@ This PR adds the `zshah-2027` (automated, open postings, direct ATS URLs) and
 `speedyapply-ai` lists. On 2026-11-08, 208 zshah rows and about 129 AI-list
 rows were in no other source, and the zshah rows were mostly Workday / Oracle
 CX / SmartRecruiters. In a dry run against the instance's state, the new
-sources added +689 new jobs, +57 priority alerts and +198 digest matches
-(deterministic pass only; no LLM key locally). Of the misses above, they
+sources added several hundred new jobs and roughly 200 matches
+(deterministic pass only, with no LLM key locally; exact numbers are in the PR). Of the misses above, they
 would have caught TI (latency). They also re-surface 12 previously rejected
 priority postings under a new URL key, which are then evaluated under today's
 config (see the PR body). They do not fix b-grad, b-role or b-term. Those

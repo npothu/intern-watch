@@ -66,8 +66,9 @@ sources:
     branch: main
     files: ["README.md"]
     # Renamed from 2026-SWE-College-Jobs (GitHub redirects); name kept for
-    # state continuity. README.md is the USA internship list; NEW_GRAD_*.md
-    # and INTERN_INTL.md are deliberately not subscribed.
+    # state continuity. README.md is the USA internship list. NEW_GRAD_*.md
+    # (not internships) and INTERN_INTL.md (non-US; a typical
+    # countries_allowed drops it) are deliberately not subscribed.
 
   - name: speedyapply-ai
     adapter: speedyapply_md
@@ -75,7 +76,9 @@ sources:
     branch: main
     files: ["README.md"]
     # AI/ML + data science USA internships, same table format as the SWE
-    # list. On 2026-11-08 ~16% of its rows were in no other source.
+    # list; NEW_GRAD_*.md / INTERN_INTL.md skipped as above. Added because a
+    # meaningful share of its rows (dedup key / canonical URL) had never been
+    # ingested from any other source.
 
   - name: zshah-2027
     adapter: zshah_json
@@ -85,8 +88,9 @@ sources:
     # MIT-licensed, auto-scraped from employer ATSes, open postings only.
     # The JSON is the full list (the README renders a truncated subset).
     # Strong on Workday / Oracle CX / SmartRecruiters, which the curated lists
-    # and ats-boards miss: on 2026-11-08, 208 of its 1259 rows were in no
-    # other source (125 Workday, 40 Oracle, 28 SmartRecruiters).
+    # and ats-boards miss: ~1 in 6 of its rows had never been ingested (by
+    # dedup key / canonical URL), mostly from those three ATSes. `sponsorship`
+    # and `program` are not mapped (no Job field / elimination uses them).
     #
     # Not subscribed: zapplyjobs/Internships-2027 -- its apply links are
     # zapply.jobs redirects, not employer URLs, so rows would not dedupe
