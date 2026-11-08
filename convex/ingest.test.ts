@@ -214,7 +214,7 @@ describe("ingest: requestIngest", () => {
     expect(row?.canonicalUrl).toBe(canonicalUrl("https://example.com/jobs/123"));
   });
 
-  test("duplicate via same canonical url returns already_exists with same short", async () => {
+  test("duplicate via same canonical url follows the in-flight ingest with the same short", async () => {
     const t = convexTest(schema);
     const url = "https://example.com/jobs/123?utm_source=foo";
     const first = await t.mutation(api.ingest.requestIngest, { user: "u1", url, secret: SECRET });
@@ -224,7 +224,7 @@ describe("ingest: requestIngest", () => {
       url: "https://example.com/jobs/123?utm_campaign=bar",
       secret: SECRET,
     });
-    expect(second.status).toBe("already_exists");
+    expect(second.status).toBe("in_progress");
     expect(second.short).toBe(first.short);
     expect(second.ingestId).toBe(first.ingestId);
   });
@@ -685,7 +685,8 @@ describe("deleteMatch and stale ingest records", () => {
     const first = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
     expect(first.status).toBe("fetching"); // no match row yet
     const second = await t.mutation(api.ingest.requestIngest, { user: "u1", url: URL_A, secret: SECRET });
-    expect(second.status).toBe("already_exists");
+    // not already_exists: no match backs the short until the first finishes
+    expect(second.status).toBe("in_progress");
     expect(second.ingestId).toBe(first.ingestId);
   });
 

@@ -207,7 +207,7 @@ const LISTING_SEGMENTS = new Set([
 ]);
 // Search-box parameters. A URL carrying one is a results page unless it
 // also names a posting (an id-looking path segment or an id parameter).
-const SEARCH_PARAMS = ["q", "query", "keyword", "keywords", "search", "searchtext", "k"];
+const SEARCH_PARAMS = ["q", "query", "keyword", "keywords", "search", "searchtext"];
 const ID_PARAMS = /^(?:jobid|job_id|gh_jid|pid|id|reqid|req_id|jobreqid|requisitionid|ashby_jid|lever-via)$/i;
 
 /** A search/listing URL rather than one posting (#4 in the scrape issues:

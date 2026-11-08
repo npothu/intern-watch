@@ -448,7 +448,9 @@ export async function fetchBuildStatus(
 /** Manual ingest: request a URL ingest. */
 export type IngestResponse =
   | { ingestId: string; status: "fetching"; short: string }
-  | { ingestId: string; status: "already_exists"; short: string };
+  | { ingestId: string; status: "already_exists"; short: string }
+  // An earlier ingest of the same job is still running; follow it.
+  | { ingestId: string; status: "in_progress"; short: string };
 
 /** Caller-supplied posting fields; see convex/ingest.ts requestIngest. */
 export type IngestManualFields = { jdText?: string; title?: string; company?: string; location?: string };

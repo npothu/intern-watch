@@ -97,6 +97,19 @@ def test_oracle_custom_domain_page_hint():
     assert got and "Firmware" in got
 
 
+def test_oracle_page_hint_runs_before_the_blocked_page_tells():
+    url = "https://careers.example.com/en/sites/CX_1/job/26011082"
+    api = jd_source._oracle_api_url("egug.fa.us2.oraclecloud.com", "CX_1", "26011082")
+    shell = _text("oracle_custom_domain_page.html").replace(
+        "<head>", "<head><noscript>Please enable JavaScript to use this site</noscript>")
+    client, _ = _client({
+        url: httpx.Response(200, text=shell),
+        api: httpx.Response(200, json=_json("oracle_cx_detail.json")),
+    })
+    got = jd_source._generic_scrape(client, url)
+    assert got and "Firmware" in got
+
+
 def test_avature_202_is_a_miss_not_a_jd():
     url = "https://careers.example.com/en_US/careers/JobDetail?jobId=137214"
     waf = httpx.Response(202, text="", headers={"x-amzn-waf-action": "challenge"})

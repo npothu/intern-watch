@@ -5,6 +5,7 @@ import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { canonicalUrl, companyFromUrl, detectAts, extractForAts, inferTerm } from "./ingest_extract";
+import { manualArgs } from "./ingest";
 import { acquireJdFromUrl, llmExtractJd, pageFetchUrl, type AcquireResult } from "./jd_acquire";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -205,12 +206,7 @@ export const runIngest = internalAction({
     ingestId: v.id("manualIngests"),
     // Caller-supplied fields (REST `jdText` / `title` / ...): a manual JD
     // lets a bot-walled posting still become a match.
-    manual: v.optional(v.object({
-      jdText: v.optional(v.string()),
-      title: v.optional(v.string()),
-      company: v.optional(v.string()),
-      location: v.optional(v.string()),
-    })),
+    manual: v.optional(v.object(manualArgs)),
   },
   handler: async (ctx: ActionCtx, { user, ingestId, manual }) => {
     try {

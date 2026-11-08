@@ -210,6 +210,11 @@ test("an ingest still fetching after the wait is a 202 without a short", async (
   expect(response.status).toBe(202);
   const { data } = await response.json();
   expect(data).toEqual({ ingestId: expect.any(String), status: "extracting" });
+  // A retry while it runs follows the same ingest - never a 409 with a
+  // short that no match backs yet.
+  const retry = await settle(request("/ingests", "POST", { url: "https://example.com/jobs/4" }));
+  expect(retry.status).toBe(202);
+  expect((await retry.json()).data).toEqual({ ingestId: data.ingestId, status: "extracting" });
 });
 
 test("resume preconditions, saved job descriptions and build polling preserve backend semantics", async () => {

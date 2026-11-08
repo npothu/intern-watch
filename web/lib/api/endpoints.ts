@@ -95,6 +95,8 @@ export const endpoints: Endpoint[] = [
         short: started.short, ingestId: started.ingestId,
       });
     }
+    // A fresh ingest, or an earlier one of the same job still running
+    // (in_progress): either way the answer is that ingest's outcome.
     return ingestResponse(await waitForIngest(user, started.ingestId), started.ingestId);
   }, 202),
   endpoint("GET", "/ingests/{id}", "Poll a job ingestion", s.empty, async (user, { id }) => {

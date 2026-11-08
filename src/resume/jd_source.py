@@ -361,10 +361,9 @@ def _generic_scrape(client: httpx.Client, url: str,
     html = resp.text
     if html_out is not None:
         html_out.append(html)
-    if _BLOCKED_RE.search(html[:2000]):  # a challenge/denial page, not a JD
-        log.debug("jd_source scrape blocked (anti-bot/JS shell): %s", url)
-        return None
-    # Oracle CX on a custom domain: the page names its pod, whose REST feed
+    # Oracle CX on a custom domain (checked before the blocked-page tells:
+    # its JS shell can say "enable JavaScript", and jd_acquire.ts runs the
+    # hint first too): the page names its pod, whose REST feed
     # carries the JD the JS shell never renders server-side.
     hinted = None if _ats_api_for(url) else _oracle_api_from_page(url, html)
     if hinted:
@@ -376,6 +375,9 @@ def _generic_scrape(client: httpx.Client, url: str,
                 return got
         except Exception as exc:  # noqa: BLE001 - fall through to the page
             log.debug("jd_source oracle page-hint miss for %s: %s", url, exc)
+    if _BLOCKED_RE.search(html[:2000]):  # a challenge/denial page, not a JD
+        log.debug("jd_source scrape blocked (anti-bot/JS shell): %s", url)
+        return None
     embedded = _embedded_description(html)
     if embedded:
         return embedded

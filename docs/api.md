@@ -209,6 +209,7 @@ They do not require cloud credentials or write production data.
 | 422 | `{error:{code:"fetch_failed",reason,message,ingestId}}` | The page could not be read |
 | 400 | `{error:{code:"invalid_request",...}}` | Not a public URL, or a search/listing page rather than one posting |
 
+Posting the same URL again while its first ingest is still running follows that ingest: the same `ingestId`, and the same outcomes as above.
 `short` appears only once a match exists.
 A 202 and a failed ingest never carry one, so a script cannot build a resume against a match that was never created.
 

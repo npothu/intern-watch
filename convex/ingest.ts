@@ -45,7 +45,7 @@ async function checkRateLimit(ctx: any, user: string) {
 // in what a bot-walled or JS-only page cannot give. Bounds match the REST
 // schema (web/lib/api/endpoints.ts).
 const MANUAL_LIMITS = { jdText: 20_000, title: 300, company: 200, location: 300 } as const;
-const manualArgs = {
+export const manualArgs = {
   jdText: v.optional(v.string()),
   title: v.optional(v.string()),
   company: v.optional(v.string()),
@@ -91,9 +91,10 @@ export const requestIngest = mutation({
       if (!sameJob || row.status === "failed") continue;
 
       // An in-flight ingest always blocks: it has no match yet by definition,
-      // and a second submit would race the first.
+      // and a second submit would race the first. It is not `already_exists`
+      // - no match backs its short yet - so the caller follows that ingest.
       if (row.status === "fetching" || row.status === "extracting") {
-        return { status: "already_exists" as const, short: row.short, ingestId: row._id };
+        return { status: "in_progress" as const, short: row.short, ingestId: row._id };
       }
 
       const match = await ctx.db
