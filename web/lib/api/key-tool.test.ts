@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 test("key creation writes a private file and prints only its hash configuration", () => {
-  const directory = mkdtempSync(join(tmpdir(), "intern-watch-key-test-"));
+  const directory = mkdtempSync(join(tmpdir(), "intern-baddie-key-test-"));
   try {
     const output = join(directory, "key.json");
     const script = new URL("../../../scripts/create-api-key.mjs", import.meta.url).pathname;

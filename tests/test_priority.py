@@ -167,9 +167,9 @@ def test_digest_and_email_order_priority_then_top_then_rest():
     subject, html, body = build_email(items, TERMS, NOW)
     assert body.index("Xor") < body.index("Aardvark") < body.index("Yak") \
         < body.index("Zed")
-    assert subject == "intern-watch: 4 new · Xor (Spring 2027: 4)"
+    assert subject == "intern-baddie: 4 new · Xor (Spring 2027: 4)"
     assert build_email(items, TERMS, NOW, subject_names=False)[0] == \
-        "intern-watch: 4 new (Spring 2027: 4)"
+        "intern-baddie: 4 new (Spring 2027: 4)"
 
 
 def test_priority_names_caps_at_three():
@@ -182,12 +182,12 @@ def test_priority_names_caps_at_three():
 def test_priority_email_subjects():
     one = [match_item(*_m(1, "Spring 2027", ["company:priority"], "Meta"), TERMS)]
     subject, html, text = build_priority_email(one, TERMS, NOW)
-    assert subject == "intern-watch: Meta - SWE Intern 1 (Spring 2027)"
+    assert subject == "intern-baddie: Meta - SWE Intern 1 (Spring 2027)"
     assert "will not repeat" in text and "https://x.com/1" in html
     two = one + [match_item(*_m(2, "Summer 2027", ["company:priority"],
                                 "Microsoft"), TERMS)]
     assert build_priority_email(two, TERMS, NOW)[0] == \
-        "intern-watch: 2 priority matches · Meta, Microsoft"
+        "intern-baddie: 2 priority matches · Meta, Microsoft"
 
 
 # ------------------------------------------------- orchestrator: alert flow
@@ -232,7 +232,7 @@ def test_priority_match_is_emailed_on_the_run_that_found_it(monkeypatch, tmp_pat
 
     assert main.main(["--state-file", str(state_file)]) == 0
     state = st.load_state(state_file)
-    assert sent == ["intern-watch: Company1 - Software Engineer Intern (Summer 2027)"]
+    assert sent == ["intern-baddie: Company1 - Software Engineer Intern (Summer 2027)"]
     assert st.was_notified(state, _key(1), "example")
     assert not st.was_notified(state, _key(2), "example")
     assert [i["key"] for i in st.outbox_items(state, "example")] == [_key(2)]
@@ -241,7 +241,7 @@ def test_priority_match_is_emailed_on_the_run_that_found_it(monkeypatch, tmp_pat
 def test_failed_alert_keeps_the_match_for_the_digest(monkeypatch, tmp_path):
     sources, adapters = _sources(_job(1), _job(2))
     _wire(monkeypatch, sources, adapters, [_priority_user()])
-    sent = _recorder(monkeypatch, fail_subject_prefix="intern-watch: Company1")
+    sent = _recorder(monkeypatch, fail_subject_prefix="intern-baddie: Company1")
     _freeze_clock(monkeypatch)  # 12:05 UTC: the digest slot is due
     state_file = tmp_path / "seen.json"
     pre = st.empty_state()
@@ -250,8 +250,8 @@ def test_failed_alert_keeps_the_match_for_the_digest(monkeypatch, tmp_path):
 
     assert main.main(["--state-file", str(state_file)]) == 0
     state = st.load_state(state_file)
-    assert sent[0].startswith("intern-watch: Company1")
-    assert sent[1] == "intern-watch: 2 new · Company1 (Summer 2027: 2)"
+    assert sent[0].startswith("intern-baddie: Company1")
+    assert sent[1] == "intern-baddie: 2 new · Company1 (Summer 2027: 2)"
     assert st.was_notified(state, _key(1), "example")
     assert not st.outbox_items(state, "example")
 
@@ -267,7 +267,7 @@ def test_alert_off_names_priority_in_the_digest_subject(monkeypatch, tmp_path):
     st.touch(pre, "jr:preexisting", ["ok-src"], dt.date(2026, 6, 12))
     st.save_state(pre, state_file)
     assert main.main(["--state-file", str(state_file)]) == 0
-    assert sent == ["intern-watch: 2 new · Company1 (Summer 2027: 2)"]
+    assert sent == ["intern-baddie: 2 new · Company1 (Summer 2027: 2)"]
 
 
 # ----------------------------------------------- store prefs overlay + report
@@ -293,7 +293,7 @@ def test_store_prefs_overlay_and_report(monkeypatch, tmp_path):
 
     # NOW is 12:05 UTC: the digest slot is due, so the one accepted match
     # (Company2, priority) went out; Company1 fell to priority_only.
-    assert sent == ["intern-watch: 1 new · Company2 (Summer 2027: 1)"]
+    assert sent == ["intern-baddie: 1 new · Company2 (Summer 2027: 1)"]
     assert st.was_notified(state, "url:https://x.com/2", "example")
     assert not st.was_notified(state, "url:https://x.com/1", "example")
     user, report = store.watch_reports[-1]
@@ -354,7 +354,7 @@ def test_config_check_warns_when_both_forms_present():
 def test_failed_alert_is_not_retried_on_the_next_run(monkeypatch, tmp_path):
     sources, adapters = _sources(_job(1))
     _wire(monkeypatch, sources, adapters, [_priority_user()])
-    sent = _recorder(monkeypatch, fail_subject_prefix="intern-watch: Company1")
+    sent = _recorder(monkeypatch, fail_subject_prefix="intern-baddie: Company1")
     state_file = tmp_path / "seen.json"
     pre = st.empty_state()
     pre_now = dt.datetime(2026, 6, 12, 1, 5, tzinfo=dt.UTC)

@@ -4,7 +4,7 @@ import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { Preferences } from "@/components/settings/preferences";
 
-export const metadata = { title: "Preferences - intern-watch" };
+export const metadata = { title: "Preferences - intern-baddie" };
 
 export const dynamic = "force-dynamic";
 

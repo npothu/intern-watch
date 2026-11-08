@@ -609,7 +609,7 @@ def test_sync_user_interactive_false_patches_digest(monkeypatch):
 
     _mock_dashboard_client(monkeypatch, handler)
     dashboard.sync_user(state, "example", TERMS, NOW,
-                        "owner/intern-watch", "tok",
+                        "owner/intern-baddie", "tok",
                         ticks=store.TicksView(), interactive=False)
     assert len(patched) == 1
     body = patched[0]["body"]

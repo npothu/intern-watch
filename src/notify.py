@@ -84,7 +84,7 @@ def build_digest(matches: list[tuple[Job, list[str]]], terms_order: list[str],
         + sorted(t for t in groups if t not in terms_order and t != _UNKNOWN) \
         + ([_UNKNOWN] if _UNKNOWN in groups else [])
 
-    lines = [f"🆕 **intern-watch — {len(matches)} new "
+    lines = [f"🆕 **intern-baddie — {len(matches)} new "
              f"match{'es' if len(matches) != 1 else ''}** "
              f"({now.strftime('%b %d, %I:%M %p UTC').lstrip('0')})"]
     for term in order:
@@ -201,8 +201,8 @@ def build_email(items: list[dict], terms_order: list[str],
     grouped = _group_items(items, terms_order)
     counts = ", ".join(f"{t}: {len(g)}" for t, g in grouped)
     names = priority_names(items) if subject_names else ""
-    subject = (f"intern-watch: {len(items)} new · {names} ({counts})" if names
-               else f"intern-watch: {len(items)} new ({counts})")
+    subject = (f"intern-baddie: {len(items)} new · {names} ({counts})" if names
+               else f"intern-baddie: {len(items)} new ({counts})")
 
     esc = html_mod.escape
     html_parts = [
@@ -244,9 +244,9 @@ def build_priority_email(items: list[dict], terms_order: list[str],
     n = len(ordered)
     if n == 1:
         it = ordered[0]
-        subject = f"intern-watch: {it['company']} - {it['title']} ({it['term']})"
+        subject = f"intern-baddie: {it['company']} - {it['title']} ({it['term']})"
     else:
-        subject = f"intern-watch: {n} priority matches · {priority_names(ordered)}"
+        subject = f"intern-baddie: {n} priority matches · {priority_names(ordered)}"
     esc = html_mod.escape
     stamp = now.strftime('%b %d, %I:%M %p UTC').lstrip('0')
     html_parts = [
@@ -272,7 +272,7 @@ def build_health_email(health_warnings: list[str],
     source has been broken long enough to need eyes on it."""
     esc = html_mod.escape
     n = len(health_warnings)
-    subject = f"intern-watch: {n} source{'s' if n != 1 else ''} failing"
+    subject = f"intern-baddie: {n} source{'s' if n != 1 else ''} failing"
     html_body = (
         "<html><body style=\"font-family:Arial,Helvetica,sans-serif;"
         "font-size:14px;line-height:1.5\">"
@@ -299,7 +299,7 @@ def _sender_domain(smtp_user: str) -> str:
     """Domain half of the sender address, for Message-ID. Falls back to a
     fixed label so a malformed sender never raises out of a pure builder."""
     _, _, dom = smtp_user.rpartition("@")
-    return dom or "intern-watch"
+    return dom or "intern-baddie"
 
 
 def _thread_token(user: str | None, smtp_user: str) -> str:
@@ -308,7 +308,7 @@ def _thread_token(user: str | None, smtp_user: str) -> str:
     same user always reuses one References anchor, but different users (or a
     different sender) get distinct threads."""
     digest = hashlib.sha256(f"{user or ''}\0{smtp_user}".encode()).hexdigest()
-    return f"<intern-watch-thread-{digest[:32]}@{_sender_domain(smtp_user)}>"
+    return f"<intern-baddie-thread-{digest[:32]}@{_sender_domain(smtp_user)}>"
 
 
 def build_message(smtp_user: str, to_addr: str, subject: str,

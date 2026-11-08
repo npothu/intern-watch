@@ -274,7 +274,7 @@ def test_outbox_idempotent_and_email_build():
 
     items = st.outbox_items(state, "example")
     subject, html, text = build_email(items, TERMS, NOW)
-    assert subject == "intern-watch: 2 new (Fall 2026: 1, Spring 2027: 1)"
+    assert subject == "intern-baddie: 2 new (Fall 2026: 1, Spring 2027: 1)"
     assert "[TOP]" in text and "[ATL]" in text
     assert 'href="https://x.com/1"' in html
     assert "&lt;script&gt;" in html                          # html-escaped titles

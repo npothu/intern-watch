@@ -16,7 +16,7 @@
   {"subject": "Congrats", "body": "The team would love to meet the team lead? Actually, meet the team.", "html": false, "expect": "interview"},
   {"subject": "Thank you for applying to Acme", "body": "We have received your application and will be in touch.", "html": false, "expect": null},
   {"subject": "Application received", "body": "Your application was submitted successfully.", "html": false, "expect": null},
-  {"subject": "intern-watch matches", "body": "3 new roles you can interview for soon.", "html": false, "expect": null},
+  {"subject": "intern-baddie matches", "body": "3 new roles you can interview for soon.", "html": false, "expect": null},
   {"subject": "New jobs for you", "body": "5 internships matching your search. Schedule an interview today!", "html": false, "expect": null},
   {"subject": "Job alert: SWE Intern", "body": "Apply now. Unsubscribe from these alerts.", "html": false, "expect": null},
   {"subject": "You appeared in 9 searches this week", "body": "See who's viewing your LinkedIn profile.", "html": false, "expect": null},

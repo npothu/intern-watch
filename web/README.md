@@ -1,8 +1,8 @@
-# intern-watch web
+# intern-baddie web
 
 The hosted, multi-user triage sibling of the local Python webui (`src/webui`).
 Next.js (App Router, TypeScript), Tailwind CSS v4, shadcn/ui primitives
-re-skinned to the intern-watch "Fern & Paper" identity, Clerk auth, and Convex
+re-skinned to the intern-baddie "Fern & Paper" identity, Clerk auth, and Convex
 data. All data is reached from the server - Convex secrets are never exposed
 to the browser.
 

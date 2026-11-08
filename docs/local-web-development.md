@@ -11,8 +11,8 @@ The repository has three separate runtime environments:
 | Convex | Development deployment environment variables | Google OAuth credentials, encryption key, Pub/Sub configuration, and the tracker secret |
 | Python watcher | `.env` in the data directory (falls back to the repo root) | Watcher, notification, and optional standalone CLI values |
 
-The Python tools read `users/` and `state/` from `INTERN_WATCH_DATA_DIR` when it is set.
-An instance keeps those in a private data repo cloned next to this one, for example `INTERN_WATCH_DATA_DIR=../autojobfinder python -m src.webui`.
+The Python tools read `users/` and `state/` from `INTERN_BADDIE_DATA_DIR` when it is set.
+An instance keeps those in a private data repo cloned next to this one, for example `INTERN_BADDIE_DATA_DIR=../autojobfinder python -m src.webui`.
 
 Setting a value in one environment does not copy it into either of the others.
 

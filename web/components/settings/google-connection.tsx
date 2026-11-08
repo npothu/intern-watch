@@ -43,7 +43,7 @@ export function GoogleConnection({
                 {currentEmail ? "Gmail is connected" : "Connect your Gmail account"}
               </h2>
               <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
-                Intern Watch reads application-related email to keep your tracker updated with
+                Intern Baddie reads application-related email to keep your tracker updated with
                 interviews, offers, and rejections.
               </p>
             </div>
@@ -115,7 +115,7 @@ export function GoogleConnection({
           <div className="flex items-start gap-2 border-t border-line pt-4 text-[11.5px] leading-relaxed text-ink-2">
             <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0 text-accent" />
             <p>
-              Access is read-only. Intern Watch cannot send, edit, or delete your email, and you
+              Access is read-only. Intern Baddie cannot send, edit, or delete your email, and you
               can revoke access from your Google account at any time.
             </p>
           </div>

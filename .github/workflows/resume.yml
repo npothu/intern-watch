@@ -73,7 +73,7 @@ jobs:
     permissions:
       contents: write          # required to publish the Release asset
     env:
-      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
+      INTERN_BADDIE_DATA_DIR: ${{ github.workspace }}
     steps:
       - name: Check out data (this repo)
         uses: actions/checkout@v4

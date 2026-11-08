@@ -4,7 +4,7 @@ import { MotionControl } from "@/components/settings/motion-control";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 
-export const metadata = { title: "Settings - intern-watch" };
+export const metadata = { title: "Settings - intern-baddie" };
 
 /**
  * Settings, reachable from the user-profile dropdown rather than the top nav

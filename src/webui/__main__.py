@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
     server = make_server(hub, args.host, args.port)
     url = f"http://{args.host}:{args.port}/"
-    print(f"intern-watch webui for {user!r}: {url}  (Ctrl+C to stop)")
+    print(f"intern-baddie webui for {user!r}: {url}  (Ctrl+C to stop)")
     if not args.no_browser:
         webbrowser.open(url)
     try:

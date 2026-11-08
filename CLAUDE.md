@@ -1,9 +1,9 @@
-# intern-watch
+# intern-baddie
 
 Internship alert pipeline, one user per `users/*.yaml` config. A GitHub
 Actions cron (`watch.yml`, every 2h) polls public internship lists, dedupes,
 filters per user, asks a cheap LLM about ambiguous cases, and delivers
-matches by batched email plus a "📋 intern-watch matches" GitHub issue
+matches by batched email plus a "📋 intern-baddie matches" GitHub issue
 dashboard. This repo is a template: fork/copy it, set a few secrets, edit
 one YAML (see the README's fork checklist).
 
@@ -87,7 +87,7 @@ private data repo, not this one. Per job entry:
 
 `python -m src.main --dry-run` runs the full pipeline locally without
 notifying or writing state; against an instance's real config and state,
-prefix it with `INTERN_WATCH_DATA_DIR=<path to the data repo checkout>`
+prefix it with `INTERN_BADDIE_DATA_DIR=<path to the data repo checkout>`
 (same for `src.webui`, `src.dashboard`, `src.resume`, `src.apply`).
 `ruff check .`, `python -m mypy`, `pytest -q` and `python -m src.config_check`
 must all stay green (see Code review).
@@ -122,7 +122,7 @@ progressed past "applied". NEVER pruned — do not "clean it up".
 - **Code vs data.** `src/paths.py` splits the tree in two: `ROOT` (this
   checkout: `src/`, `sources.yaml`, `data/`) and `DATA_ROOT` (`users/`,
   `state/`, `resumes/`, `out/`, and the git repo whose `origin/main` the
-  webui and GitHubStore read). `DATA_ROOT` is `INTERN_WATCH_DATA_DIR` when
+  webui and GitHubStore read). `DATA_ROOT` is `INTERN_BADDIE_DATA_DIR` when
   set, else `ROOT`. The template runs with both equal; an instance keeps its
   private data in a separate repo and points the env var at it. Every new
   path must go through one of the two - never recompute
@@ -131,7 +131,7 @@ progressed past "applied". NEVER pruned — do not "clean it up".
   `resume-batch` and `resume-ondemand` all carry a `workflow_call` trigger
   next to their own. A data repo calls them with `secrets: inherit`; the job
   checks out the caller (data) at the workspace root and this repo under
-  `code/`, runs from `code/` with `INTERN_WATCH_DATA_DIR` set, and commits
+  `code/`, runs from `code/` with `INTERN_BADDIE_DATA_DIR` set, and commits
   state back to the caller. Inputs `code_ref` / `data_ref` / `environment`
   pick the code ref, the data branch and the GitHub environment (e.g. a
   `staging` environment that overrides `STORE`). Anything that changes a

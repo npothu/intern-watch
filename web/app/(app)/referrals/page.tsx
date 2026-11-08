@@ -4,7 +4,7 @@ import { buildReferralJobs } from "@/lib/referral-jobs";
 import { Referrals } from "@/components/referrals/referrals";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Referrals | intern-watch" };
+export const metadata = { title: "Referrals | intern-baddie" };
 
 export default async function ReferralsPage() {
   const user = await resolveTrackerUser();

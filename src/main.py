@@ -50,7 +50,7 @@ from .paths import ROOT as ROOT
 from .resume.build import build_for_job, resume_build_cfg
 from .store import ApiError, GitHubStore, TrackerStore, make_store
 
-log = logging.getLogger("intern-watch")
+log = logging.getLogger("intern-baddie")
 
 
 def load_sources(path: Path) -> list[SourceConfig]:
@@ -59,7 +59,7 @@ def load_sources(path: Path) -> list[SourceConfig]:
 
 
 def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date) -> list[Job]:
-    headers = {"User-Agent": "intern-watch (job alert bot)"}
+    headers = {"User-Agent": "intern-baddie (job alert bot)"}
     if os.environ.get("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
     all_jobs: list[Job] = []
@@ -107,7 +107,7 @@ def enrich_jds(jobs: list[Job]) -> int:
                  JD_FETCH_CAP, len(targets))
         targets = targets[:JD_FETCH_CAP]
     fetched = 0
-    headers = {"User-Agent": "intern-watch (job alert bot)"}
+    headers = {"User-Agent": "intern-baddie (job alert bot)"}
     with httpx.Client(headers=headers, timeout=20.0) as client:
         for job in targets:
             if not job.jd_url:          # targets are jd_url-bearing by
@@ -1081,7 +1081,7 @@ def explain(key: str, state: dict, today: dt.date, users: list[dict],
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="intern-watch")
+    parser = argparse.ArgumentParser(prog="intern-baddie")
     parser.add_argument("--dry-run", action="store_true",
                         help="full pipeline, print digest, no webhook, no state write")
     parser.add_argument("--backfill", action="store_true",

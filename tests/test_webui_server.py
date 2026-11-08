@@ -15,7 +15,7 @@ from tests.fakestore import FakeStore
 def _writable_store():
     """A FakeStore with the plumbing fields set so Hub.writable is true."""
     fs = FakeStore()
-    fs.repo, fs.token, fs.issue_number = "owner/intern-watch", "tok", 7
+    fs.repo, fs.token, fs.issue_number = "owner/intern-baddie", "tok", 7
     return fs
 
 
@@ -87,7 +87,7 @@ class _QueuingStore(FakeStore):
 def test_set_ticks_batch_queued_shorts_land_in_pending(tmp_path):
     a, c = "a" * 12, "c" * 12
     store = _QueuingStore({c})
-    store.repo, store.token, store.issue_number = "owner/intern-watch", "tok", 7
+    store.repo, store.token, store.issue_number = "owner/intern-baddie", "tok", 7
     hub = _hub(tmp_path, store=store)
 
     res = hub.set_ticks_batch("dismissed", [a, c], True)

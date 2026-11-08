@@ -29,7 +29,7 @@ export async function decryptBackup(source, destination, privateKey) {
   try {
     const probe = Buffer.alloc(8192);
     const { bytesRead } = await handle.read(probe, 0, probe.length, 0);
-    if (probe.subarray(0, MAGIC.length).toString() !== MAGIC) throw new Error('Not an intern-watch backup');
+    if (probe.subarray(0, MAGIC.length).toString() !== MAGIC) throw new Error('Not an intern-baddie backup');
     const end = probe.indexOf(10, MAGIC.length);
     if (end < 0 || end >= bytesRead) throw new Error('Invalid backup header');
     const header = probe.subarray(0, end + 1);

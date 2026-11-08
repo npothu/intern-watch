@@ -25,7 +25,7 @@ import { FORCE_MOTION_ATTR, REDUCE_MOTION_ATTR } from "./motion-constants";
 export type MotionPreference = "system" | "full" | "reduced";
 
 const PREFERENCES: readonly MotionPreference[] = ["system", "full", "reduced"];
-export const MOTION_PREFERENCE_STORAGE_KEY = "intern-watch:motion-preference";
+export const MOTION_PREFERENCE_STORAGE_KEY = "intern-baddie:motion-preference";
 
 export function isMotionPreference(v: unknown): v is MotionPreference {
   return typeof v === "string" && (PREFERENCES as readonly string[]).includes(v);

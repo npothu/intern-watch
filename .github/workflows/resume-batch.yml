@@ -41,10 +41,10 @@ jobs:
       group: resume-batch-${{ github.event.issue.number }}
       cancel-in-progress: false
     if: >-
-      contains(github.event.issue.title, 'intern-watch matches') &&
+      (contains(github.event.issue.title, 'intern-baddie matches') || contains(github.event.issue.title, 'intern-watch matches')) &&
       contains(github.event.issue.body, '[x] **Build selected resumes**')
     env:
-      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
+      INTERN_BADDIE_DATA_DIR: ${{ github.workspace }}
       DATA_BRANCH: ${{ inputs.data_ref || github.ref_name }}
     steps:
       - name: React 👀
@@ -81,7 +81,7 @@ jobs:
         env:
           TITLE: ${{ github.event.issue.title }}
         run: |
-          # "📋 intern-watch matches — <user>" (em dash separator).
+          # "📋 intern-baddie matches — <user>" (em dash separator).
           user=$(printf '%s' "$TITLE" | sed 's/.*—[[:space:]]*//' | tr -d '[:space:]')
           if [ -z "$user" ]; then
             echo "cannot parse user from issue title: $TITLE" >&2
@@ -105,7 +105,7 @@ jobs:
       - name: Commit built resumes + state
         if: steps.build.outputs.built != '0' && steps.build.outputs.built != ''
         run: |
-          git config user.name "intern-watch[bot]"
+          git config user.name "intern-baddie[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/seen.json
           [ -d resumes ] && git add resumes/ || true

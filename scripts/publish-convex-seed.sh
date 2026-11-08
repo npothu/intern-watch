@@ -23,7 +23,7 @@ fi
 gh release view convex-seed --repo "$repo" >/dev/null 2>&1 \
   || gh release create convex-seed --repo "$repo" --latest=false \
        --title "Convex preview seed" \
-       --notes "Snapshot used to seed per-PR Convex preview deployments (intern-watch scripts/publish-convex-seed.sh)."
+       --notes "Snapshot used to seed per-PR Convex preview deployments (intern-baddie scripts/publish-convex-seed.sh)."
 tmp=$(mktemp -d); cp "$zip" "$tmp/convex-seed.zip"
 gh release upload convex-seed "$tmp/convex-seed.zip" --repo "$repo" --clobber
 rm -rf "$tmp"

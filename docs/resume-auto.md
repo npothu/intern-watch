@@ -152,7 +152,7 @@ jobright_id=item.get("jobright_id"), jd_url=item.get("jd_url"))`, calls
 ### `.github/workflows/resume-ondemand.yml`
 
 - `on: issue_comment` (types: `[created]`).
-- Guard: `github.event.issue.title` contains `intern-watch matches` **and**
+- Guard: `github.event.issue.title` contains `intern-baddie matches` **and**
   the comment body starts with `/resume`. Parse the 12-hex short key arg.
 - Steps mirror `resume.yml`: checkout, setup-python, pip install, run
   `python -m src.resume.ondemand --user <from title> --short <arg>`, **publish
@@ -195,7 +195,7 @@ only `use_llm` / `allow_scrape` / `max_per_run` are read from config. Writes
 ### `.github/workflows/resume-batch.yml`
 
 - `on: issues` (types: `[edited]`).
-- Guard: title contains `intern-watch matches` **and** body contains
+- Guard: title contains `intern-baddie matches` **and** body contains
   `[x] **Build selected resumes**`. The repaint always renders the trigger
   unchecked, so the bot's own edit can't re-fire the workflow (no loop); ordinary
   applied-box ticks fail the guard cheaply.

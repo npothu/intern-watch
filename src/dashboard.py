@@ -207,7 +207,7 @@ def build_body(matches: list[dict], terms_order: list[str],
         d_shown, d_overflow = dismissed[:d_n], dismissed[d_n:]
         if interactive:
             intro = [
-                "Maintained automatically by intern-watch. **Tick a row's "
+                "Maintained automatically by intern-baddie. **Tick a row's "
                 "checkbox once you've applied** — it is read back into state "
                 "on the next run. Tick **⭐ saved** to bookmark a row for "
                 "later. Tick **🚫 hide** to move a row to the Hidden "
@@ -222,7 +222,7 @@ def build_body(matches: list[dict], terms_order: list[str],
             ]
         else:
             intro = [
-                "Maintained automatically by intern-watch. **Read-only "
+                "Maintained automatically by intern-baddie. **Read-only "
                 "digest**: the tracker state lives in the store now and is "
                 "edited in the local webui (`python -m src.webui`); ticks "
                 "made here are not read back. Any edit to this issue gets "
@@ -440,8 +440,8 @@ def sync_user(state: dict, user: str, terms_order: list[str],
     number = issue_numbers.get(user)
     headers = {"Authorization": f"Bearer {token}",
                "Accept": "application/vnd.github+json",
-               "User-Agent": "intern-watch (job alert bot)"}
-    title = f"📋 intern-watch matches — {user}"
+               "User-Agent": "intern-baddie (job alert bot)"}
+    title = f"📋 intern-baddie matches — {user}"
 
     with httpx.Client(headers=headers, timeout=30.0) as client:
         if number and repo and token and ticks is None:

@@ -187,7 +187,7 @@ export function SiteHeader({
           href="/"
           className="text-[17px] font-semibold tracking-[-0.01em] text-ink"
         >
-          intern-watch{" "}
+          intern-baddie{" "}
           <span className="font-normal text-ink-2">/ {trackerUser}</span>
         </Link>
         <div className="ml-auto flex items-center gap-2">

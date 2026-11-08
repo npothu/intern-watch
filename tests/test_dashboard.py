@@ -87,7 +87,7 @@ def test_row_resume_links_store_url_when_resume_urls_given():
     # A hosted (Convex) store's remote resume URL wins over the repo blob.
     item = _item(1, resume="resumes/example/abc/Co1.docx")
     short = db.short_key(item["key"])
-    row = db._row(item, repo="owner/intern-watch",
+    row = db._row(item, repo="owner/intern-baddie",
                   resume_urls={short: "https://test.convex.cloud/api/storage/x"})
     assert "https://test.convex.cloud/api/storage/x" in row
     assert "blob/" not in row
@@ -98,7 +98,7 @@ def test_row_resume_no_blob_link_for_non_repo_path():
     # repo-blob link, even with no resume_urls entry to override it -- that
     # would be a dead link since it was never committed to the repo.
     item = _item(1, resume="kg2abc123storageid")
-    row = db._row(item, repo="owner/intern-watch")
+    row = db._row(item, repo="owner/intern-baddie")
     assert "blob/" not in row
     assert "[📄 resume]" not in row
 
@@ -108,9 +108,9 @@ def test_row_resume_keeps_repo_blob_without_store_url():
     # entry for it (only http(s) results enter resume_urls); the row then
     # falls back to the byte-for-byte repo-blob construction.
     item = _item(1, resume="resumes/example/abc/Co1.docx")
-    row = db._row(item, repo="owner/intern-watch",
+    row = db._row(item, repo="owner/intern-baddie",
                   resume_urls={db.short_key(item["key"]) + "x": "https://x"})
-    assert "· [📄 resume](/owner/intern-watch/blob/main/" in row
+    assert "· [📄 resume](/owner/intern-baddie/blob/main/" in row
     assert "resumes/example/abc/Co1.docx" in row
     # the store-serving entry (different short) was never linked as the resume
     assert "[📄 resume](https://x)" not in row
@@ -159,7 +159,7 @@ def test_sync_user_links_store_served_resume(monkeypatch):
         return real(**kw)
 
     monkeypatch.setattr(db.httpx, "Client", _mk)
-    db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok",
+    db.sync_user(state, "example", TERMS, NOW, "owner/intern-baddie", "tok",
                  ticks=store.TicksView(), interactive=False, store=_Store())
     assert len(patched) == 1
     body = patched[0]["body"]
@@ -230,7 +230,7 @@ def test_sync_creates_then_updates_issue(monkeypatch):
     st.matches_add(state, "example", _item(2))
 
     # first run: creates the issue, remembers its number
-    db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok")
+    db.sync_user(state, "example", TERMS, NOW, "owner/intern-baddie", "tok")
     assert state["_meta"]["dashboard_issue"]["example"] == 7
     assert len(posted) == 1 and not patched
 
@@ -241,7 +241,7 @@ def test_sync_creates_then_updates_issue(monkeypatch):
         for line in issue_body["value"].splitlines())
 
     # second run: reads the tick back, rewrites the body with it preserved
-    db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok")
+    db.sync_user(state, "example", TERMS, NOW, "owner/intern-baddie", "tok")
     assert len(patched) == 1
     applied = {i["key"]: i["applied"] for i in st.matches_items(state, "example")}
     assert applied["url:https://x.com/1"] is True
@@ -259,7 +259,7 @@ def test_sync_skips_closed_issue(monkeypatch):
     state = st.empty_state()
     st.matches_add(state, "example", _item(1))
     state["_meta"]["dashboard_issue"] = {"example": 7}
-    db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok")
+    db.sync_user(state, "example", TERMS, NOW, "owner/intern-baddie", "tok")
 
 
 def test_sync_recreates_deleted_issue(monkeypatch):
@@ -277,7 +277,7 @@ def test_sync_recreates_deleted_issue(monkeypatch):
     state = st.empty_state()
     st.matches_add(state, "example", _item(1))
     state["_meta"]["dashboard_issue"] = {"example": 7}
-    db.sync_user(state, "example", TERMS, NOW, "owner/intern-watch", "tok")
+    db.sync_user(state, "example", TERMS, NOW, "owner/intern-baddie", "tok")
     assert state["_meta"]["dashboard_issue"]["example"] == 9
     assert len(posted) == 1
 
@@ -498,7 +498,7 @@ def test_main_github_store_repaints_interactive(tmp_path, monkeypatch):
 
     _mock_client(monkeypatch, handler)        # dashboard.httpx (sync_user)
     _mock_store_client(monkeypatch, handler)  # store.httpx (get_ticks)
-    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-baddie")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     monkeypatch.delenv("STORE", raising=False)
 
@@ -537,7 +537,7 @@ def test_main_convex_store_repaints_digest(tmp_path, monkeypatch):
     monkeypatch.setenv("STORE", "convex")
     monkeypatch.setenv("CONVEX_URL", "https://test.convex.cloud")
     monkeypatch.setenv("CONVEX_SECRET", "secret")
-    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-baddie")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
 
     assert db.main(["--user", "example", "--root", str(tmp_path)]) == 0
@@ -625,13 +625,13 @@ def test_sync_dashboard_convex_repaints_digest(monkeypatch):
     monkeypatch.setattr(main, "make_store",
                         lambda root, cfg=None: _Convex())
     _stub_store_ledger(monkeypatch)
-    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-baddie")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
 
     main._sync_dashboard("example", state, False, NOW, TERMS)
 
     # the digest was repainted to the env-provided (not the store's empty) repo.
-    assert any("/repos/owner/intern-watch/issues/7" in u for u in urls)
+    assert any("/repos/owner/intern-baddie/issues/7" in u for u in urls)
     assert patched
     assert "<!--iw:" not in patched[0]["body"]
     for marker in ("<!--iws:", "<!--iwd:", "<!--iwb:"):
@@ -677,7 +677,7 @@ def test_sync_dashboard_github_repaints_interactive(monkeypatch):
         raise AssertionError(f"unexpected {request.method} {request.url}")
 
     class _GitHub:
-        repo = "owner/intern-watch"
+        repo = "owner/intern-baddie"
         token = "tok"
 
         def get_ticks(self, user):
@@ -698,12 +698,12 @@ def test_sync_dashboard_github_repaints_interactive(monkeypatch):
     monkeypatch.setattr(main, "make_store",
                         lambda root, cfg=None: _GitHub())
     _stub_store_ledger(monkeypatch)
-    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-baddie")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
 
     main._sync_dashboard("example", state, False, NOW, TERMS)
 
-    assert any("/repos/owner/intern-watch/issues/7" in u for u in urls)
+    assert any("/repos/owner/intern-baddie/issues/7" in u for u in urls)
     assert patched
     assert "<!--iw:" in patched[0]["body"]
     assert "- [ ]" in patched[0]["body"]
