@@ -46,6 +46,25 @@ def test_redirect_off_github_drops_the_token():
     assert seen["example.com"] is None
 
 
+def test_redirect_onto_github_stays_unauthenticated():
+    from src.adapters.base import GitHubTokenAuth
+    seen = {}
+
+    def handler(req):
+        seen[req.url.host] = req.headers.get("Authorization")
+        if req.url.host == "example.com":
+            return httpx.Response(
+                302, headers={"Location": "https://raw.githubusercontent.com/o/r/x"})
+        return httpx.Response(200, text="")
+
+    with httpx.Client(transport=httpx.MockTransport(handler),
+                      auth=GitHubTokenAuth("tok"),
+                      follow_redirects=True) as c:
+        c.get("https://example.com/x")
+    assert seen["example.com"] is None
+    assert seen["raw.githubusercontent.com"] is None
+
+
 def test_fetch_all_scopes_the_token(monkeypatch):
     from src import main
     from src.adapters.base import GitHubTokenAuth

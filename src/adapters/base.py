@@ -21,8 +21,13 @@ GITHUB_HOSTS = frozenset({"raw.githubusercontent.com", "api.github.com",
 
 
 class GitHubTokenAuth(httpx.Auth):
-    """Adds `Authorization: Bearer <token>` only for GITHUB_HOSTS requests
-    (redirects included: httpx re-runs auth per request)."""
+    """Adds `Authorization: Bearer <token>` only to requests whose initial
+    host is in GITHUB_HOSTS.
+
+    httpx runs auth once per request, not per redirect hop. A redirect off
+    GitHub is safe because httpx strips Authorization when the origin
+    changes; a redirect onto GitHub from another host stays unauthenticated
+    (only a lost rate-limit bonus, never a leak)."""
 
     def __init__(self, token: str) -> None:
         self._token = token
