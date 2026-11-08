@@ -45,6 +45,8 @@ was evaluated is marked ``legacy:`` (a fingerprint that never matches), and
 the normal recheck path then works through them under the caps. Evidence of
 evaluation: an `llm` entry, or a `first_seen` later than the oldest
 `first_seen` in state (the first run seeds everything without evaluating it).
+Keys recorded under a content signature (state["content"]) are skipped: they
+were accepted and then delivered or suppressed as a content duplicate.
 """
 
 from __future__ import annotations
@@ -203,6 +205,10 @@ def bootstrap(state: dict, user: str, listed: dict[str, Job],
     jobs = state["jobs"]
     oldest = min((e.get("first_seen", "") for e in jobs.values()), default="")
     owned = owned_keys(state, user)
+    # Keys a content signature already carries were delivered or suppressed
+    # as a content duplicate of a delivery: accepted, not rejected.
+    owned |= {k for rec in state.get("content", {}).get(user, {}).values()
+              for k in rec.get("keys", [])}
     n = 0
     for key in listed:
         entry = jobs.get(key)

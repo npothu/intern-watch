@@ -214,7 +214,10 @@ def test_bootstrap_marks_evaluated_still_listed_once():
     gone = _job(3, "Software Engineer Intern (Masters)")
     state = _state(evaluated, gone)
     st.touch(state, from_seed_day.dedup_key, ["s"], TODAY - dt.timedelta(days=60))
-    listed = {j.dedup_key: j for j in (evaluated, from_seed_day)}
+    dupe = _job(4, "Software Engineer Intern (Masters)")
+    st.touch(state, dupe.dedup_key, ["s"], TODAY - dt.timedelta(days=5))
+    st.content_mark(state, "example", "sig", dupe.dedup_key, TODAY)
+    listed = {j.dedup_key: j for j in (evaluated, from_seed_day, dupe)}
     n = recheck.bootstrap(state, "example", listed, set(), TODAY)
     assert n == 1
     assert state["jobs"][evaluated.dedup_key]["rj"]["example"] == "legacy:"
