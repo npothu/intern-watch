@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
+from .filters import _MASTERS_OK, _PHD_DEGREES, _UNDERGRAD_OK
 from .models import Job
 from .normalize import canonical_url, norm_company, normalize_url, preferred_apply_url
 
@@ -22,17 +23,35 @@ def dedup_key(job: Job) -> str:
     return f"hash:{hashlib.sha1(basis.encode()).hexdigest()}"
 
 
+def _degree_strictness(degrees: list[str]) -> int:
+    """How hard a degree list bites in filters.UserFilter: 2 = doctoral-only
+    (trips grad_only: phd), 1 = no Bachelor's/Associate (trips grad_only:
+    true), 0 = undergrad-eligible or unknown. Mirrors the filter's tokens."""
+    if not degrees:
+        return 0
+    folded = [d.casefold() for d in degrees]
+    if any(p in d for d in folded for p in _PHD_DEGREES) \
+            and not any(ok in d for d in folded for ok in _MASTERS_OK):
+        return 2
+    if not any(ok in d for d in folded for ok in _UNDERGRAD_OK):
+        return 1
+    return 0
+
+
 def most_restrictive_degrees(a: list[str], b: list[str]) -> list[str]:
     """Combine two sources' degree lists without loosening either. An empty
     list means "unknown", so the other side wins; two known lists keep only
     the degrees both allow (a row listing just Master's/PhD must not regain
-    eligibility because another source listed nothing or Bachelor's too).
-    Disjoint lists keep the first, which callers pass as the richer record."""
+    eligibility because another source listed Bachelor's too). When the lists
+    are disjoint the sources disagree outright, so keep whichever trips the
+    stricter grad-only rule (ties keep `a`, the richer record)."""
     if not a or not b:
         return list(a or b)
     folded = {d.casefold() for d in b}
     both = [d for d in a if d.casefold() in folded]
-    return both or list(a)
+    if both:
+        return both
+    return list(b) if _degree_strictness(b) > _degree_strictness(a) else list(a)
 
 
 def _merge_pair(base: Job, other: Job) -> Job:

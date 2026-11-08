@@ -162,10 +162,11 @@ def migrate_url_index(state: dict) -> int:
     token are left alone. Idempotent via _meta['url_index_version'].
 
     Order: group old entries by their new token, resolve each group's
-    collisions (delivered-first: lowest first_seen, then a non-jr: key, then
-    lexicographically smallest key; a pruned key with no job entry sorts
-    last), write the new index, refresh each survivor's canon back-reference
-    and clear stale ones, backfill jr: apply_urls into the index (first-wins),
+    collisions (delivered-first: an owned key -- notified, or on a matches /
+    outbox list -- then lowest first_seen, then a non-jr: key, then the
+    lexicographically smallest key; a pruned unlisted key sorts last), write
+    the new index, refresh each survivor's canon back-reference and clear
+    stale ones, backfill jr: apply_urls into the index (first-wins),
     then set the version flag.
 
     Returns the number of changed entries: re-keyed + merged-away + backfilled.
@@ -186,15 +187,23 @@ def migrate_url_index(state: dict) -> int:
     for canon, key in idx.items():
         groups.setdefault(group_for(canon), []).append((canon, key))
 
+    # Keys some user owns: notified, or still on a matches/outbox list.
+    listed = {item.get("key") for bucket in ("matches", "outbox")
+              for items in state.get(bucket, {}).values() for item in items}
+
     def job_rank(key: str) -> tuple:
-        # Delivered-first wins: lowest first_seen, then prefer a non-jr: key,
-        # then the lexicographically smallest key. A key with no job entry
-        # (pruned from jobs) sorts last, after any key that still has one.
+        # Delivered-first wins: an owned key (notified_for non-empty, or on a
+        # matches/outbox list) beats an unowned one, so the url-index gate
+        # keeps suppressing re-spellings of a delivered req after its match
+        # row is pruned. Then lowest first_seen, then a non-jr: key, then the
+        # lexicographically smallest key. A key with no job entry (pruned
+        # from jobs) sorts last unless it is still listed.
         entry = state["jobs"].get(key)
+        owned = bool(entry and entry.get("notified_for")) or key in listed
         if entry is None:
-            return (1, "", "", key)
-        return (0, entry.get("first_seen") or "", int(key.startswith("jr:")),
-                key)
+            return (int(not owned), 1, "", 0, key)
+        return (int(not owned), 0, entry.get("first_seen") or "",
+                int(key.startswith("jr:")), key)
 
     new_index: dict[str, str] = {}
     re_keyed = 0

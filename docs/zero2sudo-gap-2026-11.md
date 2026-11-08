@@ -104,11 +104,11 @@ reproduce each mechanism:
 
 | example | mechanism | class |
 |---|---|---|
-| Example Corp "Platform Engineer Intern", Simplify `degrees: ["Master's"]`, first seen under `grad_only: true`; config later set to `phd` | eliminated once, never re-evaluated | b-grad |
+| Example Corp "Widget Systems Intern", Simplify `degrees: ["Master's"]`, first seen under `grad_only: true`; config later set to `phd` | eliminated once, never re-evaluated | b-grad |
 | `careers.example.invalid/en/sites/CX_1/job/1234` (front) vs `abcd.fa.us2.oraclecloud.com/.../sites/CX_1/job/1234` (ingested) | same req, two URLs; lookup misses | b-grad (alias) |
-| "Perception Intern - Embodied AI" | `" ai "` never matches a title-final "AI" | b-role |
-| Ashby posting titled "Summer 2027 Internship - Frontend"; the list row says "Frontend Engineer Intern" with term "Winter 2026" | source term overrides the posting | b-term |
-| "Software Engineer Intern" with no term in the title; LLM returns `term: null` | most-restrictive fallback rejects | b-term |
+| "Gizmo Tuning Intern - Applied AI" | `" ai "` never matches a title-final "AI" | b-role |
+| Ashby posting titled "Summer 2027 Gadget Builder Internship"; the list row says "Gadget Builder Intern" with term "Winter 2026" | source term overrides the posting | b-term |
+| "Widget Platform Intern" with no term in the title; LLM returns `term: null` | most-restrictive fallback rejects | b-term |
 | Delivered via `example.wd1.myworkdayjobs.com/.../Intern_R12345`; manual add uses `example.invalid/jobs/12345` | manual add not linked to the match | delivered |
 | Employer on SuccessFactors only, no list carries it | no adapter, no list | a |
 
@@ -148,7 +148,8 @@ shared re-evaluation path should serve both.
 
 `evaluate()` checks `kw in title.casefold()`. Keywords written with spaces
 (`" ai "`, `" hr "`) therefore never match at the start or end of a title, or
-next to punctuation ("AI Intern", "... Embodied AI", "(AI)", "AI/ML" at the
+next to punctuation ("AI Widget Intern", "... Gizmo Tuning - Applied AI",
+"(AI)", "AI/ML" at the
 start). Proposal: match against
 `" " + re.sub(r"[^a-z0-9+#&]+", " ", title.casefold()) + " "`. Every
 keyword's substring semantics stay the same; we only add word boundaries
@@ -157,20 +158,21 @@ where the yaml asked for them. Apply the same padding to `exclude_keywords`
 
 Measured on 2026-11-08: **163 live rows** across simplify, speedyapply-ai and
 zshah-2027 are rejected `no-role-keyword` today and would pass with padding.
-Examples: "AI Intern", "AI Agent Builder Intern", "Solutions Architecture
-Intern - AI". Some are non-SWE ("AI Analyst Intern"), and those will now
+The affected shapes are titles that start with "AI" and titles that end in
+"- AI" (for example, a made-up "AI Widget Intern" or "Gadget Systems Intern -
+AI"). Some are non-SWE (an "AI ... Analyst" shape), and those will now
 reach the term/rules/LLM steps. Expect more top-company LLM calls per run
 while the backlog clears.
 Previously rejected jobs: nothing happens to them unless Fix 1 lands.
 Also consider adding `autonomy` to `include_keywords`/`strict_include_keywords`
-("... Autonomy Intern").
+(titles naming an autonomy team).
 
 ### Fix 3: config, not code
 
 - `data analytics`: decide whether analytics internships are wanted. One
   ingested row was rejected for lacking it, and one never-ingested row would
   have been.
-- `supply chain` in the exclude list blocks "Supply Chain AI Co-op". If wanted,
+- `supply chain` in the exclude list blocks any "Supply Chain ... AI" title. If wanted,
   replace the bare exclude with a narrower one.
 
 ### Fix 4: canonical identity for Oracle CX and SmartRecruiters aliases (B/C)
