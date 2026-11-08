@@ -44,6 +44,10 @@ boards:
 - company: Block
   ats: greenhouse
   slug: block
+- company: Bosch
+  ats: smartrecruiters
+  slug: BoschGroup
+  manual: true
 - company: Brex
   ats: greenhouse
   slug: brex
@@ -143,6 +147,14 @@ boards:
 - company: Linear
   ats: ashby
   slug: linear
+- company: LinkedIn
+  ats: smartrecruiters
+  slug: LinkedIn3
+  manual: true
+- company: LLNL
+  ats: smartrecruiters
+  slug: LLNL
+  manual: true
 - company: Lyft
   ats: greenhouse
   slug: lyft
@@ -230,6 +242,9 @@ boards:
 - company: Scale AI
   ats: greenhouse
   slug: scaleai
+- company: ServiceNow
+  ats: smartrecruiters
+  slug: ServiceNow
 - company: Shield AI
   ats: lever
   slug: shieldai
@@ -239,6 +254,10 @@ boards:
 - company: Snowflake
   ats: ashby
   slug: snowflake
+- company: Solidigm
+  ats: smartrecruiters
+  slug: Solidigm
+  manual: true
 - company: SpaceX
   ats: greenhouse
   slug: spacex
@@ -266,6 +285,10 @@ boards:
 - company: Vanta
   ats: ashby
   slug: vanta
+- company: Veeam Software
+  ats: greenhouse
+  slug: veeamsoftware
+  manual: true
 - company: Vercel
   ats: greenhouse
   slug: vercel
@@ -275,6 +298,14 @@ boards:
 - company: Virtu
   ats: greenhouse
   slug: virtu
+- company: Wellmark
+  ats: smartrecruiters
+  slug: WellmarkInc
+  manual: true
+- company: Western Digital
+  ats: smartrecruiters
+  slug: WesternDigital
+  manual: true
 - company: xAI
   ats: greenhouse
   slug: xai

@@ -2,7 +2,7 @@
 
 SmartRecruiters exposes an official, public, no-auth JSON API:
 
-  list:   https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset=0
+  list:   https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset=0&q=intern
   detail: https://api.smartrecruiters.com/v1/companies/{slug}/postings/{postingId}
 
 The list envelope is paged ({offset, limit, totalFound, content: [...]}); each
@@ -16,12 +16,43 @@ and Job construction stay in ats_boards.py.
 
 from __future__ import annotations
 
-from ..normalize import strip_html
+import json
+from urllib.parse import quote
 
+import httpx
+
+from ..normalize import strip_html
+from .listing_http import Pacer, page_cap, request_text
+
+PAGE_SIZE = 100
 LIST_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}/postings"
-            "?limit=100&offset=0")
+            "?limit=100&offset={offset}&q={query}")
+# Full-text queries (fuzzy, title + body). A big board (thousands of
+# postings) buries its interns past the first page of an unfiltered list, so
+# the board is searched once per query instead; the title-level INTERN_RE in
+# ats_boards still decides what is an internship.
+QUERIES = ("intern", "co-op")
 DETAIL_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}"
               "/postings/{posting_id}")
+
+
+def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
+    """Every result page for each query, bounded by the board's page cap.
+    Pages stop at totalFound or the first empty page."""
+    pacer = Pacer()
+    pages: list[str] = []
+    for query in QUERIES:
+        offset = 0
+        for _ in range(page_cap(board)):
+            raw = request_text(client, pacer, LIST_URL.format(
+                slug=board["slug"], offset=offset, query=quote(query)))
+            pages.append(raw)
+            data = json.loads(raw)
+            got = len(data.get("content") or [])
+            offset += got
+            if not got or offset >= int(data.get("totalFound") or 0):
+                break
+    return pages
 
 
 def posting_url(posting: dict, slug: str) -> str | None:

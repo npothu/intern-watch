@@ -179,12 +179,17 @@ _WD_OTHER_REQID_RE = re.compile(r"_((?:[a-z]{1,6}-?)?\d{4,})(?:-\d{1,2})?$", re.
 # ..._2027, ..._Summer-2027, ..._Intern2027 are a calendar year (optionally
 # after a word), not a reqid: two different postings would share the token.
 _WD_YEAR_ONLY_RE = re.compile(r"(?:[a-z]{1,6}-?)?(?:19|20)\d{2}", re.I)
-# jobs.smartrecruiters.com/<Company>/<postingId>[-slug]; the id is numeric
-# or (older postings) a UUID. The UUID branch is tried first: a UUID whose
-# first group is all digits must not be read as an 8-digit id plus a slug.
-_SR_PATH_RE = re.compile(
-    r"^/([^/]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{6,})"
-    r"(?:-[^/]*)?$", re.I)
+# SmartRecruiters: jobs.(or careers.)smartrecruiters.com/<Company>/
+# <postingId>[-slug] and the API's /v1/companies/<Company>/postings/<postingId>
+# name the same posting; the id is numeric or (older postings) a UUID. Token:
+# ats:sr:<company lower>:<id lower>. The UUID alternative goes first: a UUID
+# whose first group is all digits must not be read as an id plus a slug.
+_SR_ID = (r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+          r"|\d{6,})")
+_SR_HOSTS = {"jobs.smartrecruiters.com", "careers.smartrecruiters.com"}
+_SR_PATH_RE = re.compile(r"^/([^/]+)/" + _SR_ID + r"(?:-[^/]*)?$", re.I)
+_SR_API_RE = re.compile(
+    r"^/v1/companies/([^/]+)/postings/" + _SR_ID + r"$", re.I)
 _WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
 # Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
 # so this pattern carries its own optional two-letter locale segment.
@@ -253,8 +258,8 @@ def canonical_url(url: str) -> str | None:
             return f"ats:wd:{tenant}:{m.group(1).upper()}"
         # Workday site paths are case-insensitive (/Search/ == /search/).
         path = path.lower()
-    if host == "jobs.smartrecruiters.com":
-        m = _SR_PATH_RE.match(path)
+    if host in _SR_HOSTS or host == "api.smartrecruiters.com":
+        m = (_SR_PATH_RE if host in _SR_HOSTS else _SR_API_RE).match(path)
         if m:
             return f"ats:sr:{m.group(1).lower()}:{m.group(2).lower()}"
     if host == "apply.workable.com":
