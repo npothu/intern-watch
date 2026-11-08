@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm ci
       # HTTP API tests exercise the web client against the in-memory backend.
       - run: npm ci --prefix web

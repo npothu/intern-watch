@@ -318,6 +318,9 @@ export const deleteUser = internalAction({
       }
     }
     const after = await countAll(ctx, user);
+    const problems = TABLE_NAMES.filter((t) => after[t] !== 0 || deleted[t] !== before[t])
+      .map((t) => `${t}: deleted ${deleted[t]} of ${before[t]}, ${after[t]} left`);
+    if (problems.length) throw new ConvexError(`post-delete verification failed: ${problems.join("; ")}`);
     return { dryRun: false, before, deleted, files, remaining: total(after) };
   },
 });

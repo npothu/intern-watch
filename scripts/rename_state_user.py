@@ -177,7 +177,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="permanently remove --from instead of renaming it")
     ap.add_argument("--write", action="store_true", help="save changes (default: dry run)")
     a = ap.parse_args(argv)
-    if not USER_KEY.match(a.src) or (a.dst is not None and (not USER_KEY.match(a.dst) or a.src == a.dst)):
+    bad_dst = a.dst is not None and (not USER_KEY.match(a.dst) or a.src == a.dst)
+    if not USER_KEY.match(a.src) or bad_dst:
         ap.error("user keys must match [a-zA-Z0-9_-]{1,100} and differ")
 
     seen_p = a.data_dir / "state" / "seen.json"
@@ -193,7 +194,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"refusing: {e} (delete or move the existing '{a.dst}' first)", file=sys.stderr)
             return 2
     left = leftovers(seen, a.src) + leftovers(apps, a.src)
-    print(json.dumps({"from": a.src, "to": "(deleted)" if a.delete else a.dst, "write": a.write, "changed": counts,
+    target = "(deleted)" if a.delete else a.dst
+    print(json.dumps({"from": a.src, "to": target, "write": a.write, "changed": counts,
                       "leftovers": left[:20]}, indent=2))
     if left:
         print(f"refusing: '{a.src}' still present at {len(left)} path(s)", file=sys.stderr)
