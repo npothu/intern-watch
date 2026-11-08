@@ -2,7 +2,9 @@
 
 import { Triage } from "@/components/matches/triage";
 import { Tracker } from "@/components/tracker/tracker";
+import { useSearchParams } from "next/navigation";
 import { useAppView } from "@/lib/view";
+import { parseUrlState } from "@/components/matches/matches-lib";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
 
@@ -29,7 +31,8 @@ export function AppViews({
   /** Terms the preferences want today; null when unknown (nothing hidden). */
   wantedTerms: string[] | null;
 }) {
-  const { view, filter, job } = useAppView();
+  const { view, job } = useAppView();
+  const params = useSearchParams();
 
   if (view === "tracker") {
     // No heading here - Tracker's own first row now opens with the view
@@ -42,5 +45,15 @@ export function AppViews({
     );
   }
 
-  return <Triage key={job ?? "matches"} rows={matches} initialSelected={job} initialFilter={filter} wantedTerms={wantedTerms} />;
+  // The matches view (?filter= ?term= ?sort= ?open=) is read once, at mount;
+  // Triage keeps the URL in step with it from then on.
+  return (
+    <Triage
+      key={job ?? "matches"}
+      rows={matches}
+      initialSelected={job}
+      initialView={parseUrlState(params)}
+      wantedTerms={wantedTerms}
+    />
+  );
 }

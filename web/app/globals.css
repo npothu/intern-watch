@@ -288,10 +288,8 @@
   to   { transform: translateX(620%); }
 }
 
-/* Collapse shells: the first row in a group draws no top border, and the
-   first mobile card drops its spacer. The row wrapper broke the plain
-   `:first-child` selectors these replace. */
-.collapse-shell:first-child [data-row-line] { border-top-color: transparent; }
+/* Collapse shells: the first mobile card in a group drops its spacer. The
+   row wrapper broke the plain `:first-child` selector this replaces. */
 .collapse-shell:first-child [data-card-pad] { padding-top: 0; }
 
 /* Reduced motion: everything lands instantly, nothing loops.

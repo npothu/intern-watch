@@ -1,9 +1,15 @@
 "use client";
 
 // The matches triage surface. Data flow (writeTicks batching, burst undo
-// semantics, filters, mobile swipe) is independent of the motion layer:
+// semantics, filters, mobile swipe) is independent of the motion layer.
 //
-//   cursor rail  one measured rail + wash per term group, sliding between
+// Desktop (>= 700px) is one flat dense table (matches-table.tsx on the
+// dense-table.tsx shell): status pills x term pills x search, a sortable
+// header, and one row open at a time with its details panel. Phones keep
+// the swipeable cards, grouped by term. Pure logic - filter counts, sort,
+// term codes, the ?filter/?term/?sort/?open URL state - is matches-lib.ts.
+//
+//   cursor rail  one measured rail + wash over the table, sliding between
 //                rows in 150ms so a held j/k never outruns it
 //   ticks        the applied check draws its own stroke, both ticks pop -
 //                only on a user toggle, never on mount or hydration
@@ -11,16 +17,17 @@
 //   dock         keycap press ring in the pressed action's own colour,
 //                fired from clicks and keyboard shortcuts alike
 //   hide         the row collapses first, and the dismiss commits after
+//   details      the open row's panel expands on the same collapse shell
 //
 // Keyframes live in app/globals.css; the replayable one-shots in lib/motion.ts.
 
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type TouchEvent as ReactTouchEvent,
 } from "react";
@@ -28,8 +35,6 @@ import {
   Check,
   Star,
   X,
-  Undo2,
-  FileSearch,
   FileText,
   Loader2,
   Ghost,
@@ -47,8 +52,6 @@ import {
   useReplay,
   TICK_POP,
   TICK_POP_OPTS,
-  CHECK_DRAW,
-  CHECK_DRAW_OPTS,
   keypressFrames,
   KEYPRESS_OPTS,
   prefersReducedMotion,
@@ -67,7 +70,6 @@ import {
   openCommandPalette,
   type PaletteAction,
 } from "@/components/command-palette";
-import { StatusSelect, type StatusFilter } from "./status-select";
 import { FilterPills, type PillOption } from "@/components/filter-pills";
 import { RefreshControl } from "@/components/refresh-control";
 import {
@@ -81,19 +83,39 @@ import { useAppView } from "@/lib/view";
 import { ViewSwitch } from "@/components/nav/view-switch";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import type { TriageRow } from "@/app/(app)/page";
-import { sortTerms } from "@/lib/terms";
+import { sortTerms, todayLocal } from "@/lib/terms";
 import { isKnownTerm } from "@/lib/preferences";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
+import { MatchesTable, type BuildState, type MatchHandlers } from "./matches-table";
+import {
+  COLLAPSE_MS,
+  CollapseShell,
+  FOCUS_RING,
+  blurOnPointerActivate,
+} from "./row-primitives";
+import {
+  ALL_TERMS,
+  DEFAULT_URL_STATE,
+  STATUS_FILTERS,
+  UNKNOWN_TERM,
+  composeFilters,
+  cycleSort,
+  formatUrlState,
+  isPrimaryTerm,
+  orderTerms,
+  sortLabel,
+  sortRows,
+  termFromSlug,
+  termLabel,
+  termOf,
+  termShort,
+  termSlug,
+  type MatchesUrlState,
+  type Sort,
+  type StatusFilter,
+} from "./matches-lib";
 
-/** The status filter, shared with the toolbar's select. */
 type Filter = StatusFilter;
-
-// Terms order chronologically (lib/terms sortTerms); the watcher's wanted set
-// is rolling now, so nothing here names a year.
-const UNKNOWN_TERM = "Unknown term";
-
-/** The term-pill value meaning "no term filter". */
-const ALL_TERMS = "__all__";
 
 /** Page scroll increment when j/k runs off the end of the list (item 5). */
 const EDGE_SCROLL_PX = 180;
@@ -102,7 +124,6 @@ const FLUSH_IDLE = 500;
 const FLUSH_CAP = 50;
 const BURST_MS = 6000;
 const SWIPE_THRESHOLD = 70;
-const COLLAPSE_MS = 300; // row collapse
 const HIDE_MS = COLLAPSE_MS + 20; // ...then the dismiss commits
 const CASCADE_STEP = 55; // per-row stagger
 const SCROLL_MS = 180;
@@ -110,17 +131,7 @@ const CASCADE_CAP = 10; // rows past this share the final delay
 const BUILD_POLL_MS = 15000;
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
-type BuildState = "idle" | "building" | "built" | "failed";
 type InFlight = "building" | { failed: string };
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "matches" },
-  { key: "priority", label: "priority" },
-  { key: "applied", label: "applied" },
-  { key: "saved", label: "saved" },
-  { key: "resumes", label: "resumes" },
-  { key: "hidden", label: "hidden" },
-];
 
 /* Which element should replay a one-shot animation, and how many times it has
    been asked to. `n` is the replay token handed to useReplay; `key` names the
@@ -146,53 +157,13 @@ function fmtDate(iso?: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function visibleRows(rows: TriageRow[], filter: Filter, query: string): TriageRow[] {
-  const q = query.trim().toLowerCase();
-  return rows.filter((r) => {
-    if (filter === "hidden") {
-      if (!r.dismissed) return false;
-    } else if (r.dismissed) {
-      return false;
-    }
-    // "To apply" is the working queue: still open, not yet ticked.
-    if (filter === "todo" && r.applied) return false;
-    if (filter === "priority" && !r.priority) return false;
-    if (filter === "applied" && !r.applied) return false;
-    if (filter === "saved" && !r.saved) return false;
-    if (filter === "resumes" && !r.resumeUrl) return false;
-    if (q) {
-      const hay = `${r.company} ${r.title} ${r.location}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
-}
-
-const STATUS_KEYS: readonly Filter[] = [
-  "all",
-  "priority",
-  "todo",
-  "applied",
-  "saved",
-  "resumes",
-  "hidden",
-];
-
-// Accepts every status the select offers, not just the statline's subset, so
-// a ?filter= deep link to any of them survives.
-const isFilter = (v: string | undefined): v is Filter =>
-  STATUS_KEYS.includes(v as Filter);
-
-/** Display label for a term pill ("Unknown term" reads better as "Unknown"). */
-const termLabel = (term: string) =>
-  term === UNKNOWN_TERM ? "Unknown" : term;
-
 /** The pinned group's key; never a real term, so it can't collide. */
 const PRIORITY_GROUP = "__priority__";
 
 type Group = { term: string; kind: "priority" | "term"; rows: TriageRow[] };
 
 /**
+ * Phones only (the desktop table is flat and sortable instead).
  * The pinned Priority group first (every priority row, across terms), then
  * one group per term for everything else, chronological, unknown last. A
  * priority row lives only in the pinned group, so nothing renders twice;
@@ -209,7 +180,7 @@ function groupRows(rows: TriageRow[]): Group[] {
   const groups = new Map<string, TriageRow[]>();
   for (const r of rows) {
     if (r.priority) continue;
-    const t = r.term || UNKNOWN_TERM;
+    const t = termOf(r);
     if (!groups.has(t)) groups.set(t, []);
     groups.get(t)!.push(r);
   }
@@ -221,10 +192,7 @@ function groupRows(rows: TriageRow[]): Group[] {
         a.company.localeCompare(b.company)
     );
   }
-  const order = [
-    ...sortTerms([...groups.keys()].filter((t) => t !== UNKNOWN_TERM)),
-    ...(groups.has(UNKNOWN_TERM) ? [UNKNOWN_TERM] : []),
-  ];
+  const order = orderTerms(groups.keys());
   return [
     ...(priority.length ? [{ term: PRIORITY_GROUP, kind: "priority" as const, rows: priority }] : []),
     ...order.map((t) => ({ term: t, kind: "term" as const, rows: groups.get(t)! })),
@@ -237,64 +205,25 @@ function tierOf(row: TriageRow): number {
   return /^\[TOP/.test(row.tag) ? 1 : 2;
 }
 
-function useIsMobile(): boolean {
-  const [mobile, setMobile] = useState<boolean>(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(max-width: 699px)").matches
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 699px)");
-    const onChange = (e: MediaQueryListEvent) => setMobile(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return mobile;
+const MOBILE_QUERY = "(max-width: 699px)";
+
+function subscribeMobile(onChange: () => void): () => void {
+  const mq = window.matchMedia(MOBILE_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
 }
 
-/* 1g — collapse shell. `open=false` collapses the row (grid-template-rows
-   0fr + fade); `enter` mounts closed and opens on the next frame (restore /
-   undo reverse animation). Class `collapse-shell` drives the first-child
-   border/padding rules in globals.css. */
-function CollapseShell({
-  open,
-  enter = false,
-  children,
-}: {
-  open: boolean;
-  enter?: boolean;
-  children: React.ReactNode;
-}) {
-  const [ready, setReady] = useState(!enter);
-  useEffect(() => {
-    if (!ready) {
-      const id = requestAnimationFrame(() => setReady(true));
-      return () => cancelAnimationFrame(id);
-    }
-  }, [ready]);
-  const expanded = open && ready;
-  return (
-    <div
-      className="collapse-shell"
-      style={{
-        display: "grid",
-        gridTemplateRows: expanded ? "1fr" : "0fr",
-        transition: `grid-template-rows ${COLLAPSE_MS}ms var(--ease-out-soft)`,
-      }}
-    >
-      <div
-        style={{
-          overflow: "hidden",
-          minHeight: 0,
-          opacity: expanded ? 1 : 0,
-          // Leads the collapse slightly, so the row reads as fading out of the
-          // list rather than being physically squashed shut.
-          transition: `opacity ${Math.round(COLLAPSE_MS * 0.7)}ms linear`,
-        }}
-      >
-        {children}
-      </div>
-    </div>
+/**
+ * Phone width or not. The server always renders the desktop table, so
+ * hydration uses the same answer (getServerSnapshot) and the cards swap in
+ * right after - reading matchMedia during hydration instead made the two
+ * trees disagree and React throw away the server HTML.
+ */
+function useIsMobile(): boolean {
+  return useSyncExternalStore(
+    subscribeMobile,
+    () => window.matchMedia(MOBILE_QUERY).matches,
+    () => false
   );
 }
 
@@ -303,11 +232,26 @@ function CollapseShell({
  * implied by the box, so `pinnedTerm` swaps it for the row's term - the one
  * fact that group's rows no longer get from their heading.
  */
-function Tags({ tag, pinnedTerm }: { tag: string; pinnedTerm?: string }) {
+function Tags({
+  tag,
+  pinnedTerm,
+  wantedTerms = null,
+}: {
+  tag: string;
+  pinnedTerm?: string;
+  wantedTerms?: string[] | null;
+}) {
   if (pinnedTerm !== undefined) {
+    // Same short code and colour rule as the desktop Term column.
     return (
-      <span className="ml-1.5 inline-block rounded-full bg-chip px-1.5 py-[1px] align-[2px] text-[10.5px] font-medium leading-none text-ink-2">
-        {termLabel(pinnedTerm || UNKNOWN_TERM)}
+      <span
+        title={termLabel(pinnedTerm || UNKNOWN_TERM)}
+        className={cn(
+          "ml-1.5 inline-block rounded-full bg-chip px-1.5 py-[1px] align-[2px] font-mono text-[10.5px] font-medium leading-none",
+          !pinnedTerm || isPrimaryTerm(pinnedTerm, wantedTerms) ? "text-ink-2" : "text-amber"
+        )}
+      >
+        {termShort(pinnedTerm)}
       </span>
     );
   }
@@ -333,28 +277,6 @@ function Tags({ tag, pinnedTerm }: { tag: string; pinnedTerm?: string }) {
       {raw}
     </span>
   );
-}
-
-/* Ring that only a keyboard focus can earn, in the house accent. It replaces
-   Chrome's UA `:focus-visible { outline: auto }`, which the base layer's
-   `outline-ring/50` tints accent - that pairing is what painted the stuck
-   "thick light border" on a clicked tick. */
-const FOCUS_RING =
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
-
-/**
- * Drops DOM focus after a pointer-driven activation.
- *
- * A clicked button keeps focus, and Chrome promotes a merely-focused element
- * to `:focus-visible` the moment the user touches the keyboard - which on this
- * surface is immediately, since the next thing they do is press j/k/x. The ring
- * then paints long after the click and reads as a highlight stuck on that one
- * tick. Keyboard activation (Enter/Space) reports `detail === 0`, so it keeps
- * focus and keeps the ring; only a real click gives it up. Nothing is lost -
- * the triage shortcuts are bound on window, not on the focused element.
- */
-function blurOnPointerActivate(e: React.MouseEvent<HTMLElement>) {
-  if (e.detail > 0) e.currentTarget.blur();
 }
 
 /**
@@ -385,7 +307,7 @@ function Divider({ className }: { className?: string }) {
 export function Triage({
   rows: initialRows,
   demo = false,
-  initialFilter,
+  initialView = DEFAULT_URL_STATE,
   initialSelected,
   wantedTerms = null,
 }: {
@@ -405,11 +327,13 @@ export function Triage({
    */
   demo?: boolean;
   /**
-   * Filter to open on, from the page's `?filter=` search param. It exists so
+   * The view to open on, from the page's `?filter=`, `?term=`, `?sort=` and
+   * `?open=` search params (matches-lib parseUrlState). `?filter=` exists so
    * the command palette's "Show hidden" can reach the hidden list from the
-   * tracker page, which has no filter state of its own to set.
+   * tracker page; the rest let a link reproduce a view. Kept in sync with the
+   * URL (replace, not push) as they change.
    */
-  initialFilter?: string;
+  initialView?: MatchesUrlState;
   initialSelected?: string;
 }) {
   const { show } = useAppView();
@@ -428,10 +352,13 @@ export function Triage({
     setRows(initialRows);
   }
 
+  // A row the link points at (?job= or ?open=) must be reachable: a hidden
+  // one opens the hidden list, and unwatched terms are shown.
+  const focusShort = initialSelected ?? initialView.open ?? undefined;
   const [filter, setFilter] = useState<Filter>(() =>
-    initialRows.find(r => r.short === initialSelected)?.dismissed ? "hidden" : isFilter(initialFilter) ? initialFilter : "all"
+    initialRows.find((r) => r.short === focusShort)?.dismissed ? "hidden" : initialView.filter
   );
-  const [showUnwatched, setShowUnwatched] = useState(!!initialSelected);
+  const [showUnwatched, setShowUnwatched] = useState(!!focusShort);
   /* Rows in terms the preferences don't want, and the rows the surface
      works from. Unwatched rows are set aside before every count and filter,
      so "11 matches" and the pills describe what is actually on screen. */
@@ -449,9 +376,14 @@ export function Triage({
     () => sortTerms([...new Set(unwatched.filter((r) => !r.dismissed).map((r) => r.term))]),
     [unwatched]
   );
-  const [termFilter, setTermFilter] = useState<string>(ALL_TERMS);
+  const [termFilter, setTermFilter] = useState<string>(() =>
+    termFromSlug(initialView.term, orderTerms(initialRows.map(termOf)))
+  );
+  const [sort, setSort] = useState<Sort>(initialView.sort);
+  /** The one row whose details panel is open (desktop accordion). */
+  const [openShort, setOpenShort] = useState<string | null>(initialView.open);
   const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState<string | null>(initialSelected ?? null);
+  const [cursor, setCursor] = useState<string | null>(focusShort ?? null);
   const [burst, setBurst] = useState<{ visible: boolean; count: number }>({
     visible: false,
     count: 0,
@@ -631,69 +563,73 @@ export function Triage({
     [demo]
   );
 
-  const visible = useMemo(
-    () => visibleRows(scoped, filter, query),
-    [scoped, filter, query]
+  /* Status pills x term pills x search (matches-lib composeFilters). Each
+     status pill is counted against the active term and query, each term pill
+     against the active status and query. Term pills come from the rows - the
+     wanted set rolls with the calendar - and a stored term no longer on offer
+     simply stops applying rather than being written back from an effect. */
+  const filtered = useMemo(
+    () => composeFilters(scoped, { filter, term: termFilter, query }),
+    [scoped, filter, termFilter, query]
   );
-  // Grouped before the term pill is applied, so each pill can carry the count
-  // it would show and the pill row itself never changes shape as you click it.
-  const allGroups = useMemo(() => groupRows(visible), [visible]);
+  const activeTerm = filtered.term;
+  const visible = filtered.rows;
 
-  /* Term pills: one per term the data carries, chronological (the unknown
-     bucket last). Counted over every visible row, including the ones the
-     pinned Priority group holds, so a pill says how many of that term exist
-     rather than how many sit in its box. The wanted set rolls with the
-     calendar, so pills come from the rows rather than a configured list. */
-  const termPills = useMemo<PillOption[]>(() => {
-    const counts = new Map<string, number>();
-    for (const r of visible) {
-      const t = r.term || UNKNOWN_TERM;
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-    const terms = [
-      ...sortTerms([...counts.keys()].filter((t) => t !== UNKNOWN_TERM)),
-      ...(counts.has(UNKNOWN_TERM) ? [UNKNOWN_TERM] : []),
-    ];
-    return [
-      { key: ALL_TERMS, label: "All", count: visible.length },
-      ...terms.map((t) => ({ key: t, label: termLabel(t), count: counts.get(t) ?? 0 })),
-    ];
-  }, [visible]);
+  const statusPills = useMemo<PillOption[]>(
+    () =>
+      STATUS_FILTERS.map((f) => ({
+        key: f.key,
+        label: f.label,
+        count: filtered.statusCounts[f.key],
+      })),
+    [filtered]
+  );
+  const termPills = useMemo<PillOption[]>(
+    () =>
+      filtered.termCounts.map((t) => ({
+        key: t.key,
+        label: t.key === ALL_TERMS ? "All terms" : termLabel(t.key),
+        count: t.count,
+      })),
+    [filtered]
+  );
 
-  /* A pill for a stray term stops being offered once the search or filter
-     narrows its group away. Rather than writing the selection back to "all"
-     from an effect, the stored value is read through this guard, so a stale
-     pick simply stops applying (and comes back if its group returns). */
-  const activeTerm = termPills.some((p) => p.key === termFilter)
-    ? termFilter
-    : ALL_TERMS;
+  /* Desktop: one flat list in the header's sort order. Phones keep the term
+     groups (pinned Priority first), so their order is the groups flattened. */
+  const sorted = useMemo(() => sortRows(visible, sort), [visible, sort]);
+  const groups = useMemo(() => (isMobile ? groupRows(visible) : []), [isMobile, visible]);
+  const ordered = useMemo(
+    () => (isMobile ? groups.flatMap((g) => g.rows) : sorted),
+    [isMobile, groups, sorted]
+  );
 
-  /* A term pill narrows the pinned group to that term's priority rows and
-     keeps it pinned; the term groups reduce to the one picked. */
-  const groups = useMemo(() => {
-    if (activeTerm === ALL_TERMS) return allGroups;
-    return allGroups
-      .map((g) =>
-        g.kind === "priority"
-          ? { ...g, rows: g.rows.filter((r) => (r.term || UNKNOWN_TERM) === activeTerm) }
-          : g
-      )
-      .filter((g) => (g.kind === "priority" ? g.rows.length > 0 : g.term === activeTerm));
-  }, [allGroups, activeTerm]);
-  const ordered = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+  /* The open panel only counts while its row is on screen; a filter that
+     drops the row closes it without writing state back. */
+  const activeOpen = openShort && visible.some((r) => r.short === openShort) ? openShort : null;
 
   const stats = useMemo(() => {
     const active = scoped.filter((r) => !r.dismissed);
     return {
       matches: active.length,
-      priority: active.filter((r) => r.priority).length,
-      applied: active.filter((r) => r.applied).length,
-      saved: active.filter((r) => r.saved).length,
-      resumes: active.filter((r) => r.resumeUrl).length,
-      hidden: scoped.length - active.length,
       unwatched: unwatched.filter((r) => !r.dismissed).length,
     };
   }, [scoped, unwatched]);
+
+  /* View state in the URL: ?filter= ?term= ?sort= ?open=, replacing the
+     history entry so filtering never piles up Back presses. Other params
+     (view, job) ride along untouched. */
+  useEffect(() => {
+    const qs = formatUrlState(window.location.search, {
+      filter,
+      term: activeTerm === ALL_TERMS ? null : termSlug(activeTerm),
+      sort,
+      open: activeOpen,
+    });
+    const href = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+    if (href !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState(null, "", href);
+    }
+  }, [filter, activeTerm, sort, activeOpen]);
 
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
@@ -839,6 +775,7 @@ export function Triage({
     const i = ordered.findIndex((r) => r.short === short);
     const next = ordered[i + 1] || ordered[i - 1];
     setCursor(next ? next.short : null);
+    if (openShort === short) setOpenShort(null);
 
     setHiding((prev) => new Set(prev).add(short));
     burstShorts.current.add(short);
@@ -926,6 +863,13 @@ export function Triage({
       return;
     }
     queueBuild(short);
+  }
+  /** Enter: the details panel on desktop; phones have no panel, so the
+   *  posting opens instead, as it always has there. */
+  function dockDetails() {
+    if (!currentRow) return;
+    if (isMobile) openRow();
+    else toggleDetails(currentRow.short);
   }
   function dockBuild() {
     if (!currentRow) return;
@@ -1029,6 +973,12 @@ export function Triage({
     window.open(r.url, "_blank", "noopener");
   }
 
+  /** Opens a row's details panel (closing any other), or closes it. */
+  function toggleDetails(short: string) {
+    setCursor(short);
+    setOpenShort((cur) => (cur === short ? null : short));
+  }
+
   function actOnCurrent(kind: "applied" | "saved" | "hide") {
     if (!currentRow) return;
     if (kind === "applied") {
@@ -1045,9 +995,16 @@ export function Triage({
   useEffect(() => {
     keyboardActions.current = (e: KeyboardEvent) => {
       const k = e.key;
-      if (k === "Escape") return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (k === "Escape") {
+        // A dialog or the palette handles (and prevents) its own Escape.
+        if (!isInput && !e.defaultPrevented && openShort) {
+          e.preventDefault();
+          setOpenShort(null);
+        }
+        return;
+      }
       const kl = k.toLowerCase();
       if (isInput) {
         if (kl === "z" && (e.ctrlKey || e.metaKey)) {
@@ -1106,10 +1063,16 @@ export function Triage({
         // flashes the dock's own keycap in step with it.
         e.preventDefault();
         flashDock("cycle");
-      } else if (k === "Enter") {
+      } else if (kl === "o") {
         e.preventDefault();
         flashDock("open");
         openRow();
+      } else if (k === "Enter") {
+        // A focused button or link keeps its own Enter.
+        if (tag === "BUTTON" || tag === "A") return;
+        e.preventDefault();
+        flashDock("details");
+        dockDetails();
       }
     };
   });
@@ -1124,6 +1087,10 @@ export function Triage({
     setFilter("all");
     setTermFilter(ALL_TERMS);
     setQuery("");
+  }
+
+  function toggleSort(key: NonNullable<Sort>["key"]) {
+    setSort((cur) => cycleSort(cur, key));
   }
 
   /* Command palette. Jump targets are every live match, not just the visible
@@ -1203,9 +1170,33 @@ export function Triage({
   }
 
   const hasAnyRows = rows.length > 0;
-  const emptyFilter = hasAnyRows && groups.length === 0;
+  const emptyFilter = hasAnyRows && visible.length === 0;
+  const today = todayLocal();
 
-  // Flat render index per row for the cascade stagger.
+  const tableHandlers: MatchHandlers = {
+    onActivate: toggleDetails,
+    onToggleApplied: toggleApplied,
+    onToggleSaved: toggleSaved,
+    onHide: hideShort,
+    onRestore: restoreShort,
+    onBuild: startBuild,
+    onOpenReport: openReport,
+  };
+
+  const nothingHere = (
+    <>
+      Nothing matches the current filters.
+      <button
+        type="button"
+        onClick={clearFilters}
+        className="ml-2 cursor-pointer font-medium text-accent underline decoration-dashed underline-offset-2"
+      >
+        clear filters
+      </button>
+    </>
+  );
+
+  // Flat render index per row for the mobile cascade stagger.
   let flatIndex = 0;
 
   return (
@@ -1213,54 +1204,17 @@ export function Triage({
       ref={rootRef}
       className="mx-auto w-full max-w-[1060px] px-5 py-5 pb-32"
     >
-      {/* statline, with the freshness readout riding its right edge. The view
-          switch leads the row - same slot on every surface (see Tracker's
-          own first row, and the /inbox and /profile pages), so it costs no
-          extra vertical space of its own. */}
+      {/* The view switch leads the first row - same slot on every surface (see
+          Tracker's own first row, and the /inbox and /profile pages) - with
+          the freshness readout riding its right edge. */}
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-ink-2 tabular-nums">
         <ViewSwitch active="matches" count={stats.matches} />
-        <div>
-        {FILTERS.map((s, i) => {
-          const n =
-            s.key === "all"
-              ? stats.matches
-              : s.key === "priority"
-                ? stats.priority
-              : s.key === "applied"
-                ? stats.applied
-                : s.key === "saved"
-                  ? stats.saved
-                  : s.key === "resumes"
-                    ? stats.resumes
-                    : stats.hidden;
-          const active = filter === s.key;
-          return (
-            <span key={s.key}>
-              {i > 0 && <span className="mx-1">·</span>}
-              <button
-                type="button"
-                onClick={() => setFilter((f) => (f === s.key ? "all" : s.key))}
-                className={cn(
-                  "cursor-pointer rounded-sm px-0.5 transition-colors",
-                  active
-                    ? "text-accent underline decoration-dashed underline-offset-[3px]"
-                    : "hover:text-accent hover:underline hover:decoration-dashed hover:underline-offset-[3px]"
-                )}
-              >
-                <b className="font-semibold text-ink">{n}</b>{" "}
-                <span className="text-ink-2">{s.label}</span>
-              </button>
-            </span>
-          );
-        })}
-        </div>
         <RefreshControl className="ml-auto" />
       </div>
 
-      {/* toolbar - the search spans the row with the status select docked at
-          its right end, and the term pills sit on their own line underneath.
-          Add URL and the palette trigger ride the pill row's right edge, which
-          keeps the search line uncluttered at every width. */}
+      {/* toolbar - the search spans the row, with the palette trigger and Add
+          URL at its right end. The status pills and term pills share the line
+          underneath, status on the left and terms on the right. */}
       <div className="mb-2 flex items-center gap-2">
         <input
           ref={searchRef}
@@ -1272,23 +1226,22 @@ export function Triage({
           aria-label="Search matches"
           className="h-[34px] min-w-0 flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
         />
-        <StatusSelect
-          value={filter}
-          onChange={(next) => setFilter(next)}
-          className="w-[132px]"
-        />
+        <PaletteButton />
+        <AddUrlDialog />
       </div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <FilterPills
+          label="Filter by status"
+          options={statusPills}
+          value={filter}
+          onChange={(key) => setFilter(key as Filter)}
+        />
         <FilterPills
           label="Filter by term"
           options={termPills}
           value={activeTerm}
           onChange={setTermFilter}
         />
-        <div className="ml-auto flex items-center gap-2">
-          <PaletteButton />
-          <AddUrlDialog />
-        </div>
       </div>
 
       {!hasAnyRows ? (
@@ -1297,18 +1250,37 @@ export function Triage({
           hint="Matches will land here as the watcher finds them - or add a job URL manually."
           action={<AddUrlDialog />}
         />
+      ) : !isMobile ? (
+        <>
+          <MatchesTable
+            rows={sorted}
+            sort={sort}
+            onSort={toggleSort}
+            openShort={activeOpen}
+            cursor={cursor}
+            wantedTerms={wantedTerms}
+            today={today}
+            hiding={hiding}
+            entering={entering}
+            rowStyle={cascadeStyle}
+            flashFor={(short, field) => tokenFor(tickFlash, `${short}:${field}`)}
+            buildStateFor={buildStateFor}
+            buildErrorFor={buildErrorFor}
+            metaFor={metaFor}
+            justBuilt={justBuilt}
+            handlers={tableHandlers}
+            empty={nothingHere}
+          />
+          <p
+            aria-live="polite"
+            className="mt-2.5 font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase"
+          >
+            {visible.length} shown · {sortLabel(sort)}
+          </p>
+        </>
       ) : emptyFilter ? (
         <div className="rounded-md border border-line bg-surface">
-          <div className="px-4 py-7 text-center text-[13px] text-ink-2">
-            Nothing matches the current filters.
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="ml-2 font-medium text-accent underline decoration-dashed underline-offset-2"
-            >
-              clear filters
-            </button>
-          </div>
+          <div className="px-4 py-7 text-center text-[13px] text-ink-2">{nothingHere}</div>
         </div>
       ) : (
         <div>
@@ -1343,71 +1315,39 @@ export function Triage({
                     · {g.rows.length}
                   </span>
                 </h2>
-                {isMobile ? (
-                  <div>
-                    {g.rows.map((r) => {
-                      const i = flatIndex++;
-                      return (
-                        <CollapseShell
-                          key={r.short}
-                          open={!hiding.has(r.short)}
-                          enter={entering.has(r.short)}
-                        >
-                          <div data-card-pad className="pt-2">
-                            <MobileCard
-                              row={r}
-                              pinned={g.kind === "priority"}
-                              cascade={cascadeStyle(i)}
-                              isCursor={r.short === cursor}
-                              onSelect={() => setCursor(r.short)}
-                              onOpen={() => openRow(r)}
-                              onToggleApplied={() => toggleApplied(r.short)}
-                              onToggleSaved={() => toggleSaved(r.short)}
-                              onHide={() => hideShort(r.short)}
-                              onRestore={() => restoreShort(r.short)}
-                              buildState={buildStateFor(r)}
-                              buildError={buildErrorFor(r)}
-                              onBuild={() => startBuild(r.short)}
-                              onOpenReport={() => openReport(r)}
-                            />
-                          </div>
-                        </CollapseShell>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <DesktopGroup cursor={cursor}>
-                    {g.rows.map((r) => {
-                      const i = flatIndex++;
-                      return (
-                        <CollapseShell
-                          key={r.short}
-                          open={!hiding.has(r.short)}
-                          enter={entering.has(r.short)}
-                        >
-                          <RowView
+                <div>
+                  {g.rows.map((r) => {
+                    const i = flatIndex++;
+                    return (
+                      <CollapseShell
+                        key={r.short}
+                        open={!hiding.has(r.short)}
+                        enter={entering.has(r.short)}
+                      >
+                        <div data-card-pad className="pt-2">
+                          <MobileCard
                             row={r}
                             pinned={g.kind === "priority"}
+                            wantedTerms={wantedTerms}
+                            defaultExpanded={r.short === activeOpen}
                             cascade={cascadeStyle(i)}
                             isCursor={r.short === cursor}
-                            appliedFlash={tokenFor(tickFlash, `${r.short}:a`)}
-                            savedFlash={tokenFor(tickFlash, `${r.short}:s`)}
-                            buildState={buildStateFor(r)}
-                            buildError={buildErrorFor(r)}
                             onSelect={() => setCursor(r.short)}
+                            onOpen={() => openRow(r)}
                             onToggleApplied={() => toggleApplied(r.short)}
                             onToggleSaved={() => toggleSaved(r.short)}
                             onHide={() => hideShort(r.short)}
                             onRestore={() => restoreShort(r.short)}
+                            buildState={buildStateFor(r)}
+                            buildError={buildErrorFor(r)}
                             onBuild={() => startBuild(r.short)}
                             onOpenReport={() => openReport(r)}
-                            reportPulse={justBuilt.has(r.short)}
                           />
-                        </CollapseShell>
-                      );
-                    })}
-                  </DesktopGroup>
-                )}
+                        </div>
+                      </CollapseShell>
+                    );
+                  })}
+                </div>
               </section>
             );
           })}
@@ -1511,11 +1451,16 @@ export function Triage({
           flashDock("open");
           openRow();
         }}
+        onDetails={() => {
+          flashDock("details");
+          dockDetails();
+        }}
         onBuild={() => {
           flashDock("build");
           dockBuild();
         }}
         buildState={currentRow ? buildStateFor(currentRow) : "idle"}
+        detailsOpen={!!currentRow && currentRow.short === activeOpen}
       />
 
       {burst.visible && (
@@ -1535,90 +1480,6 @@ export function Triage({
           </button>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Desktop term-group container, owning the sliding cursor rail and its wash.
- *
- * The rail is one absolutely-positioned element per group that translates to
- * the cursor row, instead of a border repainted on whichever row is current -
- * that is the whole point, since a repaint has no motion to read. Rows are
- * variable height, so the position is measured rather than computed: a
- * ResizeObserver re-measures when a row grows (a resume button switching to
- * "building…", the window reflowing) so the rail never drifts off its row.
- *
- * Each group owns its own rail, so moving the cursor across a group boundary
- * fades one out and snaps the other in rather than flying the rail across the
- * gap. Appearing is always instant - only row-to-row moves within a group
- * animate, or the rail would slide down from the top of the group on arrival.
- */
-function DesktopGroup({
-  cursor,
-  children,
-}: {
-  cursor: string | null;
-  children: React.ReactNode;
-}) {
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [rail, setRail] = useState<{ y: number; h: number } | null>(null);
-  const [instant, setInstant] = useState(true);
-  const wasShown = useRef(false);
-
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    const measure = () => {
-      const el = box.querySelector<HTMLElement>('[data-cursor="1"]');
-      if (!el) {
-        wasShown.current = false;
-        setRail(null);
-        return;
-      }
-      setInstant(!wasShown.current);
-      wasShown.current = true;
-      const y = el.offsetTop;
-      const h = el.offsetHeight;
-      // The observer fires every frame while a row collapses, which keeps the
-      // rail glued to its row - but only re-render when it actually moved.
-      setRail((prev) => (prev && prev.y === y && prev.h === h ? prev : { y, h }));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(box);
-    return () => ro.disconnect();
-  }, [cursor]);
-
-  const railStyle: CSSProperties = {
-    transform: `translateY(${rail ? rail.y : 0}px)`,
-    height: rail ? `${rail.h}px` : 0,
-    opacity: rail ? 1 : 0,
-    transition: instant
-      ? "opacity .12s linear"
-      : "transform var(--rail-ms) var(--ease-rail), height var(--rail-ms) var(--ease-rail), opacity .12s linear",
-    willChange: "transform, height",
-    pointerEvents: "none",
-  };
-
-  return (
-    <div
-      ref={boxRef}
-      className="relative overflow-hidden rounded-md border border-line bg-surface"
-    >
-      {/* wash behind the rows (rows carry no background of their own) */}
-      <span
-        aria-hidden
-        className="absolute top-0 left-0 w-full bg-[color-mix(in_srgb,var(--color-accent)_4%,transparent)]"
-        style={railStyle}
-      />
-      {/* the rail itself */}
-      <span
-        aria-hidden
-        className="absolute top-0 left-0 z-10 w-[3px] rounded-r-[2px] bg-accent"
-        style={railStyle}
-      />
-      {children}
     </div>
   );
 }
@@ -1746,267 +1607,11 @@ function ResumeButton({
   );
 }
 
-function RowView({
-  row,
-  pinned = false,
-  cascade,
-  isCursor,
-  appliedFlash,
-  savedFlash,
-  buildState,
-  buildError,
-  onSelect,
-  onToggleApplied,
-  onToggleSaved,
-  onHide,
-  onRestore,
-  onBuild,
-  onOpenReport,
-  reportPulse,
-}: {
-  row: TriageRow;
-  /** Rendered inside the pinned Priority group (shows the term, not the badge). */
-  pinned?: boolean;
-  cascade: CSSProperties;
-  isCursor: boolean;
-  appliedFlash: number | null;
-  savedFlash: number | null;
-  buildState: BuildState;
-  buildError?: string;
-  onSelect: () => void;
-  onToggleApplied: () => void;
-  onToggleSaved: () => void;
-  onHide: () => void;
-  onRestore: () => void;
-  onBuild: () => void;
-  onOpenReport: () => void;
-  /** Play the one-shot "just built" ring on the report affordance. */
-  reportPulse: boolean;
-}) {
-  const { short, company, title, location, salary, added, applied, saved, dismissed } = row;
-
-  // Replay tokens are null except on the row the user just ticked, so a row
-  // that arrives already applied renders static through SSR and hydration.
-  const appliedBtn = useReplay<HTMLButtonElement>(
-    appliedFlash,
-    TICK_POP,
-    TICK_POP_OPTS
-  );
-  const checkPath = useReplay<SVGPathElement>(
-    appliedFlash,
-    CHECK_DRAW,
-    CHECK_DRAW_OPTS
-  );
-  const savedBtn = useReplay<HTMLButtonElement>(
-    savedFlash,
-    TICK_POP,
-    TICK_POP_OPTS
-  );
-
-  return (
-    <div
-      data-cursor={isCursor ? "1" : undefined}
-      data-row-line
-      onClick={(e) => {
-        const t = e.target as HTMLElement;
-        if (t.closest("[data-applied-tick]")) return;
-        if (t.closest("[data-saved-tick]")) return;
-        if (t.closest("[data-hide]")) return;
-        if (t.closest("[data-restore]")) return;
-        if (t.closest("[data-open]")) return;
-        if (t.closest("[data-report]")) return;
-        onSelect();
-      }}
-      style={cascade}
-      /* cursor bg/inset-shadow classes removed - DesktopGroup's rail + wash
-         layers replace them */
-      className="grid cursor-default grid-cols-[46px_minmax(0,1fr)_auto] items-start gap-x-3 border-t border-line px-3 py-2.5 transition-colors select-none"
-    >
-      {/* ticks */}
-      <div className="flex gap-1.5 pt-0.5">
-        <button
-          ref={appliedBtn}
-          type="button"
-          data-applied-tick
-          aria-label={applied ? "Mark as not applied" : "Mark as applied"}
-          aria-pressed={applied}
-          onClick={(e) => {
-            blurOnPointerActivate(e);
-            onToggleApplied();
-          }}
-          className={cn(
-            "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-[background-color,border-color,box-shadow] duration-150 active:scale-90",
-            FOCUS_RING,
-            applied
-              ? "border-accent bg-accent text-accent-ink"
-              : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
-          )}
-        >
-          {/* Inline path rather than lucide's <Check/> so the stroke can draw
-              itself: dasharray 20 covers the whole path, and the replay walks
-              the offset to 0. Unticked rows park it at 20 (fully hidden). */}
-          <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden>
-            <path
-              ref={checkPath}
-              d="M3 8.5 L6.5 12 L13 4.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="3.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeDasharray="20"
-              style={{ strokeDashoffset: applied ? 0 : 20 }}
-            />
-          </svg>
-        </button>
-        <button
-          ref={savedBtn}
-          type="button"
-          data-saved-tick
-          aria-label={saved ? "Unsave" : "Save"}
-          aria-pressed={saved}
-          onClick={(e) => {
-            blurOnPointerActivate(e);
-            onToggleSaved();
-          }}
-          className={cn(
-            "flex h-[17px] w-[17px] items-center justify-center rounded-[5px] border-[1.5px] transition-[background-color,border-color,box-shadow] duration-150 active:scale-90",
-            FOCUS_RING,
-            saved
-              ? "border-amber bg-[color-mix(in_srgb,var(--color-amber)_16%,var(--color-surface))] text-amber"
-              : "border-line-2 bg-surface text-transparent hover:border-ink-2 hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_14%,transparent)]"
-          )}
-        >
-          <Star className="size-3" strokeWidth={2} fill={saved ? "currentColor" : "none"} />
-        </button>
-      </div>
-
-      {/* company / title / meta - applied dim now transitions */}
-      <div className="min-w-0">
-        <span
-          className={cn(
-            "text-[13.5px] font-semibold transition-opacity duration-[250ms]",
-            applied && "opacity-55"
-          )}
-        >
-          {company}
-        </span>
-        <Tags tag={row.tag} pinnedTerm={pinned ? row.term : undefined} />
-        {row.url ? (
-          <a
-            data-open
-            href={row.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className={cn(
-              "block truncate text-[12.5px] text-ink transition-colors hover:text-accent hover:underline underline-offset-3",
-              applied && "opacity-55"
-            )}
-            title={title}
-          >
-            {title}
-          </a>
-        ) : (
-          <div
-            className={cn(
-              "truncate text-[12.5px] text-ink transition-opacity duration-[250ms]",
-              applied && "opacity-55"
-            )}
-            title={title}
-          >
-            {title}
-          </div>
-        )}
-        <div className="mt-0.5 text-[11.5px] text-ink-2 tabular-nums">
-          {/* Joined rather than concatenated with fixed separators: a manually
-              added job often has no location or salary, which left the line
-              opening on a dangling "·". */}
-          {[location, salary, `seen ${fmtDate(added)}`]
-            .filter(Boolean)
-            .join(" · ")}{" "}
-          ·{" "}
-          <span className="font-mono text-[10.5px]">{short}</span>
-        </div>
-      </div>
-
-      {/* actions — resume docker */}
-      <div className="flex items-center gap-1.5 self-center">
-        <ReferralLink short={row.short} />
-        <ResumeButton
-          state={buildState}
-          href={row.resumeUrl}
-          onBuild={onBuild}
-          error={buildError}
-          noJd={row.resumeMeta?.report?.jdSource === "stub"}
-          format={row.resumeMeta?.format}
-        />
-        {buildState === "built" && (
-          /* The report affordance: deliberately quiet next to the resume
-             button, announcing itself with a two-ring pulse right after a
-             build and sitting silent after that. */
-          <button
-            type="button"
-            data-report
-            title="Build report - what the tailor did"
-            onClick={(e) => {
-              blurOnPointerActivate(e);
-              onOpenReport();
-            }}
-            style={
-              reportPulse
-                ? { animation: "reportPulse 1s var(--ease-out-soft) 2" }
-                : undefined
-            }
-            className={cn(
-              "flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-accent",
-              FOCUS_RING
-            )}
-          >
-            <FileSearch className="size-3.5" />
-          </button>
-        )}
-        {dismissed ? (
-          <button
-            type="button"
-            data-restore
-            title="restore to the matches list"
-            onClick={(e) => {
-              blurOnPointerActivate(e);
-              onRestore();
-            }}
-            className={cn(
-              "flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] hover:text-amber",
-              FOCUS_RING
-            )}
-          >
-            <Undo2 className="size-3.5" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            data-hide
-            title="hide - moves to Hidden"
-            onClick={(e) => {
-              blurOnPointerActivate(e);
-              onHide();
-            }}
-            className={cn(
-              "flex h-[26px] w-[26px] items-center justify-center rounded-[5px] text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--color-red)_12%,transparent)] hover:text-red",
-              FOCUS_RING
-            )}
-          >
-            <X className="size-3.5" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function MobileCard({
   row,
   pinned = false,
+  wantedTerms,
+  defaultExpanded = false,
   cascade,
   isCursor,
   onSelect,
@@ -2022,6 +1627,9 @@ function MobileCard({
 }: {
   row: TriageRow;
   pinned?: boolean;
+  wantedTerms: string[] | null;
+  /** Opened by a ?open= link. */
+  defaultExpanded?: boolean;
   cascade: CSSProperties;
   isCursor: boolean;
   onSelect: () => void;
@@ -2036,7 +1644,7 @@ function MobileCard({
   onOpenReport: () => void;
 }) {
   const [drag, setDrag] = useState(0);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [dragged, setDragged] = useState(false);
   const startX = useRef<number | null>(null);
 
@@ -2139,7 +1747,18 @@ function MobileCard({
               >
                 {row.company}
               </span>
-              <Tags tag={row.tag} pinnedTerm={pinned ? row.term : undefined} />
+              <Tags
+                tag={row.tag}
+                pinnedTerm={pinned ? row.term : undefined}
+                wantedTerms={wantedTerms}
+              />
+              {saved && (
+                <Star
+                  className="size-3 shrink-0 self-center text-amber"
+                  fill="currentColor"
+                  aria-label="saved"
+                />
+              )}
             </div>
             {row.url ? (
               <a
@@ -2322,17 +1941,22 @@ function Dock({
   onNav,
   onAct,
   onOpen,
+  onDetails,
   onBuild,
   onCycle,
   buildState,
+  detailsOpen,
 }: {
   pressed: FlashState;
   onNav: (d: number) => void;
   onAct: (kind: "applied" | "saved" | "hide") => void;
   onOpen: () => void;
+  onDetails: () => void;
   onBuild: () => void;
   onCycle: () => void;
   buildState: BuildState;
+  /** The cursor row's panel is open, so ↵ closes it. */
+  detailsOpen: boolean;
 }) {
   const kbd =
     "rounded border border-line-2 bg-surface px-1 py-px font-mono text-[10.5px] font-medium text-ink-2";
@@ -2359,11 +1983,13 @@ function Dock({
           | "hide"
           | "build"
           | "open"
+          | "details"
           | undefined;
         if (act === "cycle") onCycle();
         else if (act === "up" || act === "down") onNav(act === "up" ? -1 : 1);
         else if (act === "build") onBuild();
         else if (act === "open") onOpen();
+        else if (act === "details") onDetails();
         else if (act) onAct(act as "applied" | "saved" | "hide");
       }}
     >
@@ -2434,8 +2060,17 @@ function Dock({
           <span className={label}>build resume</span>
         )}
       </DockButton>
-      <DockButton act="open" ring="var(--color-ink-2)" pressed={pressed} className={db}>
-        <span className={kbd}>↵</span> <span className={label}>open</span>
+      <DockButton
+        act="details"
+        ring="var(--color-ink-2)"
+        pressed={pressed}
+        title={detailsOpen ? "close details (Esc)" : "show details"}
+        className={db}
+      >
+        <span className={kbd}>↵</span> <span className={label}>details</span>
+      </DockButton>
+      <DockButton act="open" ring="var(--color-ink-2)" pressed={pressed} title="open posting" className={db}>
+        <span className={kbd}>o</span> <span className={label}>open</span>
       </DockButton>
     </div>
   );

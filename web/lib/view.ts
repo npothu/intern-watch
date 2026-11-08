@@ -17,6 +17,12 @@ import { LayoutList, ListChecks, Mail, Users, type LucideIcon } from "lucide-rea
  *     /?filter=hidden   matches, opened on the hidden list
  *     /?view=tracker    tracker
  *
+ * Matches carries more of its view the same way, so a link reproduces it:
+ * `?term=su27` (term pill), `?sort=found.desc` (company|term|found, asc|desc)
+ * and `?open=<short>` (the row whose details are open), next to `?filter=`.
+ * Parsing and formatting live in components/matches/matches-lib.ts; the
+ * matches surface replaces (never pushes) the entry as they change.
+ *
  * The switch itself goes through the native History API. Next keeps
  * `useSearchParams()` in sync with `history.pushState` without re-running the
  * server render, so a view change costs no round trip and no refetch, while the
