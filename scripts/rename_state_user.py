@@ -141,6 +141,32 @@ def leftovers(obj, key: str, path: str = "$") -> list[str]:
     return out
 
 
+def write_atomically(files: list[tuple[Path, object]]) -> None:
+    """Replace each file atomically, keeping a .bak of the original.
+
+    Everything is serialized and written to temporary siblings first, so a
+    serialization or disk error leaves every original untouched. The two
+    os.replace calls are each atomic; if the process dies between them, restore
+    from the .bak files (both are written before either replace happens).
+    """
+    import os
+    import shutil
+    staged = []
+    for path, obj in files:
+        # Same formatting as src/state.py's writer, so the diff is only the rename.
+        text = json.dumps(obj, indent=1, sort_keys=True) + "\n"
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        staged.append((path, tmp))
+    for path, _ in staged:
+        shutil.copy2(path, path.with_name(path.name + ".bak"))
+    for path, tmp in staged:
+        os.replace(tmp, path)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--data-dir", required=True, type=Path)
@@ -173,9 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"refusing: '{a.src}' still present at {len(left)} path(s)", file=sys.stderr)
         return 3
     if a.write:
-        # Same formatting as src/state.py's writer, so the diff is only the rename.
-        for path, obj in ((seen_p, seen), (apps_p, apps)):
-            path.write_text(json.dumps(obj, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        write_atomically([(seen_p, seen), (apps_p, apps)])
     return 0
 
 

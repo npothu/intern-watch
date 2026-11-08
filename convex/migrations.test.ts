@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 
@@ -144,6 +145,32 @@ test("deleteUser removes only that user's rows and needs confirm + maintenance",
   // Now the rename is collision-free.
   const moved = await t.action(internal.migrations.renameUser, { from: "example", to: "nathan", dryRun: false });
   expect(moved.remainingOnFrom).toBe(0);
+});
+
+test("internal direct-request writes refuse during maintenance (gate passed before the switch)", async () => {
+  const t = convexTest(schema);
+  // Simulates a push whose public gate ran before maintenance started and whose
+  // internal write lands after.
+  await expect(t.mutation(internal.mail.notePush, { email: "a@b.c" })).rejects.toThrow(/maintenance/);
+  delete process.env.TRACKER_MAINTENANCE;
+  await expect(t.mutation(internal.mail.notePush, { email: "a@b.c" })).resolves.not.toThrow();
+});
+
+test("two mailboxes under one user is a collision", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("mailAccounts", { user: "example", email: "x@gmail.com", refreshToken: "r" });
+    await ctx.db.insert("mailAccounts", { user: "nathan", email: "y@gmail.com", refreshToken: "r" });
+  });
+  const r = await t.action(internal.migrations.renameUser, { from: "example", to: "nathan", dryRun: true });
+  expect(r.collisions.some((c: string) => c.startsWith("mailAccounts"))).toBe(true);
+});
+
+test('"use node" stays the first statement of Node-runtime files', () => {
+  for (const f of ["resume_node.ts", "ingest_node.ts"]) {
+    const first = readFileSync(new URL(`./${f}`, import.meta.url), "utf8").split("\n")[0].trim();
+    expect(first, f).toBe('"use node";');
+  }
 });
 
 test("rejects malformed or identical keys", async () => {

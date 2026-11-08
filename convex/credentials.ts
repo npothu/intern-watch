@@ -374,6 +374,9 @@ export const upsertCredential = internalMutation({
     status: v.string(),
   },
   handler: async (ctx, { user, provider, ciphertext, iv, hint, label, status }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const existing = await ctx.db
       .query("credentials")
       .withIndex("by_user_provider", (q) => q.eq("user", user).eq("provider", provider))
@@ -411,6 +414,9 @@ export const recordTestResult = internalMutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, { rowId, status, checkedAt, error }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     await ctx.db.patch(rowId, {
       status,
       lastCheckedAt: checkedAt,

@@ -1,5 +1,4 @@
-import { MAINTENANCE_MESSAGE, maintenanceOn } from "./maintenance";
-import { assertNotMaintenance } from "./maintenance";
+import { MAINTENANCE_MESSAGE, assertNotMaintenance, maintenanceOn } from "./maintenance";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { action, httpAction, internalMutation } from "./_generated/server";
@@ -30,6 +29,9 @@ export const prepare = action({
 export const issue = internalMutation({
   args: { user: v.string(), tokenHash: v.string() },
   handler: async (ctx, { user, tokenHash }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const recent = await ctx.db.query("profileUploads").withIndex("by_user", (q) => q.eq("user", user)).collect();
     if (recent.filter((r) => r.expiresAt > Date.now()).length >= 5) throw new Error("Too many pending uploads. Try again later.");
     const id = await ctx.db.insert("profileUploads", { user, tokenHash, state: "issued", expiresAt: Date.now() + TTL });
@@ -40,6 +42,9 @@ export const issue = internalMutation({
 export const reserve = internalMutation({
   args: { tokenHash: v.string() },
   handler: async (ctx, { tokenHash }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const row = await ctx.db.query("profileUploads").withIndex("by_token", (q) => q.eq("tokenHash", tokenHash)).unique();
     if (!row || row.expiresAt <= Date.now() || row.state !== "issued") return null;
     await ctx.db.patch(row._id, { state: "uploading" });
@@ -50,6 +55,9 @@ export const reserve = internalMutation({
 export const finish = internalMutation({
   args: { id: v.id("profileUploads"), storageId: v.id("_storage") },
   handler: async (ctx, { id, storageId }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const row = await ctx.db.get(id);
     if (!row || row.state !== "uploading" || row.expiresAt <= Date.now()) {
       await ctx.storage.delete(storageId);

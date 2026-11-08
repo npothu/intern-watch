@@ -44,7 +44,9 @@ export const USER_TABLES: ReadonlyArray<readonly [string, string, KeySpec]> = [
   ["matches", "by_user", { kind: "field", field: "short", index: "by_user_short" }],
   ["mailMessages", "by_user", { kind: "field", field: "gmailMessageId", index: "by_user_message" }],
   ["inboxActions", "by_user_state", { kind: "field", field: "gmailMessageId", index: "by_user_message" }],
-  ["mailAccounts", "by_user", { kind: "field", field: "email", index: "by_user" }],
+  // Singleton: mail.ts reads and replaces the first account per user, so two
+  // mailboxes under one user is a state the app cannot handle.
+  ["mailAccounts", "by_user", { kind: "singleton" }],
   ["resumes", "by_user", { kind: "field", field: "short", index: "by_user_short" }],
   ["profiles", "by_user", { kind: "singleton" }],
   ["profileBackups", "by_user", { kind: "none" }],
@@ -64,6 +66,9 @@ const USER_KEY = /^[a-zA-Z0-9_-]{1,100}$/; // same rule as web/lib/access-config
 // Byte budgets kept well under Convex's per-function read/write limits so that
 // large `matches.item` documents cannot push a page or batch over.
 const COUNT_PAGE_BYTES = 4 * 1024 * 1024;
+// Larger than Convex's 1 MiB maximum document size, so a page that is not done
+// always carries at least one row; an empty non-final page is treated as an
+// error rather than retried.
 const MOVE_BATCH_BYTES = 2 * 1024 * 1024;
 
 function spec(table: string) {
@@ -258,10 +263,18 @@ export const renameUser = internalAction({
       }
     }
     const after = { [from]: await countAll(ctx, from), [to]: await countAll(ctx, to) };
+    // Strict per-table check. A mismatch means something wrote while the
+    // migration ran (the maintenance barrier leaked); stop and investigate.
+    const problems: string[] = [];
     for (const table of TABLE_NAMES) {
+      if (after[from][table] !== 0) problems.push(`${table}: ${after[from][table]} rows still on '${from}'`);
+      if (moved[table] !== before[from][table]) problems.push(`${table}: moved ${moved[table]}, expected ${before[from][table]}`);
       if (after[to][table] !== before[to][table] + before[from][table]) {
-        throw new ConvexError(`${table}: count mismatch after move (${JSON.stringify({ before, after })})`);
+        problems.push(`${table}: '${to}' has ${after[to][table]}, expected ${before[to][table] + before[from][table]}`);
       }
+    }
+    if (problems.length) {
+      throw new ConvexError(`post-move verification failed: ${problems.join("; ")} :: ${JSON.stringify({ before, moved, after })}`);
     }
     return { dryRun: false, before, moved, after, remainingOnFrom: total(after[from]) };
   },

@@ -1,5 +1,5 @@
-import { assertNotMaintenance } from "./maintenance";
 "use node";
+import { assertNotMaintenance } from "./maintenance";
 
 // The Convex-native resume builder's Node-runtime action.
 //

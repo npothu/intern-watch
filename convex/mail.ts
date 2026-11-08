@@ -171,6 +171,9 @@ export const registerOAuthNonce = mutation({
 export const consumeOAuthNonce = internalMutation({
   args: { nonce: v.string(), user: v.string() },
   handler: async (ctx, { nonce, user }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const row = await ctx.db
       .query("oauthNonces")
       .withIndex("by_nonce", (q) => q.eq("nonce", nonce))
@@ -304,6 +307,9 @@ export const storeMailAccount = internalMutation({
     refreshTokenIv: v.string(),
   },
   handler: async (ctx, { user, email, refreshToken, refreshTokenIv }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const existing = await ctx.db
       .query("mailAccounts")
       .withIndex("by_user", (q) => q.eq("user", user))
@@ -1248,6 +1254,9 @@ async function fetchMessage(token: string, id: string): Promise<any | null> {
 export const notePush = internalMutation({
   args: { email: v.string() },
   handler: async (ctx, { email }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const row = await ctx.db
       .query("mailAccounts")
       .withIndex("by_email", (q) => q.eq("email", email))
