@@ -61,11 +61,8 @@ def fetch_text(client: httpx.Client, url: str) -> str:
 class Adapter(ABC):
     def __init__(self, cfg: SourceConfig):
         self.cfg = cfg
-        # Multi-board adapters (ats-boards) fill this during fetch: board id
-        # ("<ats>:<slug>", see ats_boards.board_id) -> the row's `backfill`
-        # flag, for every board that answered (zero rows included). Each Job
-        # from that board carries the same id in Job.board. src/seeding.py
-        # reads both to seed a newly added board's backlog.
+        # Multi-board adapters fill this during fetch: board id -> the row's
+        # `backfill` flag, for every board that answered (see src/seeding.py).
         self.fetched_boards: dict[str, bool] = {}
 
     def fetch(self, client: httpx.Client, today: dt.date) -> list[Job]:

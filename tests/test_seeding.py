@@ -12,9 +12,19 @@ from tests.test_main_integration import _freeze_clock, _user_cfg, _wire
 TODAY = dt.date(2026, 6, 12)
 
 
+def _url(i, board=None):
+    """Each board posts under its own URL path, like a real ATS board."""
+    host = (board or "x").replace(":", "-")
+    return f"https://{host}.example/jobs/{i}"
+
+
+def _key(i, board=None):
+    return f"url:{_url(i, board)}"
+
+
 def _job(i, source="old-src", board=None):
     return Job(company=f"Co{i}", title="Software Engineer Intern",
-               url=f"https://x.com/{i}", source=source, board=board,
+               url=_url(i, board), source=source, board=board,
                terms=["Summer 2027"], term_confidence="explicit",
                locations=["Atlanta, GA"])
 
@@ -56,9 +66,9 @@ def test_same_job_via_known_source_is_evaluated_not_seeded():
 
 
 def test_already_seen_job_from_new_source_is_not_touched():
-    state = _state(known_sources={"old-src"}, entries=[("url:https://x.com/1", ["old-src"])])
+    state = _state(known_sources={"old-src"}, entries=[(_key(1), ["old-src"])])
     raw = [_job(1, "new-src")]
-    raw[0].dedup_key = "url:https://x.com/1"
+    raw[0].dedup_key = _key(1)
     assert seeding.first_sight(state, raw, _report({"new-src": False})) == {}
 
 
@@ -68,8 +78,8 @@ def test_new_board_inside_known_source_seeded():
            _job(2, "ats-boards", "oracle:new")]
     plan = _plan(state, raw, _report(
         {"ats-boards": False},
-        {"greenhouse:old": ("ats-boards", False),
-         "oracle:new": ("ats-boards", False)}))
+        {"greenhouse:old": False,
+         "oracle:new": False}))
     assert plan == {raw[1].dedup_key: ["oracle:new"]}
 
 
@@ -78,17 +88,18 @@ def test_backfill_rows_opt_out():
     raw = [_job(1, "new-src"), _job(2, "ats-boards", "oracle:new")]
     plan = _plan(state, raw, _report(
         {"new-src": True, "ats-boards": False},
-        {"oracle:new": ("ats-boards", True)}))
+        {"oracle:new": True}))
     assert plan == {}
 
 
 def test_bootstrap_derives_known_from_state():
     # No known_* lists yet (first run of this code). old-src appears in
-    # state; greenhouse:old has a job state already saw through ats-boards;
-    # oracle:new does not -> only its new job is seeded.
+    # state; greenhouse:old left a (since closed) job under its URL path that
+    # state saw through ats-boards, so its all-new listings still count as a
+    # known board; oracle:new left nothing -> only its new job is seeded.
     state = st.empty_state()
-    for key, src in [("url:https://x.com/1", ["old-src"]),
-                     ("url:https://x.com/10", ["ats-boards"])]:
+    for key, src in [(_key(1), ["old-src"]),
+                     (_key(9, "greenhouse:old"), ["ats-boards"])]:
         st.touch(state, key, src, TODAY)
     raw = [_job(2, "old-src"),
            _job(10, "ats-boards", "greenhouse:old"),
@@ -96,8 +107,8 @@ def test_bootstrap_derives_known_from_state():
            _job(20, "ats-boards", "oracle:new")]
     plan = _plan(state, raw, _report(
         {"old-src": False, "ats-boards": False},
-        {"greenhouse:old": ("ats-boards", False),
-         "oracle:new": ("ats-boards", False)}))
+        {"greenhouse:old": False,
+         "oracle:new": False}))
     assert plan == {raw[3].dedup_key: ["oracle:new"]}
 
 
@@ -105,19 +116,19 @@ def test_bootstrap_evidence_ignores_jobs_ingested_by_another_source():
     # The new board's job was already in state via simplify: that is no
     # evidence the BOARD was fetched before, so its other new job is seeded.
     state = st.empty_state()
-    st.touch(state, "url:https://x.com/20", ["simplify"], TODAY)
-    st.touch(state, "url:https://x.com/99", ["ats-boards"], TODAY)
+    st.touch(state, _key(20, "oracle:new"), ["simplify"], TODAY)
+    st.touch(state, _key(99), ["ats-boards"], TODAY)
     raw = [_job(20, "ats-boards", "oracle:new"),
            _job(21, "ats-boards", "oracle:new")]
     plan = _plan(state, raw, _report(
-        {"ats-boards": False}, {"oracle:new": ("ats-boards", False)}))
+        {"ats-boards": False}, {"oracle:new": False}))
     assert plan == {raw[1].dedup_key: ["oracle:new"]}
 
 
 def test_record_known_unions_and_sorts():
     state = _state(known_sources={"b"}, known_boards={"x:1"})
     seeding.record_known(state, _report({"a": False},
-                                        {"y:2": ("ats-boards", False)}))
+                                        {"y:2": False}))
     assert state["_meta"]["known_sources"] == ["a", "b"]
     assert state["_meta"]["known_boards"] == ["x:1", "y:2"]
 
@@ -196,7 +207,8 @@ def test_end_to_end_new_origins_deliver_nothing(monkeypatch, tmp_path):
                _job(6, "old-src"), _job(7, "ats-boards", "greenhouse:old")]
     assert main.main(argv) == 0
     state = st.load_state(state_file)
-    keys = {i: dedupe([_job(i)])[0].dedup_key for i in range(1, 8)}
+    boards = {2: "greenhouse:old", 5: "oracle:new", 7: "greenhouse:old"}
+    keys = {i: _key(i, boards.get(i)) for i in range(1, 8)}
     for i in (3, 4, 5):
         assert state["jobs"][keys[i]]["seeded"] == TODAY.isoformat()
         assert not st.was_notified(state, keys[i], "example")
@@ -211,7 +223,7 @@ def test_end_to_end_new_origins_deliver_nothing(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "send_email", lambda *a, **k: True)
     assert main.main(argv + ["--send-now"]) == 0
     state = st.load_state(state_file)
-    for i in (8, 9):
-        key = dedupe([_job(i)])[0].dedup_key
+    for i, board in ((8, None), (9, "oracle:new")):
+        key = _key(i, board)
         assert "seeded" not in state["jobs"][key]
         assert st.was_notified(state, key, "example")

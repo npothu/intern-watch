@@ -91,9 +91,7 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date,
             all_jobs.extend(jobs)
             if report is not None:
                 report.sources[cfg.name] = cfg.backfill
-                for bid, backfill in getattr(adapter, "fetched_boards",
-                                             {}).items():
-                    report.boards[bid] = (cfg.name, backfill)
+                report.boards.update(getattr(adapter, "fetched_boards", {}))
     return all_jobs
 
 
