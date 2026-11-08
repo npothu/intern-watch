@@ -20,6 +20,9 @@ boards:
 - company: Amazon
   ats: lever
   slug: zoox
+- company: AMD
+  ats: jibe
+  slug: careers.amd.com
 - company: American Express
   ats: oracle
   slug: egug.fa.us2.oraclecloud.com/CX_1
@@ -150,6 +153,9 @@ boards:
 - company: Honeywell Aerospace
   ats: oracle
   slug: icfcjb.fa.ocs.oraclecloud.com/Aerospace
+- company: IBM
+  ats: ibm
+  slug: careers
 - company: IMC
   ats: greenhouse
   slug: imc
@@ -185,6 +191,12 @@ boards:
 - company: Mercury
   ats: greenhouse
   slug: mercury
+- company: Micron Technology
+  ats: eightfold
+  slug: micron.eightfold.ai/micron.com
+- company: Microsoft
+  ats: eightfold
+  slug: apply.careers.microsoft.com/microsoft.com
 - company: Mistral
   ats: lever
   slug: mistral
@@ -203,6 +215,9 @@ boards:
 - company: Nokia
   ats: oracle
   slug: fa-evmr-saasfaprod1.fa.ocs.oraclecloud.com/CX_1
+- company: Northrop Grumman
+  ats: eightfold
+  slug: ngc.eightfold.ai/ngc.com
 - company: Notion
   ats: ashby
   slug: notion
@@ -230,6 +245,9 @@ boards:
 - company: Palantir
   ats: lever
   slug: palantir
+- company: PayPal
+  ats: eightfold
+  slug: paypal.eightfold.ai/paypal.com
 - company: Perplexity
   ats: ashby
   slug: perplexity
@@ -242,6 +260,9 @@ boards:
 - company: Point72
   ats: greenhouse
   slug: point72
+- company: Qualcomm
+  ats: eightfold
+  slug: qualcomm.eightfold.ai/qualcomm.com
 - company: Ramp
   ats: ashby
   slug: ramp

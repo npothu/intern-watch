@@ -108,6 +108,7 @@ def enrich_jds(jobs: list[Job]) -> int:
     Lever/Ashby descriptions arrive inline with the board listing). One small
     GET per job, new/pending jobs only by construction of the caller's list.
     Failures leave description None; the filters just see less."""
+    from .adapters import eightfold
     from .adapters import oracle_cx as oracle
     from .adapters import smartrecruiters_api as sr
     from .adapters.ats_boards import JD_MAX_CHARS
@@ -132,11 +133,14 @@ def enrich_jds(jobs: list[Job]) -> int:
                 payload = resp.json()
                 # Greenhouse returns {content: "<html>"}; SmartRecruiters
                 # detail nests the body under jobAd.sections; the Oracle CX
-                # detail feed under items[0].External*Str.
+                # detail feed under items[0].External*Str; Eightfold under
+                # data.jobDescription.
                 if "jobAd" in payload:
                     body = sr.jd_text(payload)
                 elif oracle.is_detail_payload(payload):
                     body = oracle.jd_text(payload)
+                elif eightfold.is_detail_payload(payload):
+                    body = eightfold.jd_text(payload)
                 else:
                     body = strip_html(payload.get("content") or "") or None
                 job.description = (body or "")[:JD_MAX_CHARS] or None

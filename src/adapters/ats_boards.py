@@ -19,7 +19,8 @@ import yaml
 from ..models import Job
 from ..normalize import infer_terms, split_locations, strip_html, strip_tracking
 from ..paths import ROOT as ROOT
-from . import listing_http
+from . import eightfold, jibe, listing_http
+from . import ibm_careers as ibm
 from . import oracle_cx as oracle
 from . import smartrecruiters_api as sr
 from .base import Adapter, fetch_text
@@ -41,6 +42,9 @@ _API = {
 _LISTERS: dict[str, Callable[[httpx.Client, dict], list[str]]] = {
     "smartrecruiters": sr.fetch_pages,
     "oracle": oracle.fetch_pages,
+    "eightfold": eightfold.fetch_pages,
+    "ibm": ibm.fetch_pages,
+    "jibe": jibe.fetch_pages,
 }
 
 
@@ -152,6 +156,9 @@ class AtsBoardsAdapter(Adapter):
                  if j.get("id") else None)
                 for j in data.get("content", [])],
             "oracle": lambda: oracle.rows(data, slug),
+            "eightfold": lambda: eightfold.rows(data, slug),
+            "ibm": lambda: ibm.rows(data, slug),
+            "jibe": lambda: jibe.rows(data, slug),
         }
         rows = builders[ats]()
 

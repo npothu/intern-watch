@@ -297,3 +297,212 @@ def test_oracle_listing_url_joins_aggregator_link(fixtures):
     req_id = job.url.rsplit("/", 1)[1]
     assert canonical_url(job.url) == canonical_url(
         f"https://careers.americanexpress.com/en/sites/CX_1/job/{req_id}")
+
+
+# ------------------------------------------------------------- Eightfold
+
+MS_SLUG = "apply.careers.microsoft.com/microsoft.com"
+
+
+def test_eightfold_parse(fixtures):
+    raw = (fixtures / "ats_eightfold_microsoft.json").read_text(encoding="utf-8")
+    jobs = _adapter().parse(raw, f"eightfold:{MS_SLUG}:Microsoft", TODAY)
+    assert len(jobs) == 9                       # the senior row pre-filtered
+    assert all(j.url.startswith(
+        "https://apply.careers.microsoft.com/careers/job/") for j in jobs)
+    assert all(j.jd_url and "position_details" in j.jd_url
+               and "domain=microsoft.com" in j.jd_url for j in jobs)
+    assert all(j.date_posted is not None for j in jobs)
+    assert any("Redmond, WA, United States" in j.locations for j in jobs)
+
+
+def test_eightfold_paging_and_domain():
+    asked = []
+
+    def handler(req):
+        assert req.url.params["domain"] == "microsoft.com"
+        q, start = req.url.params["query"], int(req.url.params["start"])
+        asked.append((q, start))
+        if q == "co-op":
+            return httpx.Response(200, json={"data": {"count": 0,
+                                                      "positions": []}})
+        return httpx.Response(200, json={"data": {"count": 25, "positions": [
+            {"id": start + i, "name": "Intern"} for i in range(10)]}})
+
+    from src.adapters import eightfold
+    with _client(handler) as c:
+        eightfold.fetch_pages(c, {"slug": MS_SLUG})
+    assert asked == [("intern", 0), ("intern", 10), ("intern", 20),
+                     ("co-op", 0)]
+
+
+def test_eightfold_detail_jd_text(fixtures):
+    from src.adapters import eightfold
+    detail = json.loads((fixtures / "ats_eightfold_micron_detail.json")
+                        .read_text(encoding="utf-8"))
+    assert eightfold.is_detail_payload(detail)
+    assert not eightfold.is_detail_payload({"data": {"positions": []}})
+    body = eightfold.jd_text(detail)
+    assert body and "<" not in body
+
+
+@pytest.mark.parametrize("url,token", [
+    ("https://apply.careers.microsoft.com/careers/job/1970393556972687",
+     "ats:eightfold:microsoft:1970393556972687"),
+    ("https://apply.careers.microsoft.com/careers/job/1970393557044764/",
+     "ats:eightfold:microsoft:1970393557044764"),
+    ("https://microsoft.eightfold.ai/careers?pid=1970393556979054",
+     "ats:eightfold:microsoft:1970393556979054"),
+    ("https://apply.careers.microsoft.com/careers?query=intern&start=0"
+     "&pid=1970393556922922&sort_by=relevance",
+     "ats:eightfold:microsoft:1970393556922922"),
+    ("https://careers.micron.com/careers/job/43785470",
+     "ats:eightfold:micron:43785470"),
+    ("https://micron.eightfold.ai/careers?pid=43785470",
+     "ats:eightfold:micron:43785470"),
+])
+def test_canonical_url_eightfold(url, token):
+    assert canonical_url(url) == token
+
+
+def test_canonical_url_eightfold_search_page_without_pid_is_not_a_posting():
+    got = canonical_url("https://micron.eightfold.ai/careers?query=intern")
+    assert got is not None and not got.startswith("ats:")
+
+
+# ------------------------------------------------------------------- IBM
+
+def test_ibm_parse(fixtures):
+    raw = (fixtures / "ats_ibm_search.json").read_text(encoding="utf-8")
+    jobs = _adapter().parse(raw, "ibm:careers:IBM", TODAY)
+    assert len(jobs) == 12
+    assert all(j.url.startswith("https://careers.ibm.com/careers/JobDetail?jobId=")
+               for j in jobs)
+    assert all(j.jd_url is None and j.description is None for j in jobs)
+    procurement = next(j for j in jobs if j.title.startswith("Procurement"))
+    assert procurement.locations == ["Research Triangle Park, United States"]
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("BATON ROUGE, US", "Baton Rouge, United States"),
+    ("Markham, CA", "Markham, Canada"),          # not California
+    ("Bangalore, IN", "Bangalore, India"),       # not Indiana
+    ("Multiple Cities", "Multiple Cities"),
+    ("Somewhere, XX", "Somewhere, XX"),
+])
+def test_ibm_location_spells_out_country_codes(raw, want):
+    from src.adapters import ibm_careers
+    assert ibm_careers.location(raw) == want
+
+
+def test_ibm_posts_bounded_pages():
+    bodies = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        bodies.append(body["from"])
+        n = 100 if body["from"] == 0 else 20
+        return httpx.Response(200, json={"hits": {"total": {"value": 120},
+                                                  "hits": [{}] * n}})
+
+    from src.adapters import ibm_careers
+    with _client(handler) as c:
+        ibm_careers.fetch_pages(c, {"slug": "careers"})
+    assert bodies == [0, 100]
+
+
+@pytest.mark.parametrize("url", [
+    "https://careers.ibm.com/en_US/careers/JobDetail?jobId=137095",
+    "https://careers.ibm.com/careers/JobDetail?jobId=137095",
+    "https://ibmglobal.avature.net/en_US/careers/JobDetail?jobId=137095",
+    "https://careers.ibm.com/en_US/careers/JobDetail/AI-ML-Engineer-Intern-"
+    "2027-SAN-JOSE/137095",
+])
+def test_canonical_url_ibm_avature_variants_collapse(url):
+    assert canonical_url(url) == "ats:avature:ibmglobal:137095"
+
+
+def test_canonical_url_avature_other_tenant_and_search_page():
+    assert canonical_url("https://siemens.avature.net/en_US/externaljobs/"
+                         "JobDetail/526984") == "ats:avature:siemens:526984"
+    got = canonical_url("https://careers.ibm.com/en_US/careers/SearchJobs/"
+                        "?search=intern")
+    assert got is not None and not got.startswith("ats:")
+
+
+# ------------------------------------------------------------------ Jibe
+
+def test_jibe_parse(fixtures):
+    raw = (fixtures / "ats_jibe_amd.json").read_text(encoding="utf-8")
+    jobs = _adapter().parse(raw, "jibe:careers.amd.com:AMD", TODAY)
+    assert len(jobs) == 6
+    assert all(j.url.startswith("https://careers.amd.com/jobs/") for j in jobs)
+    assert all(j.description and "<" not in j.description for j in jobs)
+    assert all(j.jd_url is None for j in jobs)
+    single = next(j for j in jobs if j.locations == ["Austin, Texas, United States"])
+    assert single.terms == ["Summer 2027"]
+    multi = next(j for j in jobs if len(j.locations) > 2)
+    assert "Boxborough, Massachusetts" in multi.locations
+
+
+def test_jibe_pages_by_page_number():
+    asked = []
+
+    def handler(req):
+        asked.append((req.url.params["keywords"], req.url.params["page"]))
+        n = 100 if req.url.params["page"] == "1" else 5
+        return httpx.Response(200, json={"totalCount": 105, "jobs": [
+            {"data": {"req_id": str(i), "title": "Intern"}} for i in range(n)]})
+
+    from src.adapters import jibe
+    with _client(handler) as c:
+        jibe.fetch_pages(c, {"slug": "careers.amd.com"})
+    assert asked == [("intern", "1"), ("intern", "2"),
+                     ("co-op", "1"), ("co-op", "2")]
+
+
+@pytest.mark.parametrize("url", [
+    "https://careers.amd.com/jobs/90891",
+    "https://careers.amd.com/jobs/90891?icims=1",
+    "https://careers.amd.com/careers-home/jobs/90891",
+    "https://careers.amd.com/jobs/90891?lang=en-us",
+])
+def test_canonical_url_jibe_variants_collapse(url):
+    assert canonical_url(url) == "ats:jibe:careers.amd.com:90891"
+
+
+def test_jibe_listing_url_joins_aggregator_link(fixtures):
+    raw = (fixtures / "ats_jibe_amd.json").read_text(encoding="utf-8")
+    job = _adapter().parse(raw, "jibe:careers.amd.com:AMD", TODAY)[0]
+    req = job.url.rsplit("/", 1)[1]
+    assert canonical_url(job.url) == canonical_url(
+        f"https://careers.amd.com/careers-home/jobs/{req}?icims=1")
+
+
+@pytest.mark.parametrize("url", [
+    "https://careers-gdms.icims.com/jobs/75637/software-engineer-intern/job",
+    "https://careers-gdms.icims.com/jobs/75637/software-engineer-intern/job"
+    "?in_iframe=1",
+    "https://careers-gdms.icims.com/jobs/75637/job?mobile=true",
+    "https://careers-gdms.icims.com/jobs/75637/login",
+])
+def test_canonical_url_icims_variants_collapse(url):
+    assert canonical_url(url) == "ats:icims:careers-gdms:75637"
+
+
+def test_canonical_url_icims_search_page_is_not_a_posting():
+    got = canonical_url("https://careers-gdms.icims.com/jobs/search?ss=1")
+    assert got is not None and not got.startswith("ats:")
+
+
+@pytest.mark.parametrize("raw,want,country", [
+    ("Markham, ON, CA", "Markham, ON, Canada", "canada"),     # not California
+    ("Bengaluru, KA, IN", "Bengaluru, KA, India", "other"),   # not Indiana
+    ("Redmond, WA, US", "Redmond, WA, United States", "us"),
+    ("Austin, Texas", "Austin, Texas", "us"),                  # no code: as is
+    ("Somewhere, ZZ", "Somewhere, ZZ", "unknown"),
+])
+def test_spell_country_fixes_iso_code_misreads(raw, want, country):
+    from src.filters import location_country
+    assert listing_http.spell_country(raw) == want
+    assert location_country(want) == country

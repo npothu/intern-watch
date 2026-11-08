@@ -34,6 +34,35 @@ sleep = time.sleep
 # relevancy-paging stop rule). Word-bounded: "Internal Audit" is not a hit.
 INTERN_RE = re.compile(r"\bintern(ship)?s?\b|\bco-?op\b", re.I)
 
+# Feeds that end a location in an ISO country code ("Redmond, WA, US",
+# "Markham, ON, CA", "Bengaluru, KA, IN") misread downstream: ", CA" reads as
+# California and ", IN" as Indiana in filters.location_country. Known codes
+# are spelled out; an unmapped code is left as is (unknown locations are
+# kept, never wrongly eliminated).
+_COUNTRIES = {
+    "US": "United States", "CA": "Canada", "GB": "United Kingdom",
+    "IN": "India", "DE": "Germany", "FR": "France", "IE": "Ireland",
+    "JP": "Japan", "CN": "China", "SG": "Singapore", "PH": "Philippines",
+    "TH": "Thailand", "HU": "Hungary", "AE": "United Arab Emirates",
+    "BR": "Brazil", "MX": "Mexico", "PL": "Poland", "CZ": "Czech Republic",
+    "IL": "Israel", "AU": "Australia", "NL": "Netherlands", "ES": "Spain",
+    "IT": "Italy", "KR": "South Korea", "RO": "Romania", "EG": "Egypt",
+    "CR": "Costa Rica", "AR": "Argentina", "CO": "Colombia",
+    "MY": "Malaysia", "VN": "Vietnam", "ZA": "South Africa",
+    "PT": "Portugal", "AT": "Austria", "CH": "Switzerland", "SE": "Sweden",
+    "DK": "Denmark", "FI": "Finland", "NO": "Norway", "BE": "Belgium",
+    "TW": "Taiwan", "ID": "Indonesia", "NZ": "New Zealand",
+    "TR": "Turkey", "SA": "Saudi Arabia", "CL": "Chile", "HK": "Hong Kong",
+}
+
+
+def spell_country(raw: str) -> str:
+    head, sep, code = (raw or "").rpartition(",")
+    name = _COUNTRIES.get(code.strip().upper()) if sep else None
+    if name is None:
+        return raw or ""
+    return f"{head.strip()}, {name}" if head.strip() else name
+
 
 class Pacer:
     """Sleeps REQUEST_DELAY before every request except the first."""

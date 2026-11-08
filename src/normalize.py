@@ -203,6 +203,23 @@ _ORACLE_CUSTOM_PATH_RE = re.compile(
     r"^/[a-z]{2}(?:[-_][a-z]{2})?/sites/[^/]+/(?:job|requisitions/preview)"
     r"/([A-Za-z0-9]+)$", re.I)
 _ORACLE_CUSTOM_HOSTS = {"careers.americanexpress.com": "egug"}
+# Eightfold position ids are per tenant (<tenant>.eightfold.ai); employer
+# domains that front a tenant are listed explicitly. Forms: /careers/job/<id>
+# and /careers?pid=<id>.
+_EIGHTFOLD_CUSTOM_HOSTS = {"apply.careers.microsoft.com": "microsoft",
+                           "careers.micron.com": "micron"}
+_EIGHTFOLD_PATH_RE = re.compile(r"^/careers/job/(\d{5,})$")
+# Avature portals: <tenant>.avature.net/<locale>/<portal>/JobDetail/<slug>/<id>
+# or .../JobDetail?jobId=<id>. careers.ibm.com fronts the ibmglobal tenant.
+_AVATURE_CUSTOM_HOSTS = {"careers.ibm.com": "ibmglobal"}
+_AVATURE_PATH_RE = re.compile(r"/JobDetail(?:/[^/]+)?/(\d+)$", re.I)
+# Jibe career sites (iCIMS Attract): <host>/jobs/<req id> or
+# <host>/careers-home/jobs/<req id>. Only hosts known to be Jibe sites: the
+# path shape alone is far too common to trust on an arbitrary domain.
+_JIBE_HOSTS = {"careers.amd.com"}
+_JIBE_PATH_RE = re.compile(r"^(?:/careers-home)?/jobs/(\d+)(?:/[^/]*)?$")
+# iCIMS portals: <portal>.icims.com/jobs/<id>[/<title-slug>]/job[?in_iframe=1].
+_ICIMS_PATH_RE = re.compile(r"^/jobs/(\d+)(?:/[^/]+)?/(?:job|login)$|^/jobs/(\d+)$")
 # Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
 # so this pattern carries its own optional two-letter locale segment.
 _AMAZON_RE = re.compile(r"^(?:/[a-z]{2})?/jobs/(\d+)(?:/.*)?$", re.I)
@@ -288,6 +305,34 @@ def canonical_url(url: str) -> str | None:
         if m:
             return (f"ats:oracle:{_ORACLE_CUSTOM_HOSTS[host]}:"
                     f"{m.group(1).upper()}")
+    ef_tenant = (host.split(".", 1)[0] if host.endswith(".eightfold.ai")
+                 else _EIGHTFOLD_CUSTOM_HOSTS.get(host))
+    if ef_tenant:
+        m = _EIGHTFOLD_PATH_RE.match(path)
+        if m:
+            return f"ats:eightfold:{ef_tenant}:{m.group(1)}"
+        if path == "/careers":
+            for k, v in parse_qsl(parts.query):
+                if k.lower() == "pid" and v.isascii() and v.isdigit():
+                    return f"ats:eightfold:{ef_tenant}:{v}"
+    av_tenant = (host.split(".", 1)[0] if host.endswith(".avature.net")
+                 else _AVATURE_CUSTOM_HOSTS.get(host))
+    if av_tenant and "/jobdetail" in path.lower():
+        m = _AVATURE_PATH_RE.search(path)
+        if m:
+            return f"ats:avature:{av_tenant}:{m.group(1)}"
+        for k, v in parse_qsl(parts.query):
+            if k.lower() == "jobid" and v.isascii() and v.isdigit():
+                return f"ats:avature:{av_tenant}:{v}"
+    if host in _JIBE_HOSTS:
+        m = _JIBE_PATH_RE.match(path)
+        if m:
+            return f"ats:jibe:{host}:{m.group(1)}"
+    if host.endswith(".icims.com"):
+        m = _ICIMS_PATH_RE.match(path)
+        if m:
+            portal = host.split(".", 1)[0]
+            return f"ats:icims:{portal}:{m.group(1) or m.group(2)}"
     if host == "amazon.jobs":
         m = _AMAZON_RE.match(path)
         if m:
