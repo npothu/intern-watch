@@ -103,11 +103,18 @@ JD_FETCH_CAP = 80  # per run; a --backfill burst must not hammer Greenhouse
 RECHECK_JD_MAX_FAILURES = 3  # consecutive failed recheck JD fetches, then stop
 
 
-def enrich_jds(jobs: list[Job]) -> int:
-    """Fetch the JD for jobs carrying a per-job content URL (Greenhouse --
-    Lever/Ashby descriptions arrive inline with the board listing). One small
-    GET per job, new/pending jobs only by construction of the caller's list.
-    Failures leave description None; the filters just see less."""
+def enrich_jds(jobs: list[Job], state: dict | None = None,
+               deferred: list[str] | None = None) -> int:
+    """Fetch the JD for jobs carrying a per-job content URL (Greenhouse,
+    SmartRecruiters, Oracle CX, Eightfold -- Lever/Ashby/Jibe descriptions
+    arrive inline with the board listing). One small GET per job, new/pending
+    jobs only by construction of the caller's list. A fetch that fails leaves
+    description None; the filters just see less.
+
+    At most JD_FETCH_CAP per run, oldest first (state first_seen, then key) so
+    a burst drains in arrival order. The keys over the cap are appended to
+    `deferred`: the caller must leave them pending, NOT evaluate them now --
+    decisions are final, and the clearance / grad-only lines live in the JD."""
     from .adapters import eightfold
     from .adapters import oracle_cx as oracle
     from .adapters import smartrecruiters_api as sr
@@ -117,9 +124,16 @@ def enrich_jds(jobs: list[Job]) -> int:
     targets = [j for j in jobs if j.jd_url and not j.description]
     if not targets:
         return 0
+    jobs_state = (state or {}).get("jobs", {})
+    targets.sort(key=lambda j: (
+        jobs_state.get(j.dedup_key, {}).get("first_seen") or "9999",
+        j.dedup_key))
     if len(targets) > JD_FETCH_CAP:
-        log.info("jd enrichment capped at %d of %d jobs (rest next run)",
-                 JD_FETCH_CAP, len(targets))
+        over = targets[JD_FETCH_CAP:]
+        log.info("jd enrichment capped at %d of %d jobs; %d left pending "
+                 "for next run", JD_FETCH_CAP, len(targets), len(over))
+        if deferred is not None:
+            deferred.extend(j.dedup_key for j in over)
         targets = targets[:JD_FETCH_CAP]
     fetched = 0
     headers = {"User-Agent": "intern-baddie (job alert bot)"}
@@ -1506,8 +1520,10 @@ def main(argv: list[str] | None = None) -> int:
     for user_cfg in users:
         relevant |= st.pending_keys(state, user_cfg["name"])
     relevant_jobs = [merged_by_key[k] for k in relevant if k in merged_by_key]
-    enrich_jds(relevant_jobs)
+    jd_deferred: list[str] = []
+    enrich_jds(relevant_jobs, state, jd_deferred)
     infer_terms_from_jds(relevant_jobs, today)
+    jd_wait = set(jd_deferred)
 
     from .adapters.jobright_auth import JobrightSession
     resolver = JobrightSession.from_env()
@@ -1524,6 +1540,13 @@ def main(argv: list[str] | None = None) -> int:
                 st.clear_pending(state, key, name)  # vanished or already done
             else:
                 candidates.append(pending_job)
+        # Over the JD cap: not evaluated this run, kept pending so the next
+        # run fetches its JD (oldest first) and decides it then.
+        if jd_wait:
+            for job in candidates:
+                if job.dedup_key in jd_wait:
+                    st.set_pending(state, job.dedup_key, name)
+            candidates = [j for j in candidates if j.dedup_key not in jd_wait]
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,

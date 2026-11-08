@@ -672,3 +672,75 @@ def test_unknown_term_snapshot_does_not_wildcard_content_dedup(monkeypatch, tmp_
     # Run 1 used the 12:00 email slot, so the match waits in the outbox.
     assert key in {it["key"] for it in st.outbox_items(state, "example")} \
         or st.was_notified(state, key, "example")
+
+
+# ------------------------------------------------ JD-fetch cap leaves pending
+
+def test_jd_cap_overflow_stays_pending_unevaluated_then_decides(
+        monkeypatch, tmp_path):
+    import httpx
+    listed = [_job(i) for i in (1, 2, 3)]
+    for j in listed:
+        j.jd_url = f"https://api.example/jd/{j.url.rsplit('/', 1)[1]}"
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [j.model_copy() for j in listed]
+
+    sources = [SourceConfig(name="ok-src", adapter="a")]
+    _wire(monkeypatch, sources, {"ok-src": OkAdapter}, [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setattr(main, "JD_FETCH_CAP", 2)
+    fetched = []
+    real = httpx.Client
+
+    def handler(req):
+        fetched.append(str(req.url))
+        return httpx.Response(200, json={"content": "<p>Paid internship.</p>"})
+
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(handler), **kw))
+
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+
+    assert main.main(["--state-file", str(state_file)]) == 0
+    state = st.load_state(state_file)
+    assert len(fetched) == 2
+    waiting = st.pending_keys(state, "example")
+    assert len(waiting) == 1
+    (late,) = waiting
+    # not evaluated: neither delivered nor queued
+    assert not st.was_notified(state, late, "example")
+    assert late not in {it["key"] for it in st.outbox_items(state, "example")}
+
+    # next run: no new jobs, the pending one gets its JD and is decided
+    assert main.main(["--state-file", str(state_file)]) == 0
+    state = st.load_state(state_file)
+    assert len(fetched) == 3
+    assert st.pending_keys(state, "example") == set()
+    assert (st.was_notified(state, late, "example")
+            or late in {it["key"] for it in st.outbox_items(state, "example")})
+
+
+def test_enrich_jds_cap_takes_oldest_first_and_reports_the_rest(monkeypatch):
+    import httpx
+    jobs = [Job(company="c", title="Intern", url=f"https://x/{k}",
+                jd_url=f"https://api.example/{k}", source="s") for k in "abc"]
+    for j, k in zip(jobs, ("url:a", "url:b", "url:c"), strict=True):
+        j.dedup_key = k
+    state = st.empty_state()
+    st.touch(state, "url:a", ["s"], TODAY)                         # newest
+    st.touch(state, "url:b", ["s"], TODAY - dt.timedelta(days=5))  # oldest
+    st.touch(state, "url:c", ["s"], TODAY - dt.timedelta(days=2))
+    monkeypatch.setattr(main, "JD_FETCH_CAP", 2)
+    real = httpx.Client
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"content": "jd"})), **kw))
+    deferred: list[str] = []
+    assert main.enrich_jds(jobs, state, deferred) == 2
+    assert deferred == ["url:a"]
+    assert jobs[0].description is None and jobs[1].description == "jd"
