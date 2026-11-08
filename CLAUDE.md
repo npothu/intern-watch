@@ -67,8 +67,12 @@ unless the same job also arrived from an already-known source/board. Put
 `backfill: true` on a sources.yaml or ats_boards.yaml row to deliver its
 backlog instead. Renaming a source or changing a board's slug therefore
 seeds its current listings once. A multi-board adapter must stamp
-`Job.board` and fill `Adapter.fetched_boards` (the ats-boards fetch loop does
-both for every lister). Known coverage limits:
+`Job.board` and fill `Adapter.fetched_boards` (ats-boards `parse()` and its
+fetch loop do both for every lister). A board's rows must be its complete
+listing: a lister whose page fails or is capped short must raise for that
+board, never return a partial list (it would be seeded as the whole backlog
+and the tail delivered later). `--seed` and the first run tag `seeded` too.
+Known coverage limits:
 - jobright's GitHub mirrors are a SUBSET of jobright.ai; some postings never
   appear in any repo. The full feed is auth-only and jobright's ToS
   disallows crawling — the template never crawls it: it reads the public

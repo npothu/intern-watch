@@ -1255,6 +1255,10 @@ def main(argv: list[str] | None = None) -> int:
         log.info("%s: seeding state with %d jobs, no notifications%s",
                  "--seed" if args.seed else "first run", len(merged),
                  "" if args.seed else " (use --backfill to notify instead)")
+        # Tagged like a first-sight seed, so nothing later (a recheck of
+        # rejections) mistakes them for evaluated jobs.
+        for job in new_jobs:
+            state["jobs"][job.dedup_key]["seeded"] = today.isoformat()
         if not args.dry_run:
             st.save_state(state, state_path)
         return 0

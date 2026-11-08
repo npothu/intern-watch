@@ -19,8 +19,16 @@ Seeding is final, like a rejection, and has no exceptions: a priority
 employer's backlog on a new board is seeded too (the owner's call: a new
 board must never flood email; use `backfill: true` when the backlog is
 wanted). Seeded jobs still register their employer URL in `url_index`, as
-`--seed` always has, so a later copy of one from another source is joined to
-it rather than delivered.
+`--seed` always has, but that suppresses nothing: the url gate only drops a
+job whose canonical url this user already OWNS (was delivered). A later copy
+of a seeded posting under a different key, arriving from a known source, is
+a new job and is evaluated and delivered normally.
+
+Reported boards must be complete. Any board seen on a returned job counts as
+answered, so a lister cannot opt out by leaving fetched_boards empty: a board
+whose listing came back short (a failed or capped page) must raise and
+return no rows, or its partial listing is seeded as the whole backlog and the
+missing tail is delivered later as news.
 
 Known origins live in `state["_meta"]["known_sources"]` and
 `["known_boards"]` (sorted lists). Bootstrap: those lists do not exist before
@@ -91,17 +99,21 @@ def record_known(state: dict, report: FetchReport) -> None:
 def _path(key: str) -> str | None:
     """A board's URL path, or None when the key names no board.
 
-    The dedup key up to its last "/", or up to "/job/" (Workday and Oracle
-    put a per-location segment after it). A last segment with a query is a
-    shared endpoint (Greenhouse embeds): only its `for=` tenant identifies
-    the board, and without one the key is no evidence at all."""
+    The query stripped, then everything up to the last "/" (the posting's
+    own segment): `.../robinhood/jobs/8198241?t=..` -> `.../robinhood/jobs`,
+    `stripe.com/jobs/search?gh_jid=..` -> `stripe.com/jobs`,
+    `jumptrading.com/hr/job?gh_jid=..` -> `jumptrading.com/hr`. Workday and
+    Oracle keys stop at "/job/" (a per-location segment follows it). The one
+    shared endpoint, Greenhouse's `/embed/` app, serves every tenant on one
+    path: only its `for=` tenant identifies the board, and without one the
+    key is no evidence at all."""
     if "/job/" in key:
         return key.split("/job/", 1)[0]
-    head, _, last = key.rpartition("/")
-    if "?" not in last:
-        return head
-    tenant = re.search(r"[?&]for=([^&#]+)", last)
-    return f"{head}/?for={tenant.group(1)}" if tenant else None
+    base, _, query = key.partition("?")
+    if "/embed/" in base:
+        tenant = re.search(r"(?:^|&)for=([^&#]+)", query)
+        return f"{base}?for={tenant.group(1)}" if tenant else None
+    return base.rpartition("/")[0]
 
 
 def first_sight(state: dict, raw_jobs: list[Job],

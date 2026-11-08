@@ -152,6 +152,15 @@ def test_path_shapes():
     wd = "url:https://gm.wd5.myworkdayjobs.com/Careers_GM/job/"
     assert p(wd + "Warren-MI/Intern_JR-1") == p(wd + "Dublin-Ireland/Java_JR-2")
     assert p("url:https://jobs.lever.co/acme/uuid-1") == "url:https://jobs.lever.co/acme"
+    # Custom-domain Greenhouse boards that key the posting in the query
+    assert (p("url:https://stripe.com/jobs/search?gh_jid=8130883")
+            == "url:https://stripe.com/jobs")
+    assert (p("url:https://boards.greenhouse.io/robinhood/jobs/8198241?t=gh_src%3D")
+            == "url:https://boards.greenhouse.io/robinhood/jobs")
+    assert (p("url:https://www.jumptrading.com/hr/job?gh_jid=7362318")
+            == "url:https://www.jumptrading.com/hr")
+    assert (p("url:https://stripe.com/jobs/search?gh_jid=1")
+            == p("url:https://stripe.com/jobs/search?gh_jid=2"))
 
 
 def test_new_source_recorded_only_once_it_returns_jobs(monkeypatch, tmp_path):
@@ -292,3 +301,12 @@ def test_end_to_end_new_origins_deliver_nothing(monkeypatch, tmp_path):
         key = _key(i, board)
         assert "seeded" not in state["jobs"][key]
         assert st.was_notified(state, key, "example")
+
+
+def test_seed_flag_tags_seeded(monkeypatch, tmp_path):
+    listed = [_job(1, "old-src")]
+    _wire_two(monkeypatch, listed)
+    state_file = tmp_path / "seen.json"
+    assert main.main(["--state-file", str(state_file), "--seed"]) == 0
+    state = st.load_state(state_file)
+    assert state["jobs"][_key(1)]["seeded"] == TODAY.isoformat()

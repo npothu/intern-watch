@@ -66,7 +66,11 @@ def board_id(board: dict) -> str:
     it), and fetch() records each board that answered in fetched_boards. An
     adapter outside this class that serves several boards must do both:
     `job.board = board_id(row)` and
-    `self.fetched_boards[board_id(row)] = bool(row.get("backfill"))`."""
+    `self.fetched_boards[board_id(row)] = bool(row.get("backfill"))`.
+    A board's rows must be its COMPLETE listing: a lister whose page fails
+    or hits its page cap short of the end must raise (no rows for that board
+    this run), never return what it has. A partial first answer would be
+    seeded as the whole backlog and its tail delivered later as news."""
     return f"{board['ats']}:{str(board['slug']).lower()}"
 
 
