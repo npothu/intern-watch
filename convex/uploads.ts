@@ -1,3 +1,5 @@
+import { MAINTENANCE_MESSAGE, maintenanceOn } from "./maintenance";
+import { assertNotMaintenance } from "./maintenance";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { action, httpAction, internalMutation } from "./_generated/server";
@@ -15,6 +17,7 @@ async function digest(token: string): Promise<string> {
 export const prepare = action({
   args: { user: v.string(), secret: v.string() },
   handler: async (ctx, { user, secret }): Promise<string> => {
+    assertNotMaintenance();
     if (!process.env.TRACKER_SECRET || secret !== process.env.TRACKER_SECRET) throw new Error("bad secret");
     const origin = process.env.CONVEX_SITE_URL;
     if (!origin) throw new Error("Upload service is not configured.");
@@ -73,6 +76,7 @@ export const preflight = httpAction(async () => new Response(null, {
 }));
 
 export const upload = httpAction(async (ctx, request) => {
+    if (maintenanceOn()) return new Response(MAINTENANCE_MESSAGE, { status: 503, headers: { "Retry-After": "300", "Content-Type": "text/plain" } });
   const token = new URL(request.url).searchParams.get("token");
   if (!token || token.length > 100) return new Response("Invalid upload", { status: 403, headers });
   const id = await ctx.runMutation(internal.uploads.reserve, { tokenHash: await digest(token) });

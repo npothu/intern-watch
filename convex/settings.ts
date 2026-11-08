@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 // Per-user, non-secret preferences: which model tailors their resume, and the
 // daily allowance they have already spent on the operator's key.
 //
@@ -45,6 +46,7 @@ export function dayKey(now: number): string {
 }
 
 function assertSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }

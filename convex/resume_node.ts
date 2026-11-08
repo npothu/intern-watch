@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 "use node";
 
 // The Convex-native resume builder's Node-runtime action.
@@ -72,6 +73,7 @@ import { exportResume, parseExportProfile } from "./resume_export";
 // The TRACKER_SECRET env var set in the Convex dashboard (same gate as
 // resume.ts - every public endpoint of the builder is private to the web app).
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }

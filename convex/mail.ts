@@ -1,3 +1,4 @@
+import { assertNotMaintenance, maintenanceOn } from "./maintenance";
 import {
   action,
   internalAction,
@@ -36,6 +37,7 @@ import { APPLICATION_STATUSES } from "../shared/applications";
 
 // The TRACKER_SECRET env var set in the Convex dashboard.
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }
@@ -1391,6 +1393,10 @@ export const startWatch = internalAction({
 export const renewWatches = internalAction({
   args: {},
   handler: async (ctx) => {
+    if (maintenanceOn()) {
+      console.log("maintenance on: skipping");
+      return;
+    }
     // Announce the skip rather than looping over zero accounts in silence -
     // a self-hoster reading logs should be able to tell "off" from "broken".
     if (!mailSyncEnabled()) {
@@ -1414,6 +1420,10 @@ export const renewWatches = internalAction({
 export const reconcile = internalAction({
   args: {},
   handler: async (ctx) => {
+    if (maintenanceOn()) {
+      console.log("maintenance on: skipping");
+      return;
+    }
     if (!mailSyncEnabled()) {
       console.log("mail-sync is off (no GMAIL_CLIENT_ID/SECRET) - skipping reconcile sweep");
       return;

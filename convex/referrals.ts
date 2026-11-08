@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 import { v, ConvexError } from "convex/values";
 import {
   mutation,
@@ -21,6 +22,7 @@ import {
 
 const authFields = { user: v.string(), secret: v.string() };
 function authorize(user: string, secret: string) {
+  assertNotMaintenance();
   if (!process.env.TRACKER_SECRET || secret !== process.env.TRACKER_SECRET)
     throw new Error("bad secret");
   if (!user.trim()) throw new ConvexError("A user is required.");

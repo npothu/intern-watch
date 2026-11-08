@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -20,6 +21,7 @@ import { isProvider, testProviderKey } from "./llm_providers";
 // The TRACKER_SECRET env var set in the Convex dashboard, used verbatim from
 // tracker.ts so every backend endpoint shares one auth story.
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }

@@ -308,7 +308,7 @@ export default defineSchema({
     nonce: v.string(),
     user: v.string(),
     expiresAt: v.number(),
-  }).index("by_nonce", ["nonce"]),
+  }).index("by_nonce", ["nonce"]).index("by_user", ["user"]),
 
   // Per-user, non-secret preferences. One row per user.
   //

@@ -1,3 +1,4 @@
+import { MAINTENANCE_MESSAGE, maintenanceOn } from "./maintenance";
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
@@ -26,6 +27,9 @@ http.route({
   path: "/gmail/push",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    // 503 during maintenance: Pub/Sub keeps the notification and retries it
+    // with backoff, so pushes are delayed, not lost.
+    if (maintenanceOn()) return new Response(MAINTENANCE_MESSAGE, { status: 503, headers: { "Retry-After": "300", "Content-Type": "text/plain" } });
     const token = new URL(request.url).searchParams.get("token");
     if (token !== process.env.MAIL_PUSH_TOKEN) {
       return new Response("forbidden", { status: 403 });
@@ -82,6 +86,7 @@ http.route({
   path: "/gmail/callback",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
+    if (maintenanceOn()) return new Response(MAINTENANCE_MESSAGE, { status: 503, headers: { "Retry-After": "300", "Content-Type": "text/plain" } });
     const url = new URL(request.url);
     const rawState = url.searchParams.get("state") ?? "";
     const code = url.searchParams.get("code");

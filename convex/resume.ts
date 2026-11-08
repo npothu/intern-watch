@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 import { MAX_PROFILE_BYTES, getResume } from "../shared/resume-compose";
 import { toV2 } from "./profile_schema";
 import {
@@ -43,6 +44,7 @@ import type { Id } from "./_generated/dataModel";
 
 // The TRACKER_SECRET env var set in the Convex dashboard.
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }

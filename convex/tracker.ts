@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 import type { WithoutSystemFields } from "convex/server";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
@@ -20,6 +21,7 @@ import {
 
 // The TRACKER_SECRET env var set in the Convex dashboard.
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }

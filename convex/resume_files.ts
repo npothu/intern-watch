@@ -1,3 +1,4 @@
+import { MAINTENANCE_MESSAGE, maintenanceOn } from "./maintenance";
 import { v } from "convex/values";
 import { internalQuery, internalMutation, internalAction, httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -96,6 +97,7 @@ export const lookup = internalQuery({
 
 /** The web server authenticates the user before requesting this stream. */
 export const download = httpAction(async (ctx, request) => {
+    if (maintenanceOn()) return new Response(MAINTENANCE_MESSAGE, { status: 503, headers: { "Retry-After": "300", "Content-Type": "text/plain" } });
   const secret = process.env.TRACKER_SECRET;
   const headers = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" };
   if (!secret || request.headers.get("Authorization") !== `Bearer ${secret}`) return new Response(null, { status: 401, headers });
