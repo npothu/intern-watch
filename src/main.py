@@ -591,8 +591,10 @@ def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
             out.append(job)
     selected: list[Job] = []
     jd_budget = JD_FETCH_CAP
+    budget_spent = (recheck.delivered_today(state, uf.name, today)
+                    >= recheck.RECHECK_DAILY_DELIVERIES)
     for job in out:
-        if len(selected) >= recheck.RECHECK_CAP:
+        if budget_spent or len(selected) >= recheck.RECHECK_CAP:
             break
         if job.jd_url and not job.description:
             if jd_budget <= 0:
@@ -760,6 +762,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     notify_cfg = user_cfg.get("notify", {})
     if accepted:
         n_re = sum(RECHECK_REASON in r for _j, r in accepted)
+        recheck.add_delivered(state, name, today, n_re)
         log.info("user %s: %d new match(es) this run%s", name, len(accepted),
                  f" ({n_re} from rechecks)" if n_re else "")
     if user_cfg.get("dashboard"):

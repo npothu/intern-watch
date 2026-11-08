@@ -246,6 +246,21 @@ def test_recheck_cap_spreads_over_runs(monkeypatch):
     assert len(st.outbox_items(state, "example")) == 5
 
 
+def test_daily_delivery_budget(monkeypatch):
+    monkeypatch.setattr(recheck, "RECHECK_DAILY_DELIVERIES", 2)
+    jobs = [_job(i, "Software Engineer Intern (Masters)") for i in range(5)]
+    state = _state(*jobs)
+    _run(_cfg(), state, [], candidates=jobs)
+    phd = _cfg(eliminate={"grad_only": "phd"})
+    _run(phd, state, jobs)          # one run may overshoot by its own cap
+    n = len(st.outbox_items(state, "example"))
+    _run(phd, state, jobs)          # budget spent: nothing more today
+    assert len(st.outbox_items(state, "example")) == n
+    assert recheck.delivered_today(state, "example", TODAY) == n
+    assert recheck.delivered_today(state, "example",
+                                   TODAY + dt.timedelta(days=1)) == 0
+
+
 def test_llm_rechecks_queue_behind_new_jobs_and_never_go_pending(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     cfg = _cfg(unknown_term_policy="llm",

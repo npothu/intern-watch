@@ -25,7 +25,8 @@ fingerprint differs from the current one is re-run from the top, stage order
 unchanged. A deterministic reject on that first pass only refreshes the
 record (no LLM, no JD fetch: a JD can only add rejection reasons, never
 remove one). A job that now passes or needs the LLM goes through the normal
-pipeline, after the run's new jobs, under RECHECK_CAP and the user's LLM cap.
+pipeline, after the run's new jobs, under RECHECK_CAP, the user's LLM cap and
+a daily delivery budget (RECHECK_DAILY_DELIVERIES).
 An acceptance is delivered through the outbox and dashboard tagged
 [RECHECK] (never the immediate priority email); a reject records the new
 fingerprint. Nothing delivered is ever re-evaluated or withdrawn, and jobs
@@ -67,6 +68,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 RECHECK_CAP = 50   # rechecked jobs entering the full pipeline per user per run
+# Recheck deliveries per user per day. The digest goes out at a few fixed
+# slots, so a per-run cap alone would still pile a big config change (or the
+# bootstrap: ~160 recoveries on the reference instance) into one or two
+# digests. Once today's budget is spent, rechecks wait for tomorrow (their
+# fingerprint stays stale, so nothing is lost).
+RECHECK_DAILY_DELIVERIES = 40
 LEGACY = "legacy"  # bootstrap stage marker; its empty fingerprint never matches
 
 _ROLE_REASONS = ("excluded-keyword", "no-role-keyword", "no-strict-role-keyword")
@@ -177,6 +184,16 @@ def clear(state: dict, key: str, user: str) -> None:
     rj = entry.get("rj", {})
     if rj.pop(user, None) is not None and not rj:
         del entry["rj"]
+
+
+def delivered_today(state: dict, user: str, today: dt.date) -> int:
+    day, n = state["_meta"].get("recheck_daily", {}).get(user, ["", 0])
+    return int(n) if day == today.isoformat() else 0
+
+
+def add_delivered(state: dict, user: str, today: dt.date, n: int) -> None:
+    daily = state["_meta"].setdefault("recheck_daily", {})
+    daily[user] = [today.isoformat(), delivered_today(state, user, today) + n]
 
 
 # ------------------------------------------------------------ selection
