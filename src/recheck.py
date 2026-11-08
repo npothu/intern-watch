@@ -26,8 +26,9 @@ fingerprint differs from the current one is re-run from the top, stage order
 unchanged. A deterministic reject on that first pass only refreshes the
 record (no LLM, no JD fetch: a JD can only add rejection reasons, never
 remove one). A job that now passes or needs the LLM goes through the normal
-pipeline, after the run's new jobs, under RECHECK_CAP, the user's LLM cap and
-a daily delivery budget (RECHECK_DAILY_DELIVERIES).
+pipeline, after the run's new jobs, under a per-run cap, the user's LLM cap
+and a daily delivery budget (`limits()`: the user yaml's `recheck:` block,
+defaulting to RECHECK_CAP and RECHECK_DAILY_DELIVERIES).
 An acceptance is delivered through the outbox and dashboard tagged
 [RECHECK] (never the immediate priority email); a reject records the new
 fingerprint. Nothing delivered is ever re-evaluated or withdrawn, and jobs
@@ -81,6 +82,32 @@ RECHECK_CAP = 50   # rechecked jobs entering the full pipeline per user per run
 # digests. Once today's budget is spent, rechecks wait for tomorrow (their
 # fingerprint stays stale, so nothing is lost).
 RECHECK_DAILY_DELIVERIES = 40
+RECHECK_LIMIT_MAX = 2000   # config_check's sanity bound for both knobs
+
+
+def limits(cfg: dict) -> tuple[int | None, int]:
+    """(daily delivery limit or None for unlimited, re-runs per run) for a
+    user, from the yaml/overlaid config's optional `recheck:` block:
+    `daily_limit` (int; null or 0 = no daily limit) and `per_run` (int).
+    Defaults are the module constants. A malformed value falls back to the
+    default (config_check reports it) rather than taking the watcher down."""
+    block = cfg.get("recheck")
+    block = block if isinstance(block, dict) else {}
+
+    def _int(value: object) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    daily: int | None = RECHECK_DAILY_DELIVERIES
+    if "daily_limit" in block:
+        raw = block["daily_limit"]
+        if raw is None or raw == 0:
+            daily = None
+        elif (v := _int(raw)) is not None:
+            daily = v
+    per_run = _int(block.get("per_run"))
+    return daily, RECHECK_CAP if per_run is None else per_run
 LEGACY = "legacy"  # bootstrap stage marker; its empty fingerprint never matches
 RECHECK_REASON = "recheck"   # reasons marker on a re-evaluated rejection
 

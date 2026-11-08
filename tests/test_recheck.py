@@ -406,3 +406,77 @@ def test_bootstrap_keeps_marking_later_runs_and_fixes_seed_day():
     st.touch(state, c.dedup_key, ["s"], TODAY + dt.timedelta(days=2))
     assert recheck.bootstrap(state, "example", {c.dedup_key: c}, set(),
                              TODAY + dt.timedelta(days=2)) == 0
+
+
+# ---------------------------------------------------------- per-user limits
+
+@pytest.mark.parametrize("block,expected", [
+    (None, (40, 50)),                                     # defaults
+    ({}, (40, 50)),
+    ({"daily_limit": 10, "per_run": 700}, (10, 700)),     # override
+    ({"daily_limit": None}, (None, 50)),                  # null: no limit
+    ({"daily_limit": 0}, (None, 50)),                     # 0: no limit
+    ({"daily_limit": "lots", "per_run": -1}, (40, 50)),   # malformed: default
+    ({"daily_limit": True, "per_run": 3.5}, (40, 50)),
+    ("garbage", (40, 50)),
+])
+def test_limits_from_config(block, expected):
+    cfg = {"name": "x"} if block is None else {"name": "x", "recheck": block}
+    assert recheck.limits(cfg) == expected
+
+
+def test_limits_survive_the_prefs_overlay():
+    from src import prefs
+    cfg = _cfg(recheck={"daily_limit": None, "per_run": 700})
+    over = prefs.apply_overlay(cfg, {
+        "terms": {"leadWeeks": 2}, "rules": {"Summer": "anything"},
+        "priority": {"companies": ["X"], "emailImmediately": False}})
+    assert recheck.limits(over) == (None, 700)
+    uf = UserFilter(over, ROOT, today=TODAY)
+    assert recheck.limits(uf.cfg) == (None, 700)
+
+
+def test_no_daily_limit_delivers_whole_backlog():
+    jobs = [_job(i, "Software Engineer Intern (Masters)") for i in range(5)]
+    state = _state(*jobs)
+    _run(_cfg(), state, [], candidates=jobs)
+    loose = _cfg(eliminate={"grad_only": "phd"},
+                 recheck={"daily_limit": None, "per_run": 700})
+    state["_meta"]["recheck_daily"] = {"example": [TODAY.isoformat(), 999]}
+    _run(loose, state, jobs)
+    assert len(st.outbox_items(state, "example")) == 5
+
+
+def test_per_run_and_daily_limit_overrides():
+    jobs = [_job(i, "Software Engineer Intern (Masters)") for i in range(5)]
+    state = _state(*jobs)
+    _run(_cfg(), state, [], candidates=jobs)
+    cfg = _cfg(eliminate={"grad_only": "phd"},
+               recheck={"daily_limit": 3, "per_run": 2})
+    _run(cfg, state, jobs)
+    assert len(st.outbox_items(state, "example")) == 2     # per_run
+    _run(cfg, state, jobs)
+    assert len(st.outbox_items(state, "example")) == 3     # daily_limit
+    _run(cfg, state, jobs)
+    assert len(st.outbox_items(state, "example")) == 3
+
+
+def test_llm_capped_recheck_stays_stale_not_rejected(monkeypatch):
+    # A recheck the LLM cap pushes out keeps its stale record (re-run later),
+    # is not pending, and is not re-fingerprinted as rejected.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    cfg = _cfg(unknown_term_policy="llm",
+               llm={"enabled": True, "provider": "gemini",
+                    "tasks": ["term_inference"], "max_jobs_per_run": 1},
+               recheck={"daily_limit": None, "per_run": 700})
+    jobs = [_job(i) for i in range(3)]
+    for j in jobs:
+        j.terms, j.term_confidence = [], "unknown"
+    state = _state(*jobs)
+    for j in jobs:
+        state["jobs"][j.dedup_key]["rj"] = {"example": "legacy:"}
+    monkeypatch.setattr(main, "classify", lambda batch, *a: {})  # call fails
+    _run(cfg, state, jobs)
+    for j in jobs:
+        assert recheck.get(state, j.dedup_key, "example") == ("legacy", "")
+    assert st.pending_keys(state, "example") == set()

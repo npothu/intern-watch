@@ -572,14 +572,17 @@ def _restamp_priority(state: dict, name: str, uf: UserFilter) -> int:
 RECHECK_REASON = recheck.RECHECK_REASON
 
 
-def _hold_over_budget(state: dict, name: str,
+def _hold_over_budget(state: dict, uf: UserFilter,
                       accepted: list[tuple[Job, list[str]]],
                       today: dt.date) -> list[tuple[Job, list[str]]]:
     """Enforce the daily recheck delivery budget: recheck accepts beyond what
     is left of it today are held back (stale, re-run tomorrow). Runs before
     the dedupe gates, which record what they let through."""
-    left = recheck.RECHECK_DAILY_DELIVERIES - recheck.delivered_today(
-        state, name, today)
+    name = uf.name
+    daily, _per_run = recheck.limits(uf.cfg)
+    if daily is None:
+        return accepted
+    left = daily - recheck.delivered_today(state, name, today)
     kept: list[tuple[Job, list[str]]] = []
     held = 0
     for job, reasons in accepted:
@@ -625,10 +628,11 @@ def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
             out.append(job)
     selected: list[Job] = []
     jd_budget = JD_FETCH_CAP
-    budget_spent = (recheck.delivered_today(state, uf.name, today)
-                    >= recheck.RECHECK_DAILY_DELIVERIES)
+    daily, per_run = recheck.limits(uf.cfg)
+    budget_spent = (daily is not None
+                    and recheck.delivered_today(state, uf.name, today) >= daily)
     for job in out:
-        if budget_spent or len(selected) >= recheck.RECHECK_CAP:
+        if budget_spent or len(selected) >= per_run:
             break
         if job.jd_url and not job.description:
             if jd_budget <= 0:
@@ -777,7 +781,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # unpaid/clearance requirement, so fetch the info page for jobs that made it
     # to accept and drop any that now eliminate on the fetched JD.
     accepted = _drop_eliminated(uf, accepted, enricher, today, state)
-    accepted = _hold_over_budget(state, name, accepted, today)
+    accepted = _hold_over_budget(state, uf, accepted, today)
 
     # ---- Cross-source dedup, before resume build / notify so a suppressed dup
     # neither builds a resume nor reaches the email/dashboard. Resolve employer

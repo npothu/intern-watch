@@ -58,8 +58,10 @@ user, the rejecting stage (role / elim / term / rules / llm) and a fingerprint
 of just the config that stage read for that job (`jobs[key]["rj"]`). Each run,
 a still-listed job whose fingerprint no longer matches is re-run from the top;
 an accept is delivered tagged `[RECHECK]` via the digest (never the immediate
-priority email), at most `recheck.RECHECK_CAP` re-runs per run and
-`RECHECK_DAILY_DELIVERIES` deliveries per day, behind new jobs for the LLM
+priority email), at most `recheck.per_run` re-runs per run and
+`recheck.daily_limit` deliveries per day (user yaml `recheck:` block,
+defaults `RECHECK_CAP`=50 / `RECHECK_DAILY_DELIVERIES`=40, null/0 = no daily
+limit; validated by config_check), behind new jobs for the LLM
 cap. Jobs no longer listed, delivered, or `seeded` are never
 rechecked, and nothing is ever un-delivered. A matching-code change must bump
 its stage's version (`filters.ROLE_MATCH_VERSION`, `ELIM_MATCH_VERSION`) to

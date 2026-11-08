@@ -115,6 +115,16 @@ priority:
 location:
   remote_counts: true       # remote roles satisfy the local part of a preset
 
+# Re-evaluating rejected jobs after a config change (src/recheck.py). A
+# still-listed job whose rejecting config changed is re-run and, if it now
+# passes, delivered tagged [RECHECK] in the digest. Both knobs are optional;
+# the values shown are the defaults.
+# recheck:
+#   daily_limit: 40    # recheck deliveries per day; null or 0 = no limit
+#   per_run: 50        # rechecked jobs re-run through the pipeline per run
+#                      # (the llm.max_jobs_per_run cap still applies, with
+#                      # rechecks queued behind new jobs)
+
 llm:
   enabled: true
   provider: gemini                # anthropic | gemini
