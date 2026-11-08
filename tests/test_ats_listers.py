@@ -535,3 +535,28 @@ def test_missing_total_count_does_not_stop_paging_early():
     assert [a for a in asked if a[0] == "intern"] == [
         ("intern", 0), ("intern", 100), ("intern", 200)]
 
+
+
+def test_sr_listing_and_api_detail_urls_of_one_posting_join(fixtures):
+    raw = (fixtures / "ats_smartrecruiters_visa.json").read_text(encoding="utf-8")
+    job = _adapter().parse(raw, "smartrecruiters:Visa:Visa", TODAY)[0]
+    assert job.jd_url and canonical_url(job.url) == canonical_url(job.jd_url)
+    assert canonical_url(job.url).startswith("ats:sr:visa:")
+
+
+@pytest.mark.parametrize("url", [
+    "https://jobs.smartrecruiters.com/Acme/3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "https://careers.smartrecruiters.com/acme/"
+    "3FA85F64-5717-4562-B3FC-2C963F66AFA6-some-title",
+    "https://api.smartrecruiters.com/v1/companies/ACME/postings/"
+    "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+])
+def test_canonical_url_smartrecruiters_uuid_ids(url):
+    assert canonical_url(url) == (
+        "ats:sr:acme:3fa85f64-5717-4562-b3fc-2c963f66afa6")
+
+
+def test_canonical_url_smartrecruiters_companies_stay_apart():
+    a = canonical_url("https://jobs.smartrecruiters.com/AECOM2/744000155565444")
+    b = canonical_url("https://jobs.smartrecruiters.com/Other/744000155565444")
+    assert a == "ats:sr:aecom2:744000155565444" and a != b

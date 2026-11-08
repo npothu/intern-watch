@@ -45,8 +45,9 @@ log = logging.getLogger(__name__)
 PRUNE_AFTER_DAYS = 120
 HEALTH_ALERT_AFTER = 9  # consecutive failed runs (~18h at 2h cadence) before users hear about it
 # v3 Greenhouse embeds/content API; v4 Workday numeric/alpha-prefix reqids,
-# case-insensitive Workday fallback path, SmartRecruiters posting ids.
-CANON_VERSION = 4
+# case-insensitive Workday fallback path, SmartRecruiters posting ids; v5
+# Oracle CX, Eightfold, Avature, Jibe and iCIMS posting ids.
+CANON_VERSION = 5
 
 
 def empty_state() -> dict:
