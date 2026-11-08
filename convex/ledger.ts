@@ -1,4 +1,5 @@
 import type { DatabaseWriter } from "./_generated/server";
+import { effectiveItem } from "./match_overrides";
 
 // Shared application-ledger write, extracted from tracker.ts recordStatus so
 // the mail-sync paths (auto-applied statuses, resolved inbox actions) and the
@@ -74,7 +75,7 @@ export async function applyStatus(
       .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
       .first();
     if (match) {
-      snapshot = match.item;
+      snapshot = effectiveItem(match);
     }
   }
 

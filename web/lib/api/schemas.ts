@@ -36,8 +36,8 @@ export const ingest = z.strictObject({
 export const ticks = z.strictObject({
   writes: z.array(z.strictObject({ short, field: z.enum(["applied", "saved", "dismissed"]), value: z.boolean() })).max(500),
 });
-// PATCH /matches/{short}. Extension point: add `url` here (and in
-// convex/tracker.ts MATCH_PATCH_FIELDS) to allow URL corrections.
+// PATCH /matches/{short}. Extension point: convex/match_overrides.ts lists
+// the edits a new field (e.g. `url`) needs.
 export const matchPatch = z.strictObject({
   term: z.string().max(40).nullable().transform((value, ctx) => {
     if (value === null) return null;

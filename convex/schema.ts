@@ -99,8 +99,8 @@ export default defineSchema({
     ),
     // Hand corrections (PATCH /matches/<short>), kept beside `item` because
     // pushMatches replaces `item` wholesale on every watcher run. getMatches
-    // overlays them on the item. Add a field here (e.g. `url`) together with
-    // tracker.ts MATCH_PATCH_FIELDS and web/lib/api/schemas.ts matchPatch.
+    // overlays them on the item. Extension point: match_overrides.ts lists
+    // the edits a new field (e.g. `url`) needs.
     overrides: v.optional(v.object({
       term: v.optional(v.string()),
       updatedAt: v.number(),

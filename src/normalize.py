@@ -308,8 +308,9 @@ def extract_jobright_id(url: str) -> str | None:
 #   3. unknown.
 # JD clauses about graduation, degrees, returning to school or deadlines are
 # skipped: "graduating Spring 2028" is not the internship's term. A JD's
-# explicit term starting more than 180 days before the anchor is a past
-# cohort ("our Summer 2025 interns ...") and is ignored.
+# explicit term starting more than 90 days before the anchor is a past
+# cohort ("our Summer 2026 interns ..." read in November) and is ignored;
+# a JD year must be four digits or apostrophe'd; lowercase "may" is a verb.
 
 _SEASONS = {"summer": "Summer", "fall": "Fall", "autumn": "Fall",
             "spring": "Spring", "winter": "Winter"}
@@ -317,9 +318,16 @@ _SEASON_ALT = "summer|fall|autumn|spring|winter"
 _YY = "2[4-9]"  # same 2024-2029 window as before; widen with care ("spring 30 days")
 
 # "Fall 2026", "Fall '26", "Summer of 2027", "fall2026", "summer-2027",
-# "intern_fall_2027" (lookarounds, not \b: "_" is a word character)
+# "intern_fall_2027" (lookarounds, not \b: "_" is a word character),
+# "Spring/Summer 2027" (every slashed season)
+_SEASON_LIST = rf"(?:{_SEASON_ALT})(?:\s*/\s*(?:{_SEASON_ALT}))*"
 _EXPLICIT_RE = re.compile(
-    rf"(?<![a-z])({_SEASON_ALT})[\s_-]*(?:of\s+)?[‘’']?\s*(?:20)?({_YY})(?!\d)",
+    rf"(?<![a-z])({_SEASON_LIST})[\s_-]*(?:of\s+)?[‘’']?\s*(?:20)?({_YY})(?!\d)",
+    re.I)
+# JD prose is noisier than a title ("prices fall 27%"): the year must be
+# four digits or apostrophe'd there.
+_JD_EXPLICIT_RE = re.compile(
+    rf"(?<![a-z])({_SEASON_LIST})[\s_-]*(?:of\s+)?(?:20|[‘’']\s*)({_YY})(?!\d)",
     re.I)
 # year-before-season: "2026 Summer", "2027 Spring Intern", "2027-summer"
 _EXPLICIT_REV_RE = re.compile(
@@ -359,13 +367,15 @@ _JD_SEASON_NOUN_RE = re.compile(
     rf"\b({_SEASON_ALT})\s+(?:intern(?:ship)?s?|co-?ops?|semester|term|"
     rf"session|program(?:me)?|cohort|placement)\b", re.I)
 _JD_SKIP_RE = re.compile(
-    r"graduat|degree|class of|commencement|diploma|enrolled|returning to|"
+    r"graduat|class of|commencement|diploma|returning to|"
     r"return to (?:school|campus|university|college)|deadline|apply by|"
-    r"applications? (?:close|due|open)|posted|last updated", re.I)
+    r"applications? (?:close|due|open)|date posted|posted on|last updated|"
+    r"on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?"
+    r"(?:bachelor|master|ph\.?d|doctora|undergrad|degree)", re.I)
 # Split a JD into clauses: newlines/bullets, or sentence punctuation
 # followed by a capital ("Aug. 7" stays whole).
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+")
-_PAST_COHORT_DAYS = 180
+_PAST_COHORT_DAYS = 90
 
 TermSource = Literal["title", "url", "jd"]
 
@@ -403,9 +413,9 @@ def _ordered(terms: list[str]) -> list[str]:
     return terms_mod.sort_terms(list(dict.fromkeys(terms)))
 
 
-def _explicit(text: str) -> list[str]:
-    found = [f"{_SEASONS[m.group(1).lower()]} 20{m.group(2)}"
-             for m in _EXPLICIT_RE.finditer(text)]
+def _explicit(text: str, pattern: re.Pattern[str] = _EXPLICIT_RE) -> list[str]:
+    found = [f"{_SEASONS[season.strip().lower()]} 20{m.group(2)}"
+             for m in pattern.finditer(text) for season in m.group(1).split("/")]
     found += [f"{_SEASONS[m.group(2).lower()]} 20{m.group(1)}"
               for m in _EXPLICIT_REV_RE.finditer(text)]
     return found
@@ -452,14 +462,14 @@ def _jd_clauses(jd: str) -> list[str]:
 
 def _jd_explicit(clauses: list[str], anchor: dt.date) -> list[str]:
     cutoff = anchor - dt.timedelta(days=_PAST_COHORT_DAYS)
-    found = [t for c in clauses for t in _explicit(c)]
+    found = [t for c in clauses for t in _explicit(c, _JD_EXPLICIT_RE)]
     return [t for t in found if (terms_mod.term_start(t) or dt.date.max) >= cutoff]
 
 
 def _jd_inferred(clauses: list[str], anchor: dt.date) -> list[str]:
     for c in clauses:
         r = _JD_RANGE_RE.search(c)
-        if r:
+        if r and r.group(1) != "may":   # lowercase "may" is the verb
             m1 = _MONTHS[r.group(1).lower()[:3]]
             m2 = _MONTHS[r.group(3).lower()[:3]]
             y2 = 2000 + int(r.group(4))
@@ -470,7 +480,7 @@ def _jd_inferred(clauses: list[str], anchor: dt.date) -> list[str]:
     for c in clauses:
         if _JD_START_RE.search(c):
             m = _JD_MONTH_YEAR_RE.search(c)
-            if m:
+            if m and m.group(1) != "may":
                 month = _MONTHS[m.group(1).lower()[:3]]
                 return [f"{_month_to_season(month)} 20{m.group(2)}"]
     for c in clauses:
@@ -484,7 +494,9 @@ def _jd_inferred(clauses: list[str], anchor: dt.date) -> list[str]:
 def infer_term(title: str, url: str | None = None, jd: str | None = None,
                today: dt.date | None = None) -> TermInference:
     """Term(s) for a posting from its title, URL and JD body (see the spec
-    above). `today` anchors yearless rules: pass the posting date when known."""
+    above). `today` anchors the yearless rules and the past-cohort cutoff:
+    the run date for a live posting (the watcher), the date a stored row was
+    added (the hosted backfill)."""
     anchor = today or dt.date.today()
     title = title or ""
     clauses = _jd_clauses(jd) if jd else []

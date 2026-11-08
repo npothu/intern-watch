@@ -441,10 +441,12 @@ function companyFromAtPhrase(text: string): string {
 //      month range with a year, month+year in a clause about starting, or a
 //      season next to an internship noun (year from the anchor date).
 //   3. unknown.
-// JD clauses about graduation, degrees, returning to school or deadlines are
-// skipped, and a JD's explicit term starting more than 180 days before the
-// anchor is treated as a past cohort.
+// JD clauses about graduation, returning to school or deadlines are skipped;
+// a JD's explicit term starting more than 90 days before the anchor is a past
+// cohort; a JD year must be four digits or apostrophe'd; lowercase "may" is a
+// verb.
 
+/** How a term was found. Stored rows may also carry "manual" (match_overrides.ts). */
 export type TermConfidence = "explicit" | "inferred" | "unknown";
 export type TermInference = {
   /** Chronological. */
@@ -465,7 +467,10 @@ const MONTH_NUM: Record<string, number> = {
 };
 const MONTH_ALT =
   "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const EXPLICIT_RE = new RegExp(`(?<![a-z])(${SEASON_ALT})[\\s_-]*(?:of\\s+)?[‘’']?\\s*(?:20)?(${YY})(?!\\d)`, "gi");
+const SEASON_LIST = `(?:${SEASON_ALT})(?:\\s*/\\s*(?:${SEASON_ALT}))*`;
+const EXPLICIT_RE = new RegExp(`(?<![a-z])(${SEASON_LIST})[\\s_-]*(?:of\\s+)?[‘’']?\\s*(?:20)?(${YY})(?!\\d)`, "gi");
+// JD prose is noisier than a title ("prices fall 27%"): four-digit or apostrophe'd year only.
+const JD_EXPLICIT_RE = new RegExp(`(?<![a-z])(${SEASON_LIST})[\\s_-]*(?:of\\s+)?(?:20|[‘’']\\s*)(${YY})(?!\\d)`, "gi");
 const EXPLICIT_REV_RE = new RegExp(`(?<!\\d)20(${YY})[\\s_-]+(${SEASON_ALT})(?![a-z])`, "gi");
 const MONTH_YEAR_RE = new RegExp(`\\b(${MONTH_ALT})\\.?\\s*[‘’']?\\s*(?:20)?(${YY})\\b`, "gi");
 const SEASON_ONLY_RE = new RegExp(`\\b(${SEASON_ALT})\\b`, "i");
@@ -483,9 +488,9 @@ const JD_SEASON_NOUN_RE = new RegExp(
   "i",
 );
 const JD_SKIP_RE =
-  /graduat|degree|class of|commencement|diploma|enrolled|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|posted|last updated/i;
+  /graduat|class of|commencement|diploma|returning to|return to (?:school|campus|university|college)|deadline|apply by|applications? (?:close|due|open)|date posted|posted on|last updated|on track to|(?:complet|finish)\w*\s+(?:\S+\s+){0,3}?(?:bachelor|master|ph\.?d|doctora|undergrad|degree)/i;
 const CLAUSE_SPLIT_RE = /(?<=[.!?;])\s+(?=[A-Z])|[\r\n•·]+/;
-const PAST_COHORT_DAYS = 180;
+const PAST_COHORT_DAYS = 90;
 const SEASON_START: Record<string, [number, number]> = {
   Spring: [1, 10], Summer: [5, 20], Fall: [8, 20], Winter: [12, 1],
 };
@@ -521,9 +526,11 @@ function nextOccurrence(season: string, anchor: Date): number {
   return month <= SEASON_START_MONTH[season] ? anchor.getUTCFullYear() : anchor.getUTCFullYear() + 1;
 }
 
-function explicitTerms(text: string): string[] {
+function explicitTerms(text: string, pattern: RegExp = EXPLICIT_RE): string[] {
   const out: string[] = [];
-  for (const m of text.matchAll(EXPLICIT_RE)) out.push(`${SEASON_NAMES[m[1].toLowerCase()]} 20${m[2]}`);
+  for (const m of text.matchAll(pattern)) {
+    for (const season of m[1].split("/")) out.push(`${SEASON_NAMES[season.trim().toLowerCase()]} 20${m[2]}`);
+  }
   for (const m of text.matchAll(EXPLICIT_REV_RE)) out.push(`${SEASON_NAMES[m[2].toLowerCase()]} 20${m[1]}`);
   return out;
 }
@@ -562,13 +569,13 @@ function jdClauses(jd: string): string[] {
 
 function jdExplicit(clauses: string[], anchor: Date): string[] {
   const cutoff = anchor.getTime() - PAST_COHORT_DAYS * 86_400_000;
-  return clauses.flatMap(explicitTerms).filter((t) => (termStartMs(t) ?? Infinity) >= cutoff);
+  return clauses.flatMap((c) => explicitTerms(c, JD_EXPLICIT_RE)).filter((t) => (termStartMs(t) ?? Infinity) >= cutoff);
 }
 
 function jdInferred(clauses: string[], anchor: Date): string[] {
   for (const c of clauses) {
     const r = JD_RANGE_RE.exec(c);
-    if (!r) continue;
+    if (!r || r[1] === "may") continue; // lowercase "may" is the verb
     const m1 = monthNum(r[1]);
     const m2 = monthNum(r[3]);
     const y2 = 2000 + Number(r[4]);
@@ -578,7 +585,7 @@ function jdInferred(clauses: string[], anchor: Date): string[] {
   for (const c of clauses) {
     if (!JD_START_RE.test(c)) continue;
     const m = JD_MONTH_YEAR_RE.exec(c);
-    if (m) return [`${monthToSeason(monthNum(m[1]))} 20${m[2]}`];
+    if (m && m[1] !== "may") return [`${monthToSeason(monthNum(m[1]))} 20${m[2]}`];
   }
   for (const c of clauses) {
     const m = JD_SEASON_NOUN_RE.exec(c);
@@ -592,7 +599,8 @@ function jdInferred(clauses: string[], anchor: Date): string[] {
 
 /**
  * The term(s) of a posting from its title, URL and JD body. `today` anchors
- * the yearless rules: pass the posting/added date when known.
+ * the yearless rules and the past-cohort cutoff: the ingest date for a new
+ * row, the row's `added` date in the backfill.
  */
 export function inferTermDetailed(input: {
   title?: string | null;

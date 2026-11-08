@@ -7,6 +7,7 @@ import { applyStatus, removeIfUnprogressed } from "./ledger";
 import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
 import { isClosed } from "./liveness";
 import { canonicalTerm } from "./watch_types";
+import { effectiveItem } from "./match_overrides";
 import {
   createManualApplicationInLedger,
   manualApplicationDraftValidator,
@@ -379,15 +380,8 @@ export const getMatches = query({
   },
 });
 
-/** A row's item with its hand corrections applied (see schema `overrides`). */
-export function effectiveItem(row: Pick<Doc<"matches">, "item" | "overrides">) {
-  const term = row.overrides?.term;
-  return term ? { ...row.item, term, termConfidence: "manual" } : row.item;
-}
-
-// Fields PATCH /matches/<short> may correct. Extension point: a new field
-// (e.g. `url`) gets a validator here, a slot in schema `overrides`, an
-// overlay in effectiveItem, and a key in web/lib/api/schemas.ts matchPatch.
+// Fields PATCH /matches/<short> may correct. Extension point: see
+// match_overrides.ts for the full list of edits a new field needs.
 const MATCH_PATCH_FIELDS = {
   // A term string sets the correction; null clears it (back to the inferred term).
   term: v.optional(v.union(v.string(), v.null())),

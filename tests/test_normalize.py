@@ -17,6 +17,7 @@ from src.normalize import (
     strip_html,
     strip_tracking,
 )
+from src.paths import ROOT
 
 TODAY = dt.date(2026, 6, 11)
 
@@ -49,12 +50,12 @@ def test_infer_terms(title, terms, conf):
 
 
 _TERM_CASES = json.loads(
-    (Path(__file__).parents[1] / "shared" / "term-inference-cases.json").read_text())["cases"]
+    (ROOT / "shared" / "term-inference-cases.json").read_text())["cases"]
 
 
 @pytest.mark.parametrize("case", _TERM_CASES, ids=[c["name"] for c in _TERM_CASES])
 def test_infer_term_shared_vectors(case):
-    # Same vectors as convex/ingest_extract.test.ts: the two implementations
+    # Same vectors as convex/term_inference.test.ts: the two implementations
     # must agree rule for rule.
     got = infer_term(case["title"], case.get("url"), case.get("jd"),
                      dt.date.fromisoformat(case["today"]))

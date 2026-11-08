@@ -136,7 +136,9 @@ def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
     (ATS boards: Lever/Ashby inline, Greenhouse/SmartRecruiters via
     enrich_jds). Fetches nothing. Runs before any user's filter, so the term
     step sees the result and the LLM is only asked about jobs this could not
-    resolve; the filter order itself is unchanged. Returns jobs resolved."""
+    resolve; the filter order itself is unchanged. Only new and pending jobs
+    pass through here: a job an earlier run rejected (e.g. term-unresolved)
+    stays rejected. Returns jobs resolved."""
     from .normalize import infer_term
 
     resolved = 0

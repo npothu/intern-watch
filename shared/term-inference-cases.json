@@ -49,6 +49,15 @@
     {"name": "jd spring semester", "title": "Engineering Intern", "jd": "This role is for the Spring semester, full time on site.", "today": "2026-11-08", "terms": ["Spring 2027"], "confidence": "inferred", "source": "jd"},
     {"name": "jd fall as a verb is not a term", "title": "Software Engineer Intern", "jd": "Tasks that fall under this role include testing and documentation.", "today": "2026-11-08", "terms": [], "confidence": "unknown", "source": null},
     {"name": "jd range beats season noun", "title": "Software Engineer Intern", "jd": "A summer internship.\nDates: June - August 2027.", "today": "2027-07-01", "terms": ["Summer 2027"], "confidence": "inferred", "source": "jd"},
+    {"name": "title slashed seasons", "title": "Engineering Co-op (Spring/Summer 2027)", "today": "2026-11-08", "terms": ["Spring 2027", "Summer 2027"], "confidence": "explicit", "source": "title"},
+    {"name": "jd slashed seasons", "title": "Engineering Co-op", "jd": "Open for Fall / Winter 2027 placements.", "today": "2026-11-08", "terms": ["Fall 2027", "Winter 2027"], "confidence": "explicit", "source": "jd"},
+    {"name": "jd degree in the same clause keeps the term", "title": "Software Engineer Intern", "jd": "Summer 2027 internship for students pursuing a bachelor's degree in CS.", "today": "2026-11-08", "terms": ["Summer 2027"], "confidence": "explicit", "source": "jd"},
+    {"name": "jd degree completion window skipped", "title": "Software Engineering Internship", "jd": "Currently a junior on track to complete a Bachelor\u2019s degree in CS between Spring/Summer/Fall 2028.", "today": "2026-11-08", "terms": [], "confidence": "unknown", "source": null},
+    {"name": "jd completing a degree skipped", "title": "Software Engineering Internship", "jd": "Students completing their bachelor's in Spring 2028 are eligible.", "today": "2026-11-08", "terms": [], "confidence": "unknown", "source": null},
+    {"name": "jd last summer's cohort read in november is past", "title": "Software Engineer Intern", "jd": "Our Summer 2026 interns shipped three features. This summer internship runs 12 weeks.", "today": "2026-11-08", "terms": ["Summer 2027"], "confidence": "inferred", "source": "jd"},
+    {"name": "jd current fall co-op is not a past cohort", "title": "Engineering Co-op", "jd": "Join our Fall 2026 co-op cohort.", "today": "2026-10-01", "terms": ["Fall 2026"], "confidence": "explicit", "source": "jd"},
+    {"name": "jd two-digit number after a season is not a year", "title": "Software Engineer Intern", "jd": "Prices fall 27% when the model ships.", "today": "2026-11-08", "terms": [], "confidence": "unknown", "source": null},
+    {"name": "jd may as a verb is not a range", "title": "Software Engineer Intern", "jd": "Schedules we may - August 2027 revisit.", "today": "2026-11-08", "terms": [], "confidence": "unknown", "source": null},
     {"name": "title inferred beats jd inferred", "title": "Fall Software Co-op", "jd": "Dates: January - June 2027.", "today": "2026-11-08", "terms": ["Fall 2027"], "confidence": "inferred", "source": "title"}
   ]
 }

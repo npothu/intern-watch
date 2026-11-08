@@ -283,6 +283,13 @@ test.each([
   expect(upstream).not.toHaveBeenCalled();
 });
 
+test("an application recorded after a term correction snapshots the corrected term", async () => {
+  expect((await request(`/matches/${short}`, "PATCH", { term: "Fall 2027" })).status).toBe(200);
+  expect((await request("/ticks", "PUT", { writes: [{ short, field: "applied", value: true }] })).status).toBe(200);
+  const { data: rows } = await (await request("/applications")).json();
+  expect(rows[0].snapshot).toMatchObject({ term: "Fall 2027", termConfidence: "manual" });
+});
+
 test("a watcher push with a blank term keeps a term already on the row", async () => {
   await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
     key: "job:1", short, company: "Example", title: "Intern", term: "Summer 2027", termConfidence: "inferred",

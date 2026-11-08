@@ -1,4 +1,5 @@
 import { assertNotMaintenance } from "./maintenance";
+import { effectiveItem } from "./match_overrides";
 import { v, ConvexError } from "convex/values";
 import {
   mutation,
@@ -232,7 +233,7 @@ export const saveReferral = mutation({
           )
           .first(),
       ]);
-      const source = match?.item ?? application?.snapshot;
+      const source = (match ? effectiveItem(match) : undefined) ?? application?.snapshot;
       if (source && typeof source === "object") {
         const string = (key: string) =>
           typeof source[key] === "string" ? (source[key] as string) : "";
