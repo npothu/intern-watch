@@ -12,6 +12,29 @@ from ..models import Job, SourceConfig
 
 log = logging.getLogger(__name__)
 
+# Hosts that may receive the Actions GITHUB_TOKEN (raw README fetches, which
+# it lifts out of the anonymous rate limit). Every other source host -- ATS
+# APIs, career sites -- must never see it: it is a credential, and some
+# (Oracle, SmartRecruiters) answer an unknown bearer token with 401.
+GITHUB_HOSTS = frozenset({"raw.githubusercontent.com", "api.github.com",
+                          "github.com"})
+
+
+class GitHubTokenAuth(httpx.Auth):
+    """Adds `Authorization: Bearer <token>` only for GITHUB_HOSTS requests
+    (redirects included: httpx re-runs auth per request)."""
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def auth_flow(self, request: httpx.Request):
+        if request.url.host in GITHUB_HOSTS:
+            request.headers["Authorization"] = f"Bearer {self._token}"
+        else:
+            request.headers.pop("Authorization", None)
+        yield request
+
+
 _RETRIES = 3
 _TIMEOUT = 30.0
 
