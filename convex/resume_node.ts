@@ -1,4 +1,5 @@
 "use node";
+import { assertNotMaintenance } from "./maintenance";
 
 // The Convex-native resume builder's Node-runtime action.
 //
@@ -72,6 +73,7 @@ import { exportResume, parseExportProfile } from "./resume_export";
 // The TRACKER_SECRET env var set in the Convex dashboard (same gate as
 // resume.ts - every public endpoint of the builder is private to the web app).
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }
@@ -121,7 +123,7 @@ async function fetchJdText(url: string): Promise<string> {
   const { text, html } = await acquireJdFromUrl(url, async (u) => {
     const resp = await fetch(u, {
       signal: AbortSignal.timeout(10_000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; intern-watch/1.0)" },
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; intern-baddie/1.0)" },
       redirect: "follow",
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

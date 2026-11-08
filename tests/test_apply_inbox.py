@@ -124,7 +124,7 @@ def test_classify_reply_detects_signal(subject, body, signal):
     ("Application received",
      "Your application was submitted successfully."),
     # our own digest.
-    ("intern-watch matches", "3 new roles you can interview for soon."),
+    ("intern-baddie matches", "3 new roles you can interview for soon."),
     # job alert / newsletter.
     ("New jobs for you", "5 internships matching your search. Schedule an interview today!"),
     ("Job alert: SWE Intern", "Apply now. Unsubscribe from these alerts."),

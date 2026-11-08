@@ -549,7 +549,7 @@ export function Preferences({
             <Check
               on={form.priority.subjectNames}
               onChange={(subjectNames) => patch("priority", { subjectNames })}
-              hint={`"intern-watch: 7 new · Microsoft, Meta" instead of "7 new".`}
+              hint={`"intern-baddie: 7 new · Microsoft, Meta" instead of "7 new".`}
             >
               Name the companies in the digest subject
             </Check>

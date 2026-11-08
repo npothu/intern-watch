@@ -1,7 +1,7 @@
 name: resume-ondemand
 
 # On-demand resume build from the dashboard issue: comment `/resume <12-hex>`
-# on the "📋 intern-watch matches — <user>" issue and this builds the tailored
+# on the "📋 intern-baddie matches — <user>" issue and this builds the tailored
 # .docx for that match, publishes it as a release asset (downloads directly as
 # a .docx, no artifact-zip wrapper), and replies with the download link.
 #
@@ -35,10 +35,10 @@ jobs:
     environment: ${{ inputs.environment }}
     # Only on the matches dashboard, and only for /resume comments.
     if: >-
-      contains(github.event.issue.title, 'intern-watch matches') &&
+      (contains(github.event.issue.title, 'intern-baddie matches') || contains(github.event.issue.title, 'intern-watch matches')) &&
       startsWith(github.event.comment.body, '/resume')
     env:
-      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
+      INTERN_BADDIE_DATA_DIR: ${{ github.workspace }}
     steps:
       - name: React 👀
         env:

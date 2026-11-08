@@ -17,7 +17,7 @@ notify:
     send_at_local: [8, 12, 18]
   # discord_webhook_env: DISCORD_WEBHOOK_EXAMPLE   # instant channel, off for now
 
-# Keep a "📋 intern-watch matches" GitHub issue updated with every match;
+# Keep a "📋 intern-baddie matches" GitHub issue updated with every match;
 # tick a row's checkbox there once you've applied (it persists run-to-run).
 dashboard: true
 

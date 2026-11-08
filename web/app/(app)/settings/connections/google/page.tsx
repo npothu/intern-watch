@@ -2,7 +2,7 @@ import { resolveTrackerUser } from "@/lib/user";
 import { getMailAccount, getOAuthConfig } from "@/lib/convex";
 import { GoogleConnection } from "@/components/settings/google-connection";
 
-export const metadata = { title: "Connect Gmail - intern-watch" };
+export const metadata = { title: "Connect Gmail - intern-baddie" };
 
 export const dynamic = "force-dynamic";
 

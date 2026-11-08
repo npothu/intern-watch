@@ -5,12 +5,12 @@ name: watch
 #
 #   jobs:
 #     watch:
-#       uses: <owner>/intern-watch/.github/workflows/watch.yml@main
+#       uses: <owner>/intern-baddie/.github/workflows/watch.yml@main
 #       secrets: inherit
 #
 # Either way the job checks out the DATA repo (the caller) at the workspace
 # root and the CODE repo (the repo this workflow file lives in) under code/,
-# runs the pipeline from code/ with INTERN_WATCH_DATA_DIR pointing at the
+# runs the pipeline from code/ with INTERN_BADDIE_DATA_DIR pointing at the
 # workspace, and commits state back to the data repo. When both are the same
 # repo (the template default) that is just two checkouts of the same thing.
 
@@ -68,7 +68,7 @@ jobs:
       group: watch
       cancel-in-progress: false
     env:
-      INTERN_WATCH_DATA_DIR: ${{ github.workspace }}
+      INTERN_BADDIE_DATA_DIR: ${{ github.workspace }}
       DATA_BRANCH: ${{ inputs.data_ref || github.ref_name }}
     steps:
       - name: Check out data (this repo)
@@ -101,7 +101,7 @@ jobs:
           restore-keys: |
             jobright-session-
 
-      - name: Run intern-watch
+      - name: Run intern-baddie
         working-directory: code
         run: python -m src.main ${{ inputs.send_now == true && '--send-now' || '' }}
         env:
@@ -126,7 +126,7 @@ jobs:
       # from disabling the scheduled workflow after 60 days of inactivity.
       - name: Commit state
         run: |
-          git config user.name "intern-watch[bot]"
+          git config user.name "intern-baddie[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/seen.json
           # the applications ledger appears with the first applied tick;

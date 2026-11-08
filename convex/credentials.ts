@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -20,6 +21,7 @@ import { isProvider, testProviderKey } from "./llm_providers";
 // The TRACKER_SECRET env var set in the Convex dashboard, used verbatim from
 // tracker.ts so every backend endpoint shares one auth story.
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }
@@ -372,6 +374,9 @@ export const upsertCredential = internalMutation({
     status: v.string(),
   },
   handler: async (ctx, { user, provider, ciphertext, iv, hint, label, status }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const existing = await ctx.db
       .query("credentials")
       .withIndex("by_user_provider", (q) => q.eq("user", user).eq("provider", provider))
@@ -409,6 +414,9 @@ export const recordTestResult = internalMutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, { rowId, status, checkedAt, error }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     await ctx.db.patch(rowId, {
       status,
       lastCheckedAt: checkedAt,

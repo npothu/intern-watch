@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-banner.svg" alt="Intern Watch. Find internships. Keep track of what happens next." width="1200" />
+  <img src="docs/assets/readme-banner.svg" alt="Intern Baddie. Find internships. Keep track of what happens next." width="1200" />
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
   <a href="#documentation">Documentation</a>
 </p>
 
-Intern Watch watches public internship lists and employer job boards, filters postings to your preferences, and sends you new matches.
+Intern Baddie watches public internship lists and employer job boards, filters postings to your preferences, and sends you new matches.
 The optional web app keeps your shortlist, applications, resumes, and follow-ups together.
 
 Start with a GitHub Actions watcher and email digests.
@@ -252,7 +252,7 @@ python scripts/migrate_tracker_to_convex.py
 
 The migration copies ticks, application history, and the match snapshot using repeatable upserts.
 For separate code and data repos, also pass `--root /path/to/private-data-repo` to both migration commands.
-This script reads that explicit path rather than `INTERN_WATCH_DATA_DIR`.
+This script reads that explicit path rather than `INTERN_BADDIE_DATA_DIR`.
 
 </details>
 
@@ -262,7 +262,7 @@ A single private repository is enough to start.
 For an instance that follows updates to this codebase, use a private data repository for `users/`, `state/`, `resumes/`, secrets, and the dashboard issue.
 
 ```text
-intern-watch/                 private data repo/
+intern-baddie/                 private data repo/
   src/                         users/
   convex/                      state/
   web/                         resumes/
@@ -270,7 +270,7 @@ intern-watch/                 private data repo/
   data/                        .env
 ```
 
-Run local tools from the code checkout with `INTERN_WATCH_DATA_DIR` pointing to the data repo.
+Run local tools from the code checkout with `INTERN_BADDIE_DATA_DIR` pointing to the data repo.
 Without that variable, the tools use this repository for both code and data.
 
 <details>
@@ -278,7 +278,7 @@ Without that variable, the tools use this repository for both code and data.
 
 Create `users/`, an empty `state/`, and a copy of [.gitattributes](.gitattributes) in the data repo.
 Add the watcher secrets there, then create `.github/workflows/watch.yml` with the following content.
-Replace `<owner>/intern-watch` with the code repository you use.
+Replace `<owner>/intern-baddie` with the code repository you use.
 
 ```yaml
 name: watch
@@ -296,13 +296,13 @@ permissions:
   issues: write
 jobs:
   watch:
-    uses: <owner>/intern-watch/.github/workflows/watch.yml@main
+    uses: <owner>/intern-baddie/.github/workflows/watch.yml@main
     with:
       send_now: ${{ inputs.send_now || false }}
     secrets: inherit
 ```
 
-The reusable workflow checks out the data repo and the code repo, sets `INTERN_WATCH_DATA_DIR`, and commits state back to the data repo.
+The reusable workflow checks out the data repo and the code repo, sets `INTERN_BADDIE_DATA_DIR`, and commits state back to the data repo.
 A private code repo also needs `CODE_REPO_TOKEN` with read access.
 The `dashboard-write`, `resume`, `resume-batch`, and `resume-ondemand` workflows also support reusable calls.
 

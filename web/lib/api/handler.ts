@@ -92,7 +92,7 @@ export function openApiDocument() {
     };
   }
   return {
-    openapi: "3.1.0", info: { title: "intern-watch script API", version: "1.0.0" },
+    openapi: "3.1.0", info: { title: "intern-baddie script API", version: "1.0.0" },
     servers: [{ url: "/api/v1" }],
     security: [{ bearerAuth: [] }],
     components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "iw_ API key" } } },

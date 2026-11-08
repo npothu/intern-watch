@@ -1,4 +1,4 @@
-# Quickstart: your own intern-watch watcher
+# Quickstart: your own intern-baddie watcher
 
 This gets a fresh fork to a **working watcher**: a GitHub Actions cron that
 polls internship lists every 2 hours, filters them to your rules, and emails
@@ -29,7 +29,7 @@ Clone it locally so you can tune the config and run the preflight.
 ## 2. One Gmail app password
 
 Google Account -> Security -> enable 2-Step Verification, then
-https://myaccount.google.com/apppasswords -> create one named "intern-watch"
+https://myaccount.google.com/apppasswords -> create one named "intern-baddie"
 -> copy the 16-character password. This is the only password the watcher
 stores, and it goes in as a GitHub secret, never in the repo.
 

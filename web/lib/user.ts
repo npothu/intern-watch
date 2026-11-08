@@ -7,7 +7,7 @@ import { approvedUsers } from "./access-config";
  *
  * The mapping comes from the TRACKER_USER_MAP env var: a JSON object mapping
  * the user's Clerk primary email -> tracker user key (the key used by the
- * intern-watch pipeline, e.g. {"nathan@example.com":"nathan"}). Read
+ * intern-baddie pipeline, e.g. {"nathan@example.com":"nathan"}). Read
  * server-side only. A signed-in email absent from the map resolves to null,
  * which callers render as the "not provisioned" screen.
  */

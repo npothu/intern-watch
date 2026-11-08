@@ -1,3 +1,4 @@
+import { assertNotMaintenance } from "./maintenance";
 import type { WithoutSystemFields } from "convex/server";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
@@ -12,6 +13,7 @@ export { dedupInfoForUrl } from "./short_key";
 export { canonicalUrl, validateUrl } from "./ingest_extract";
 
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }

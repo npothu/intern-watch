@@ -1,4 +1,4 @@
-# intern-watch — Project Spec
+# intern-baddie — Project Spec
 
 Automated internship discovery pipeline. Polls public GitHub internship lists on a GitHub Actions cron, normalizes and dedupes postings, applies per-user filter rules (with LLM assist for ambiguous cases), and pushes only *new matching* jobs to a Discord webhook digest. Multi-user by design: each user is a config file + webhook.
 
@@ -39,7 +39,7 @@ Company and title are bold markdown links: `**[Title](https://jobright.ai/jobs/i
 ## 2. Repo structure
 
 ```
-intern-watch/
+intern-baddie/
 ├── .github/workflows/watch.yml      # cron + manual dispatch
 ├── sources.yaml                      # source registry (url, branch, adapter, files)
 ├── users/
@@ -159,7 +159,7 @@ llm:
 Discord webhook, one digest message per user per run (only if there are new matches). Group by term, then by reason matched:
 
 ```
-🆕 intern-watch — 5 new matches (Jun 11, 6:00 PM)
+🆕 intern-baddie — 5 new matches (Jun 11, 6:00 PM)
 ── Summer 2027 ──
 • NVIDIA — Cloud Software Intern (Santa Clara) [$62/hr] → <url>
 ── Fall 2026 ──

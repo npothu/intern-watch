@@ -38,7 +38,7 @@ def _mock_client(monkeypatch, handler):
 def _make_store(monkeypatch, tmp_path, issue=7):
     """A writable GitHubStore: env-provided repo/token, issue number pinned
     (construction resolves it from git, which tmp_path can't satisfy)."""
-    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-watch")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/intern-baddie")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     gs = store.GitHubStore(tmp_path, {"name": "example"})
     gs.issue_number = issue
@@ -51,7 +51,7 @@ def test_get_ticks_parses_a_real_dashboard_body(monkeypatch, tmp_path):
     matches = [_item(1), _item(2, applied=True), _item(3, dismissed=True),
                _item(4, saved=True)]
     body = dashboard.build_body(matches, TERMS, NOW)
-    issue = {"html_url": "https://github.com/owner/intern-watch/issues/7",
+    issue = {"html_url": "https://github.com/owner/intern-baddie/issues/7",
              "body": body}
 
     def handler(request):
@@ -85,7 +85,7 @@ def test_get_ticks_closed_issue_parses_but_flags_not_open(monkeypatch,
     """GitHub serves closed issues with HTTP 200, so the parse still succeeds
     and issue_open must carry the closed state for the cron's skip."""
     body = dashboard.build_body([_item(1)], TERMS, NOW)
-    issue = {"html_url": "https://github.com/owner/intern-watch/issues/7",
+    issue = {"html_url": "https://github.com/owner/intern-baddie/issues/7",
              "state": "closed", "body": body}
     called = []
 
@@ -117,7 +117,7 @@ def test_sync_user_skips_closed_ticks_without_any_http(monkeypatch):
     ticks = store.TicksView(issue_open=False)
 
     dashboard.sync_user(state, "example", TERMS, NOW,
-                        "owner/intern-watch", "tok", ticks=ticks)
+                        "owner/intern-baddie", "tok", ticks=ticks)
     # matches untouched: nothing read back, nothing repainted
     assert not any(i.get("applied") for i in st.matches_items(state,
                                                                "example"))
@@ -135,7 +135,7 @@ def test_sync_user_closed_ticks_logs_the_same_warning(
 
     with caplog.at_level(logging.INFO, logger="src.dashboard"):
         dashboard.sync_user(state, "example", TERMS, NOW,
-                            "owner/intern-watch", "tok",
+                            "owner/intern-baddie", "tok",
                             ticks=store.TicksView(issue_open=False))
     assert any("dashboard issue #7 is closed -- skipping update (reopen it "
                "to resume)" in r.getMessage() for r in caplog.records)

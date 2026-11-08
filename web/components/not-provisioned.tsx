@@ -13,7 +13,7 @@ export function NotProvisioned() {
   return (
     <div className="flex min-h-dvh flex-1 items-center justify-center bg-bg p-6 text-ink">
       <div className="w-full max-w-sm rounded-lg border border-line bg-surface p-6 text-center">
-        <div className="text-lg font-semibold tracking-tight">intern-watch</div>
+        <div className="text-lg font-semibold tracking-tight">intern-baddie</div>
         <p className="mt-3 text-sm text-ink-2">
           This account isn&apos;t provisioned.
         </p>

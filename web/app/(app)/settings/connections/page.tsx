@@ -9,7 +9,7 @@ import { ViewSwitch } from "@/components/nav/view-switch";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { ConnectionsList } from "@/components/settings/connections-list";
 
-export const metadata = { title: "Connections - intern-watch" };
+export const metadata = { title: "Connections - intern-baddie" };
 
 export const dynamic = "force-dynamic";
 

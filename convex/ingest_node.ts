@@ -20,7 +20,7 @@ async function fetchWithLimits(url: string): Promise<string> {
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const resp = await fetch(url, {
-      headers: { "User-Agent": "intern-watch/1.0" },
+      headers: { "User-Agent": "intern-baddie/1.0" },
       redirect: "follow",
       signal: controller.signal,
     });

@@ -1,5 +1,5 @@
 {
-  "name": "intern-watch-convex",
+  "name": "intern-baddie-convex",
   "private": true,
   "description": "Convex backend (schema + query/mutation functions) for the optional STORE=convex TrackerStore driver.",
   "dependencies": {

@@ -513,7 +513,7 @@ function createPdfDocument(title: string): PDFKit.PDFDocument {
     compress: true,
     info: {
       Title: title,
-      Creator: "intern-watch",
+      Creator: "intern-baddie",
       Producer: "PDFKit",
     },
   });

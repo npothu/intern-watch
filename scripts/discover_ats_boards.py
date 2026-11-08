@@ -101,7 +101,7 @@ async def discover() -> list[dict]:
     found: list[dict] = []
 
     async with httpx.AsyncClient(timeout=15.0, headers={
-            "User-Agent": "intern-watch board discovery"}) as client:
+            "User-Agent": "intern-baddie board discovery"}) as client:
 
         async def check_company(canonical: str, names: list[str]) -> None:
             for ats in ("greenhouse", "lever", "ashby", "smartrecruiters"):

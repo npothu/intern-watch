@@ -55,7 +55,7 @@ function matches(haystack: string, q: string): boolean {
 }
 
 /** Fire on `window` to open the palette from anywhere (see openCommandPalette). */
-export const OPEN_PALETTE_EVENT = "intern-watch:open-palette";
+export const OPEN_PALETTE_EVENT = "intern-baddie:open-palette";
 
 /** Opens the palette from a click, matching what Ctrl/Cmd+K does. */
 export function openCommandPalette() {

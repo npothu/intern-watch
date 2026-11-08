@@ -229,7 +229,7 @@ class GitHubStore:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token}",
                 "Accept": "application/vnd.github+json",
-                "User-Agent": "intern-watch webui (local)"}
+                "User-Agent": "intern-baddie webui (local)"}
 
     def _issue_get(self, client: httpx.Client, number: int) -> dict:
         resp = client.get(f"{API}/repos/{self.repo}/issues/{number}")

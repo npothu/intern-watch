@@ -5,7 +5,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * intern-watch identity: "Fern & Paper"
+ * intern-baddie identity: "Fern & Paper"
  * Palette ported verbatim from web-design/approved-spec.html (approved visual
  * mock). Light tokens are default; dark tokens activate via .dark class
  * (next-themes) or system preference before hydration.

@@ -1,3 +1,4 @@
+import { assertNotMaintenance, maintenanceOn } from "./maintenance";
 import {
   action,
   internalAction,
@@ -36,6 +37,7 @@ import { APPLICATION_STATUSES } from "../shared/applications";
 
 // The TRACKER_SECRET env var set in the Convex dashboard.
 function checkSecret(secret: string) {
+  assertNotMaintenance();
   if (secret !== process.env.TRACKER_SECRET) {
     throw new Error("bad secret");
   }
@@ -169,6 +171,9 @@ export const registerOAuthNonce = mutation({
 export const consumeOAuthNonce = internalMutation({
   args: { nonce: v.string(), user: v.string() },
   handler: async (ctx, { nonce, user }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const row = await ctx.db
       .query("oauthNonces")
       .withIndex("by_nonce", (q) => q.eq("nonce", nonce))
@@ -302,6 +307,9 @@ export const storeMailAccount = internalMutation({
     refreshTokenIv: v.string(),
   },
   handler: async (ctx, { user, email, refreshToken, refreshTokenIv }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const existing = await ctx.db
       .query("mailAccounts")
       .withIndex("by_user", (q) => q.eq("user", user))
@@ -1246,6 +1254,9 @@ async function fetchMessage(token: string, id: string): Promise<any | null> {
 export const notePush = internalMutation({
   args: { email: v.string() },
   handler: async (ctx, { email }) => {
+    // Direct (non-scheduled) request path: refuse once maintenance starts, even
+    // if the public entry point passed its gate before the switch flipped.
+    assertNotMaintenance();
     const row = await ctx.db
       .query("mailAccounts")
       .withIndex("by_email", (q) => q.eq("email", email))
@@ -1391,6 +1402,10 @@ export const startWatch = internalAction({
 export const renewWatches = internalAction({
   args: {},
   handler: async (ctx) => {
+    if (maintenanceOn()) {
+      console.log("maintenance on: skipping");
+      return;
+    }
     // Announce the skip rather than looping over zero accounts in silence -
     // a self-hoster reading logs should be able to tell "off" from "broken".
     if (!mailSyncEnabled()) {
@@ -1414,6 +1429,10 @@ export const renewWatches = internalAction({
 export const reconcile = internalAction({
   args: {},
   handler: async (ctx) => {
+    if (maintenanceOn()) {
+      console.log("maintenance on: skipping");
+      return;
+    }
     if (!mailSyncEnabled()) {
       console.log("mail-sync is off (no GMAIL_CLIENT_ID/SECRET) - skipping reconcile sweep");
       return;

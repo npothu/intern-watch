@@ -13,7 +13,7 @@ Only the server needs `CONVEX_URL` and `CONVEX_SECRET`.
 Generate a key from the repository root:
 
 ```sh
-node scripts/create-api-key.mjs example ~/.config/intern-watch/script-key.json write
+node scripts/create-api-key.mjs example ~/.config/intern-baddie/script-key.json write
 ```
 
 The command creates a private file with mode `0600` and refuses to overwrite an existing file.
@@ -44,14 +44,14 @@ The API never accepts a `user` or backend secret in the body or query string.
 Unknown body fields and query parameters are rejected.
 
 ```sh
-export INTERN_WATCH_URL=https://jobs.example.com
-export INTERN_WATCH_API_KEY="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).apiKey' ~/.config/intern-watch/script-key.json)"
+export INTERN_BADDIE_URL=https://jobs.example.com
+export INTERN_BADDIE_API_KEY="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).apiKey' ~/.config/intern-baddie/script-key.json)"
 
-curl --fail-with-body -sS "$INTERN_WATCH_URL/api/v1/matches" \
-  -H "Authorization: Bearer $INTERN_WATCH_API_KEY"
+curl --fail-with-body -sS "$INTERN_BADDIE_URL/api/v1/matches" \
+  -H "Authorization: Bearer $INTERN_BADDIE_API_KEY"
 
-curl --fail-with-body -sS -X PUT "$INTERN_WATCH_URL/api/v1/ticks" \
-  -H "Authorization: Bearer $INTERN_WATCH_API_KEY" \
+curl --fail-with-body -sS -X PUT "$INTERN_BADDIE_URL/api/v1/ticks" \
+  -H "Authorization: Bearer $INTERN_BADDIE_API_KEY" \
   -H 'Content-Type: application/json' \
   --data '{"writes":[{"short":"0123456789ab","field":"saved","value":true}]}'
 ```
@@ -163,8 +163,8 @@ Omit `profile` to export the saved profile.
 The response includes `Content-Type` and `Content-Disposition` and contains the file bytes.
 
 ```sh
-curl --fail-with-body -sS -X POST "$INTERN_WATCH_URL/api/v1/profile/export" \
-  -H "Authorization: Bearer $INTERN_WATCH_API_KEY" \
+curl --fail-with-body -sS -X POST "$INTERN_BADDIE_URL/api/v1/profile/export" \
+  -H "Authorization: Bearer $INTERN_BADDIE_API_KEY" \
   -H 'Content-Type: application/json' \
   --data '{"format":"pdf","variant":"base"}' \
   --output resume.pdf
