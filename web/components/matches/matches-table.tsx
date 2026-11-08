@@ -11,12 +11,16 @@ import { ReferralLink } from "@/components/referrals/referral-link";
 import { DenseTable, type DenseColumn, type DenseSlot } from "./dense-table";
 import { CollapseShell, FOCUS_RING, blurOnPointerActivate } from "./row-primitives";
 import {
+  UNKNOWN_TERM,
   absoluteDate,
   foundAge,
   isPrimaryTerm,
   reportSummary,
   rowStatus,
   tagIsInformative,
+  tagText,
+  termLabel,
+  termOf,
   termShort,
   worthKnowing,
   type Sort,
@@ -94,12 +98,12 @@ export function MatchesTable({
   handlers: MatchHandlers;
   empty: ReactNode;
 }) {
-  const columns: DenseColumn<TriageRow>[] = [
+  const columns: DenseColumn<TriageRow, SortKey>[] = [
     {
       id: "company",
       label: "Company",
       track: "160px",
-      sortable: true,
+      sortKey: "company",
       render: (r) => (
         <span className="flex min-w-0 items-center gap-2">
           {r.priority && (
@@ -131,10 +135,10 @@ export function MatchesTable({
       id: "term",
       label: "Term",
       track: "72px",
-      sortable: true,
+      sortKey: "term",
       render: (r) => (
         <span
-          title={r.term || "Unknown term"}
+          title={termLabel(termOf(r))}
           className={cn(
             "font-mono text-[12px]",
             !r.term || isPrimaryTerm(r.term, wantedTerms) ? "text-ink-2" : "text-amber"
@@ -148,7 +152,7 @@ export function MatchesTable({
       id: "found",
       label: "Found",
       track: "68px",
-      sortable: true,
+      sortKey: "found",
       render: (r) => (
         // The age is computed against the viewer's clock, which can differ
         // from the server's across midnight; the absolute date is the title.
@@ -179,7 +183,7 @@ export function MatchesTable({
 
   const lead: DenseSlot<TriageRow> = {
     id: "Applied and saved",
-    track: "46px",
+    track: "55px",
     render: (r) => (
       <RowToggles
         row={r}
@@ -212,19 +216,20 @@ export function MatchesTable({
   ];
 
   return (
-    <DenseTable<TriageRow>
+    <DenseTable<TriageRow, SortKey>
       label="Matches"
       rows={rows}
       rowKey={(r) => r.short}
+      rowLabel={(r) => `Details for ${r.company}, ${r.title}`}
       columns={columns}
       lead={lead}
       trail={trail}
       sort={sort}
-      onSort={(key) => onSort(key as SortKey)}
+      onSort={onSort}
       openKey={openShort}
       onActivate={handlers.onActivate}
       cursorKey={cursor}
-      rowStyle={(_, i) => rowStyle(i)}
+      rowStyle={rowStyle}
       wrapRow={(r, node) => (
         <CollapseShell key={r.short} open={!hiding.has(r.short)} enter={entering.has(r.short)}>
           {node}
@@ -259,7 +264,7 @@ function RowToggles({
   const checkPath = useReplay<SVGPathElement>(appliedFlash, CHECK_DRAW, CHECK_DRAW_OPTS);
   const savedBtn = useReplay<HTMLButtonElement>(savedFlash, TICK_POP, TICK_POP_OPTS);
   return (
-    <span className="flex items-center gap-1.5 pt-3">
+    <span className="flex items-center gap-1.5 pt-3 pl-[9px]">
       <button
         ref={appliedBtn}
         type="button"
@@ -436,7 +441,7 @@ function MatchPanel({
         <dt className={DT}>Added</dt>
         <dd className="m-0">{absoluteDate(row.added) || "—"}</dd>
         <dt className={DT}>Term</dt>
-        <dd className="m-0">{row.term || "Unknown"}</dd>
+        <dd className="m-0">{row.term || termLabel(UNKNOWN_TERM)}</dd>
         {row.salary && (
           <>
             <dt className={DT}>Salary</dt>
@@ -446,7 +451,7 @@ function MatchPanel({
         {tagIsInformative(row.tag) && (
           <>
             <dt className={DT}>Tag</dt>
-            <dd className="m-0">{row.tag.replace(/[[\]]/g, "")}</dd>
+            <dd className="m-0">{tagText(row.tag)}</dd>
           </>
         )}
         <dt className={DT}>Key</dt>

@@ -87,8 +87,6 @@ export function nextViewId(current: ViewId | null): ViewId {
 export type AppViewState = {
   view: AppView;
   job: string | undefined;
-  /** The matches filter a deep link asked for (`?filter=hidden`), if any. */
-  filter: string | undefined;
   /** Show a view, optionally opening matches on a filter. */
   show: (view: AppView, filter?: string) => void;
 };
@@ -99,7 +97,6 @@ export function useAppView(): AppViewState {
   const router = useRouter();
 
   const view: AppView = params.get(VIEW_PARAM) === "tracker" ? "tracker" : "matches";
-  const filter = params.get(FILTER_PARAM) ?? undefined;
 
   const show = useCallback(
     (next: AppView, nextFilter?: string) => {
@@ -116,5 +113,5 @@ export function useAppView(): AppViewState {
     [pathname, router]
   );
 
-  return { view, filter, show, job: params.get("job") ?? undefined };
+  return { view, show, job: params.get("job") ?? undefined };
 }

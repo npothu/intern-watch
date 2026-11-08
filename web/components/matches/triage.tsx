@@ -6,8 +6,10 @@
 // Desktop (>= 700px) is one flat dense table (matches-table.tsx on the
 // dense-table.tsx shell): status pills x term pills x search, a sortable
 // header, and one row open at a time with its details panel. Phones keep
-// the swipeable cards, grouped by term. Pure logic - filter counts, sort,
-// term codes, the ?filter/?term/?sort/?open URL state - is matches-lib.ts.
+// the swipeable cards, grouped by term; a card's inline action row is the
+// same "open row" state. Both layouts are rendered and CSS picks one at
+// 700px. Pure logic - filter counts, sort, term codes, the
+// ?filter/?term/?sort/?open URL state - is matches-lib.ts.
 //
 //   cursor rail  one measured rail + wash over the table, sliding between
 //                rows in 150ms so a held j/k never outruns it
@@ -84,7 +86,6 @@ import { ViewSwitch } from "@/components/nav/view-switch";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import type { TriageRow } from "@/app/(app)/page";
 import { sortTerms, todayLocal } from "@/lib/terms";
-import { isKnownTerm } from "@/lib/preferences";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
 import { MatchesTable, type BuildState, type MatchHandlers } from "./matches-table";
 import {
@@ -98,13 +99,19 @@ import {
   DEFAULT_URL_STATE,
   STATUS_FILTERS,
   UNKNOWN_TERM,
+  absoluteDate,
   composeFilters,
   cycleSort,
+  defaultCompare,
   formatUrlState,
   isPrimaryTerm,
+  isUnwatched,
   orderTerms,
+  resolveOpen,
   sortLabel,
   sortRows,
+  splitUnwatched,
+  tagText,
   termFromSlug,
   termLabel,
   termOf,
@@ -115,10 +122,10 @@ import {
   type StatusFilter,
 } from "./matches-lib";
 
-type Filter = StatusFilter;
-
 /** Page scroll increment when j/k runs off the end of the list (item 5). */
 const EDGE_SCROLL_PX = 180;
+/** Room the fixed dock takes at the bottom of the window. */
+const DOCK_INSET_PX = 88;
 
 const FLUSH_IDLE = 500;
 const FLUSH_CAP = 50;
@@ -150,13 +157,6 @@ function cascadeStyle(i: number): CSSProperties {
   };
 }
 
-function fmtDate(iso?: string): string {
-  if (!iso) return "";
-  const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 /** The pinned group's key; never a real term, so it can't collide. */
 const PRIORITY_GROUP = "__priority__";
 
@@ -170,13 +170,7 @@ type Group = { term: string; kind: "priority" | "term"; rows: TriageRow[] };
  * inside a term group the digest's tiers still apply (top before the rest).
  */
 function groupRows(rows: TriageRow[]): Group[] {
-  const priority = rows
-    .filter((r) => r.priority)
-    .sort(
-      (a, b) =>
-        (b.added || "").localeCompare(a.added || "") ||
-        a.company.localeCompare(b.company)
-    );
+  const priority = rows.filter((r) => r.priority).sort(defaultCompare);
   const groups = new Map<string, TriageRow[]>();
   for (const r of rows) {
     if (r.priority) continue;
@@ -185,12 +179,7 @@ function groupRows(rows: TriageRow[]): Group[] {
     groups.get(t)!.push(r);
   }
   for (const arr of groups.values()) {
-    arr.sort(
-      (a, b) =>
-        tierOf(a) - tierOf(b) ||
-        (b.added || "").localeCompare(a.added || "") ||
-        a.company.localeCompare(b.company)
-    );
+    arr.sort((a, b) => tierOf(a) - tierOf(b) || defaultCompare(a, b));
   }
   const order = orderTerms(groups.keys());
   return [
@@ -202,7 +191,7 @@ function groupRows(rows: TriageRow[]): Group[] {
 /** 1 top company, 2 everything else - the digest's tiers below priority
  *  (priority rows sit in their own pinned group here). */
 function tierOf(row: TriageRow): number {
-  return /^\[TOP/.test(row.tag) ? 1 : 2;
+  return tagText(row.tag) === "top" ? 1 : 2;
 }
 
 const MOBILE_QUERY = "(max-width: 699px)";
@@ -214,10 +203,11 @@ function subscribeMobile(onChange: () => void): () => void {
 }
 
 /**
- * Phone width or not. The server always renders the desktop table, so
- * hydration uses the same answer (getServerSnapshot) and the cards swap in
- * right after - reading matchMedia during hydration instead made the two
- * trees disagree and React throw away the server HTML.
+ * Phone width or not - for BEHAVIOUR only (the cursor's row order, the dock's
+ * wording). Layout never asks: both the table and the cards are rendered and
+ * CSS picks one at 700px, so the server HTML is right on every device. The
+ * server snapshot says "desktop", which only affects those behaviours until
+ * hydration finishes.
  */
 function useIsMobile(): boolean {
   return useSyncExternalStore(
@@ -256,7 +246,7 @@ function Tags({
     );
   }
   if (!tag) return null;
-  const raw = tag.replace(/[\[\]*]/g, "").toLowerCase();
+  const raw = tagText(tag);
   // Priority is the one filled badge on the row: it is the reason the row
   // sits at the top of its group, so it should read before the title does.
   const cls = raw === "priority"
@@ -353,34 +343,32 @@ export function Triage({
   }
 
   // A row the link points at (?job= or ?open=) must be reachable: a hidden
-  // one opens the hidden list, and unwatched terms are shown.
+  // one opens the hidden list, and one in a term the preferences no longer
+  // want shows those terms. Nothing else about the view changes.
   const focusShort = initialSelected ?? initialView.open ?? undefined;
-  const [filter, setFilter] = useState<Filter>(() =>
-    initialRows.find((r) => r.short === focusShort)?.dismissed ? "hidden" : initialView.filter
+  const focusRow = initialRows.find((r) => r.short === focusShort);
+  const [filter, setFilter] = useState<StatusFilter>(() =>
+    focusRow?.dismissed ? "hidden" : initialView.filter
   );
-  const [showUnwatched, setShowUnwatched] = useState(!!focusShort);
+  const [showUnwatched, setShowUnwatched] = useState(
+    () => !!focusRow && isUnwatched(focusRow, wantedTerms)
+  );
   /* Rows in terms the preferences don't want, and the rows the surface
      works from. Unwatched rows are set aside before every count and filter,
      so "11 matches" and the pills describe what is actually on screen. */
-  const { scoped, unwatched } = useMemo(() => {
-    if (!wantedTerms || showUnwatched) return { scoped: rows, unwatched: [] as TriageRow[] };
-    const wanted = new Set(wantedTerms);
-    const out: TriageRow[] = [];
-    const aside: TriageRow[] = [];
-    for (const r of rows) {
-      (r.term && isKnownTerm(r.term) && !wanted.has(r.term) ? aside : out).push(r);
-    }
-    return { scoped: out, unwatched: aside };
-  }, [rows, wantedTerms, showUnwatched]);
+  const split = useMemo(() => splitUnwatched(rows, wantedTerms), [rows, wantedTerms]);
+  const scoped = showUnwatched ? rows : split.watched;
+  const unwatchedLive = useMemo(() => split.unwatched.filter((r) => !r.dismissed), [split]);
   const unwatchedTerms = useMemo(
-    () => sortTerms([...new Set(unwatched.filter((r) => !r.dismissed).map((r) => r.term))]),
-    [unwatched]
+    () => sortTerms([...new Set(unwatchedLive.map((r) => r.term))]),
+    [unwatchedLive]
   );
   const [termFilter, setTermFilter] = useState<string>(() =>
     termFromSlug(initialView.term, orderTerms(initialRows.map(termOf)))
   );
   const [sort, setSort] = useState<Sort>(initialView.sort);
-  /** The one row whose details panel is open (desktop accordion). */
+  /** The one open row: the desktop details panel, or a phone card's action
+   *  row. One at a time, mirrored to ?open=. */
   const [openShort, setOpenShort] = useState<string | null>(initialView.open);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState<string | null>(focusShort ?? null);
@@ -566,14 +554,16 @@ export function Triage({
   /* Status pills x term pills x search (matches-lib composeFilters). Each
      status pill is counted against the active term and query, each term pill
      against the active status and query. Term pills come from the rows - the
-     wanted set rolls with the calendar - and a stored term no longer on offer
-     simply stops applying rather than being written back from an effect. */
+     wanted set rolls with the calendar. A stored term no longer on offer is
+     cleared from state (adjusting during render), so it cannot come back on
+     its own later. */
   const filtered = useMemo(
     () => composeFilters(scoped, { filter, term: termFilter, query }),
     [scoped, filter, termFilter, query]
   );
   const activeTerm = filtered.term;
   const visible = filtered.rows;
+  if (termFilter !== activeTerm) setTermFilter(activeTerm);
 
   const statusPills = useMemo<PillOption[]>(
     () =>
@@ -595,25 +585,22 @@ export function Triage({
   );
 
   /* Desktop: one flat list in the header's sort order. Phones keep the term
-     groups (pinned Priority first), so their order is the groups flattened. */
+     groups (pinned Priority first). Both are rendered (CSS picks one); the
+     cursor walks whichever this device shows. */
   const sorted = useMemo(() => sortRows(visible, sort), [visible, sort]);
-  const groups = useMemo(() => (isMobile ? groupRows(visible) : []), [isMobile, visible]);
+  const groups = useMemo(() => groupRows(visible), [visible]);
   const ordered = useMemo(
     () => (isMobile ? groups.flatMap((g) => g.rows) : sorted),
     [isMobile, groups, sorted]
   );
+  const orderKey = ordered.map((r) => r.short).join("\n");
 
-  /* The open panel only counts while its row is on screen; a filter that
-     drops the row closes it without writing state back. */
-  const activeOpen = openShort && visible.some((r) => r.short === openShort) ? openShort : null;
+  /* A row that leaves the list (a filter, a search, a hide) closes: the
+     state is cleared, not just hidden, so it never reopens on its own. */
+  const activeOpen = resolveOpen(openShort, visible);
+  if (openShort !== activeOpen) setOpenShort(null);
 
-  const stats = useMemo(() => {
-    const active = scoped.filter((r) => !r.dismissed);
-    return {
-      matches: active.length,
-      unwatched: unwatched.filter((r) => !r.dismissed).length,
-    };
-  }, [scoped, unwatched]);
+  const liveCount = useMemo(() => scoped.filter((r) => !r.dismissed).length, [scoped]);
 
   /* View state in the URL: ?filter= ?term= ?sort= ?open=, replacing the
      history entry so filtering never piles up Back presses. Other params
@@ -634,34 +621,92 @@ export function Triage({
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
 
-  /* Normal cursor moves keep the row just in view ("nearest"); a palette jump
-     may land far off screen, so that one asks for the centre instead. */
+  /** The first element matching `selector` in whichever layout is showing. */
+  const shown = useCallback((selector: string): HTMLElement | null => {
+    for (const el of rootRef.current?.querySelectorAll<HTMLElement>(selector) ?? []) {
+      if (el.getClientRects().length > 0) return el;
+    }
+    return null;
+  }, []);
+
+  /* Scrolls a row - with its open panel or card actions - into view.
+     "nearest" moves as little as possible (and aligns the top when the row is
+     taller than the window); a palette jump asks for the centre. */
+  const scrollToRow = useCallback(
+    (short: string, block: ScrollLogicalPosition) => {
+      const el = shown(`[data-row="${CSS.escape(short)}"]`);
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      let target: number | null = null;
+      if (block === "center") {
+        target = window.scrollY + rect.top - (window.innerHeight - rect.height) / 2;
+      } else if (rect.top < 0 || rect.height > window.innerHeight - DOCK_INSET_PX) {
+        target = window.scrollY + rect.top;
+      } else if (rect.bottom > window.innerHeight - DOCK_INSET_PX) {
+        target = Math.min(
+          window.scrollY + rect.top,
+          window.scrollY + rect.bottom - window.innerHeight + DOCK_INSET_PX
+        );
+      }
+      if (target !== null) {
+        animateWindowScroll(target);
+      } else if (scrollFrame.current !== null) {
+        window.cancelAnimationFrame(scrollFrame.current);
+        scrollFrame.current = null;
+        scrollTarget.current = null;
+      }
+    },
+    [shown, animateWindowScroll]
+  );
+
+  /* What to keep in view, by what just changed:
+       - a row opened: that row and its panel, once the panel has expanded;
+       - the order changed (sort, filter, term, search, hide, restore): the
+         open row if there is one, else the cursor row;
+       - the cursor moved: the cursor row. */
   const scrollBlock = useRef<ScrollLogicalPosition>("nearest");
+  // Starts empty so a deep link (?job=, ?open=) scrolls its row in on mount.
+  const seen = useRef<{ cursor: string | null; orderKey: string; open: string | null }>({
+    cursor: null,
+    orderKey,
+    open: null,
+  });
   useEffect(() => {
-    if (!cursor) return;
-    const el = rootRef.current?.querySelector?.('[data-cursor="1"]');
-    if (!el) {
-      scrollBlock.current = "nearest";
+    const prev = seen.current;
+    seen.current = { cursor, orderKey, open: activeOpen };
+    const block = scrollBlock.current;
+    scrollBlock.current = "nearest";
+    if (activeOpen && activeOpen !== prev.open) {
+      const t = window.setTimeout(() => scrollToRow(activeOpen, "nearest"), COLLAPSE_MS + 20);
+      return () => window.clearTimeout(t);
+    }
+    if (orderKey !== prev.orderKey) {
+      const target = activeOpen ?? cursor;
+      if (target) scrollToRow(target, block);
       return;
     }
-    const rect = el.getBoundingClientRect();
-    let target: number | null = null;
-    if (scrollBlock.current === "center") {
-      target = window.scrollY + rect.top - (window.innerHeight - rect.height) / 2;
-    } else if (rect.top < 0) {
-      target = window.scrollY + rect.top;
-    } else if (rect.bottom > window.innerHeight) {
-      target = window.scrollY + rect.bottom - window.innerHeight;
+    if (cursor && cursor !== prev.cursor) scrollToRow(cursor, block);
+  }, [cursor, orderKey, activeOpen, scrollToRow]);
+
+  /* Focus follows a row that closes or leaves: when focus was inside it (a
+     keyboard press on the panel's Hide, Esc from a panel button), it moves
+     to that row's expand button - or the next row's, when the row is gone -
+     instead of falling to <body> with the unmounting panel. A pointer click
+     has already given focus up (blurOnPointerActivate), so it stays put. */
+  function focusWasIn(short: string): boolean {
+    const active = document.activeElement;
+    if (!active || active === document.body) return false;
+    for (const el of rootRef.current?.querySelectorAll(`[data-row="${CSS.escape(short)}"]`) ?? []) {
+      if (el.contains(active)) return true;
     }
-    if (target !== null) {
-      animateWindowScroll(target);
-    } else if (scrollFrame.current !== null) {
-      window.cancelAnimationFrame(scrollFrame.current);
-      scrollFrame.current = null;
-      scrollTarget.current = null;
-    }
-    scrollBlock.current = "nearest";
-  }, [cursor, animateWindowScroll]);
+    return false;
+  }
+  function focusExpand(short: string | null) {
+    if (!short) return;
+    window.requestAnimationFrame(() =>
+      shown(`[data-expand="${CSS.escape(short)}"]`)?.focus({ preventScroll: true })
+    );
+  }
 
   function flashDock(key: string) {
     setPressed((p) => ({ key, n: p.n + 1 }));
@@ -776,6 +821,7 @@ export function Triage({
     const next = ordered[i + 1] || ordered[i - 1];
     setCursor(next ? next.short : null);
     if (openShort === short) setOpenShort(null);
+    if (focusWasIn(short)) focusExpand(next?.short ?? null);
 
     setHiding((prev) => new Set(prev).add(short));
     burstShorts.current.add(short);
@@ -796,6 +842,13 @@ export function Triage({
   }
 
   function restoreShort(short: string) {
+    // In the hidden list a restored row leaves it, like a hide elsewhere.
+    if (filter === "hidden") {
+      const i = ordered.findIndex((r) => r.short === short);
+      const next = ordered[i + 1] || ordered[i - 1];
+      if (openShort === short) setOpenShort(null);
+      if (focusWasIn(short)) focusExpand(next?.short ?? null);
+    }
     queueDismiss(short, false);
     markEntering([short]);
   }
@@ -864,12 +917,10 @@ export function Triage({
     }
     queueBuild(short);
   }
-  /** Enter: the details panel on desktop; phones have no panel, so the
-   *  posting opens instead, as it always has there. */
+  /** Enter: the cursor row's details panel, or on a phone its card's
+   *  inline action row (the same thing a tap or the ⋯ button does). */
   function dockDetails() {
-    if (!currentRow) return;
-    if (isMobile) openRow();
-    else toggleDetails(currentRow.short);
+    if (currentRow) toggleDetails(currentRow.short);
   }
   function dockBuild() {
     if (!currentRow) return;
@@ -961,11 +1012,10 @@ export function Triage({
     const r = row ?? currentRow;
     if (!r?.url) return;
 
-    // Reuse the rendered anchor so the keyboard shortcut follows the same
-    // browser navigation path as clicking the job title.
-    const link = rootRef.current?.querySelector<HTMLAnchorElement>(
-      '[data-cursor="1"] a[data-open]'
-    );
+    // On phones, reuse the card title's anchor so the shortcut follows the
+    // same browser navigation path as tapping it; the desktop table has no
+    // title link (its panel's "Open posting" is one), so it opens directly.
+    const link = shown('[data-cursor="1"] a[data-open]') as HTMLAnchorElement | null;
     if (link?.href === r.url) {
       link.click();
       return;
@@ -973,10 +1023,19 @@ export function Triage({
     window.open(r.url, "_blank", "noopener");
   }
 
-  /** Opens a row's details panel (closing any other), or closes it. */
+  /** Opens a row (closing any other) or closes it: the desktop details
+   *  panel and a phone card's action row are the same state. */
   function toggleDetails(short: string) {
     setCursor(short);
-    setOpenShort((cur) => (cur === short ? null : short));
+    if (openShort === short) closeDetails();
+    else setOpenShort(short);
+  }
+  function closeDetails() {
+    if (!openShort) return;
+    const short = openShort;
+    const refocus = focusWasIn(short);
+    setOpenShort(null);
+    if (refocus) focusExpand(short);
   }
 
   function actOnCurrent(kind: "applied" | "saved" | "hide") {
@@ -1001,7 +1060,7 @@ export function Triage({
         // A dialog or the palette handles (and prevents) its own Escape.
         if (!isInput && !e.defaultPrevented && openShort) {
           e.preventDefault();
-          setOpenShort(null);
+          closeDetails();
         }
         return;
       }
@@ -1208,7 +1267,7 @@ export function Triage({
           Tracker's own first row, and the /inbox and /profile pages) - with
           the freshness readout riding its right edge. */}
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-ink-2 tabular-nums">
-        <ViewSwitch active="matches" count={stats.matches} />
+        <ViewSwitch active="matches" count={liveCount} />
         <RefreshControl className="ml-auto" />
       </div>
 
@@ -1234,7 +1293,7 @@ export function Triage({
           label="Filter by status"
           options={statusPills}
           value={filter}
-          onChange={(key) => setFilter(key as Filter)}
+          onChange={(key) => setFilter(key as StatusFilter)}
         />
         <FilterPills
           label="Filter by term"
@@ -1250,8 +1309,13 @@ export function Triage({
           hint="Matches will land here as the watcher finds them - or add a job URL manually."
           action={<AddUrlDialog />}
         />
-      ) : !isMobile ? (
+      ) : (
         <>
+        {/* Both layouts render and CSS picks one at 700px, so the server HTML
+            is already right for a phone - no JS decides layout, nothing
+            swaps after hydration. The hidden one measures nothing (the rail
+            checks for a box) and its CSS animations do not run. */}
+        <div className="hidden min-[700px]:block">
           <MatchesTable
             rows={sorted}
             sort={sort}
@@ -1277,8 +1341,9 @@ export function Triage({
           >
             {visible.length} shown · {sortLabel(sort)}
           </p>
-        </>
-      ) : emptyFilter ? (
+        </div>
+        <div className="min-[700px]:hidden">
+        {emptyFilter ? (
         <div className="rounded-md border border-line bg-surface">
           <div className="px-4 py-7 text-center text-[13px] text-ink-2">{nothingHere}</div>
         </div>
@@ -1329,10 +1394,13 @@ export function Triage({
                             row={r}
                             pinned={g.kind === "priority"}
                             wantedTerms={wantedTerms}
-                            defaultExpanded={r.short === activeOpen}
+                            expanded={r.short === activeOpen}
+                            onToggleExpanded={() => toggleDetails(r.short)}
+                            onCollapse={() => {
+                              if (activeOpen === r.short) closeDetails();
+                            }}
                             cascade={cascadeStyle(i)}
                             isCursor={r.short === cursor}
-                            onSelect={() => setCursor(r.short)}
                             onOpen={() => openRow(r)}
                             onToggleApplied={() => toggleApplied(r.short)}
                             onToggleSaved={() => toggleSaved(r.short)}
@@ -1353,11 +1421,14 @@ export function Triage({
           })}
         </div>
       )}
+        </div>
+        </>
+      )}
 
       {/* Terms the preferences no longer want (a season that started, or one
           switched off) keep their rows out of the way, behind one link, so
           the list and its counts describe only what is being watched. */}
-      {(stats.unwatched > 0 || showUnwatched) && wantedTerms && (
+      {unwatchedLive.length > 0 && (
         <p className="mt-4 text-[12px] text-ink-2">
           {showUnwatched ? (
             <>
@@ -1372,7 +1443,7 @@ export function Triage({
             </>
           ) : (
             <>
-              {stats.unwatched} match{stats.unwatched === 1 ? "" : "es"} in{" "}
+              {unwatchedLive.length} match{unwatchedLive.length === 1 ? "" : "es"} in{" "}
               {unwatchedTerms.length === 1 ? "a term" : "terms"} you are not watching (
               {unwatchedTerms.map(termLabel).join(", ")}).{" "}
               <button
@@ -1461,6 +1532,7 @@ export function Triage({
         }}
         buildState={currentRow ? buildStateFor(currentRow) : "idle"}
         detailsOpen={!!currentRow && currentRow.short === activeOpen}
+        isMobile={isMobile}
       />
 
       {burst.visible && (
@@ -1611,10 +1683,11 @@ function MobileCard({
   row,
   pinned = false,
   wantedTerms,
-  defaultExpanded = false,
+  expanded,
+  onToggleExpanded,
+  onCollapse,
   cascade,
   isCursor,
-  onSelect,
   onOpen,
   onToggleApplied,
   onToggleSaved,
@@ -1628,11 +1701,13 @@ function MobileCard({
   row: TriageRow;
   pinned?: boolean;
   wantedTerms: string[] | null;
-  /** Opened by a ?open= link. */
-  defaultExpanded?: boolean;
+  /** The inline action row is open (the surface's one open row). */
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  /** Closes the action row if it is open. */
+  onCollapse: () => void;
   cascade: CSSProperties;
   isCursor: boolean;
-  onSelect: () => void;
   onOpen: () => void;
   onToggleApplied: () => void;
   onToggleSaved: () => void;
@@ -1644,7 +1719,6 @@ function MobileCard({
   onOpenReport: () => void;
 }) {
   const [drag, setDrag] = useState(0);
-  const [expanded, setExpanded] = useState(defaultExpanded);
   const [dragged, setDragged] = useState(false);
   const startX = useRef<number | null>(null);
 
@@ -1673,13 +1747,13 @@ function MobileCard({
       setDragged(false);
       return;
     }
-    onSelect();
-    setExpanded((v) => !v);
+    onToggleExpanded();
   }
 
   const { applied, saved, dismissed } = row;
   return (
     <div
+      data-row={row.short}
       data-cursor={isCursor ? "1" : undefined}
       style={cascade}
       className={cn(
@@ -1786,7 +1860,7 @@ function MobileCard({
               </div>
             )}
             <div className="mt-1 truncate text-[11px] text-ink-2 tabular-nums">
-              {[row.location, row.salary, `seen ${fmtDate(row.added)}`]
+              {[row.location, row.salary, `seen ${absoluteDate(row.added)}`]
                 .filter(Boolean)
                 .join(" · ")}
             </div>
@@ -1796,7 +1870,7 @@ function MobileCard({
             aria-label={expanded ? "Collapse actions" : "More actions"}
             onClick={(e) => {
               e.stopPropagation();
-              setExpanded((v) => !v);
+              onToggleExpanded();
             }}
             className="mt-0.5 shrink-0 rounded px-1.5 py-1 text-[11px] text-ink-2 transition-colors hover:bg-chip"
           >
@@ -1813,7 +1887,7 @@ function MobileCard({
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleApplied();
-                setExpanded(false);
+                onCollapse();
               }}
               className={cn(
                 "rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
@@ -1848,7 +1922,7 @@ function MobileCard({
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenReport();
-                  setExpanded(false);
+                  onCollapse();
                 }}
                 className="rounded-md border border-line-2 bg-surface px-2.5 py-1.5 text-[12px] font-medium text-ink transition-colors hover:border-ink-2"
               >
@@ -1860,7 +1934,7 @@ function MobileCard({
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleSaved();
-                setExpanded(false);
+                onCollapse();
               }}
               className={cn(
                 "rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
@@ -1877,7 +1951,7 @@ function MobileCard({
                 onClick={(e) => {
                   e.stopPropagation();
                   onRestore();
-                  setExpanded(false);
+                  onCollapse();
                 }}
                 className="ml-auto rounded-md border border-line-2 bg-surface px-2.5 py-1.5 text-[12px] font-medium text-amber transition-colors hover:border-ink-2"
               >
@@ -1946,6 +2020,7 @@ function Dock({
   onCycle,
   buildState,
   detailsOpen,
+  isMobile,
 }: {
   pressed: FlashState;
   onNav: (d: number) => void;
@@ -1955,17 +2030,20 @@ function Dock({
   onBuild: () => void;
   onCycle: () => void;
   buildState: BuildState;
-  /** The cursor row's panel is open, so ↵ closes it. */
+  /** The cursor row is open, so ↵ closes it. */
   detailsOpen: boolean;
+  /** On phones ↵ toggles the card's action row rather than a panel. */
+  isMobile: boolean;
 }) {
   const kbd =
     "rounded border border-line-2 bg-surface px-1 py-px font-mono text-[10.5px] font-medium text-ink-2";
+  // Narrower keys below 400px so all nine keycaps fit a 320px phone.
   const db =
-    "inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-[12.5px] font-medium text-ink transition-colors select-none active:translate-y-px hover:bg-chip hover:border-line-2";
+    "inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-[12.5px] font-medium text-ink transition-colors select-none active:translate-y-px hover:bg-chip hover:border-line-2 max-[399px]:px-1.5";
   const label = "hidden min-[701px]:inline";
   return (
     <div
-      className="fixed bottom-4 left-1/2 z-50 flex max-w-[calc(100vw-24px)] translate-x-[-50%] items-center gap-1 rounded-[11px] border border-line-2 px-1.5 py-1 shadow-[0_6px_24px_color-mix(in_srgb,var(--color-ink)_16%,transparent)] backdrop-blur-[8px]"
+      className="fixed bottom-4 left-1/2 z-50 flex max-w-[calc(100vw-24px)] translate-x-[-50%] items-center gap-1 rounded-[11px] max-[399px]:gap-0.5 max-[399px]:px-1 border border-line-2 px-1.5 py-1 shadow-[0_6px_24px_color-mix(in_srgb,var(--color-ink)_16%,transparent)] backdrop-blur-[8px]"
       style={{
         background:
           "color-mix(in srgb, var(--color-surface) 72%, transparent)",
@@ -2064,7 +2142,15 @@ function Dock({
         act="details"
         ring="var(--color-ink-2)"
         pressed={pressed}
-        title={detailsOpen ? "close details (Esc)" : "show details"}
+        title={
+          isMobile
+            ? detailsOpen
+              ? "hide actions"
+              : "show actions"
+            : detailsOpen
+              ? "close details (Esc)"
+              : "show details"
+        }
         className={db}
       >
         <span className={kbd}>↵</span> <span className={label}>details</span>

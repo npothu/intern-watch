@@ -29,10 +29,12 @@ export function blurOnPointerActivate(e: MouseEvent<HTMLElement>) {
   if (e.detail > 0) e.currentTarget.blur();
 }
 
-/* Collapse shell. `open=false` collapses its child (grid-template-rows 0fr +
-   fade); `enter` mounts closed and opens on the next frame (restore / undo
-   reverse animation, and a details panel opening). Class `collapse-shell`
-   drives the first-child border/padding rules in globals.css. */
+/* Collapse shell. `open=false` collapses its child (grid-template-rows
+   0fr + fade) and makes it inert, so a collapsing row or panel can no longer
+   be tabbed into or clicked; `enter` mounts closed and opens on the next
+   frame (restore / undo reverse animation, and a details panel opening).
+   Class `collapse-shell` drives the first-card spacer rule in globals.css
+   (`[data-card-pad]`). */
 export function CollapseShell({
   open,
   enter = false,
@@ -53,15 +55,19 @@ export function CollapseShell({
   return (
     <div
       className="collapse-shell"
+      inert={!open}
       style={{
         display: "grid",
         gridTemplateRows: expanded ? "1fr" : "0fr",
         transition: `grid-template-rows ${COLLAPSE_MS}ms var(--ease-out-soft)`,
       }}
     >
+      {/* Clips with overflow: clip (globals.css), which - unlike hidden - is
+          not a scroll container, so the table's pinned cells inside a row
+          still stick to the frame that scrolls horizontally. */}
       <div
+        className="collapse-shell-clip"
         style={{
-          overflow: "hidden",
           minHeight: 0,
           opacity: expanded ? 1 : 0,
           // Leads the collapse slightly, so the row reads as fading out of the
