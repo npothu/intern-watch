@@ -216,26 +216,38 @@ def migrate_url_index(state: dict) -> int:
     new_index: dict[str, str] = {}
     re_keyed = 0
     merged = 0
+    # Rank every group against the untouched notified_for before stamping
+    # anything, so one group's stamping cannot promote a key in another.
+    survivors = {token: min((k for _, k in members), key=job_rank)
+                 for token, members in groups.items()}
     for token, members in groups.items():
-        survivor = min((k for _, k in members), key=job_rank)
+        survivor = survivors[token]
         new_index[token] = survivor
-        # The index keeps one key per req, and _drop_url_dupes suppresses
-        # only when THIS user owns it: every user who owns any colliding key
-        # (notified, or listed on matches/outbox) is recorded as notified on
-        # the survivor, so no user loses ownership when their row is pruned.
-        if survivor in state["jobs"]:
-            users: list[str] = list(state["jobs"][survivor].get("notified_for", []))
-            for _, k in members:
-                for u in (*state["jobs"].get(k, {}).get("notified_for", []),
-                          *listed_by.get(k, [])):
-                    if u not in users:
-                        users.append(u)
-            if users:
-                state["jobs"][survivor]["notified_for"] = users
         for canon, _ in members:
             if canon != token:
                 re_keyed += 1
         merged += len(members) - 1
+        if len(members) < 2 or survivor not in state["jobs"]:
+            continue
+        # The index keeps one key per req, and _drop_url_dupes suppresses
+        # only when THIS user owns it. So the survivor is marked notified for
+        # every user actually notified on a collider, and for a user who only
+        # has a collider on matches/outbox -- unless that user still has a
+        # retry pending on it or on the survivor (marking them notified would
+        # make the pending sweep drop the retry).
+        entry = state["jobs"][survivor]
+        users: list[str] = list(entry.get("notified_for", []))
+        for _, k in members:
+            other = state["jobs"].get(k, {})
+            add = list(other.get("notified_for", []))
+            add += [u for u in listed_by.get(k, [])
+                    if u not in other.get("pending", [])
+                    and u not in entry.get("pending", [])]
+            for u in add:
+                if u not in users:
+                    users.append(u)
+        if users:
+            entry["notified_for"] = users
     state["url_index"] = new_index
 
     # Back-reference refresh: every surviving (token, key) sets the job's

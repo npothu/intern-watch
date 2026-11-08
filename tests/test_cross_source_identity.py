@@ -204,7 +204,9 @@ def test_migrate_keeps_every_users_ownership_across_colliding_keys():
     st.mark_notified(s, "url:late", "alice")
     st.migrate_url_index(s)
     survivor = s["url_index"]["ats:wd:acme:2026798"]
+    assert survivor == "url:early"          # both notified: earliest wins
     assert set(s["jobs"][survivor]["notified_for"]) == {"alice", "bob"}
+    assert s["jobs"]["url:late"]["notified_for"] == ["alice"]   # untouched
     for user in ("alice", "bob"):
         kept = main._drop_url_dupes(s, user, [(_third_spelling(f"url:{user}-3"),
                                                ["always"])],
@@ -226,6 +228,32 @@ def test_migrate_notified_key_beats_earlier_outbox_only_key():
     kept = main._drop_url_dupes(s, "carol", [(_third_spelling("url:c3"), ["always"])],
                                 ["Summer 2027"], TODAY)
     assert kept == []
+
+
+def test_migrate_does_not_cancel_a_pending_retry():
+    # Dave's notification failed last run: his row is on matches and pending,
+    # notified_for empty. Stamping him notified on the survivor would make the
+    # pending sweep drop his retry, so the migration must leave him out.
+    s = st.empty_state()
+    _two_spellings_v3(s, "url:early", "url:late")
+    st.mark_notified(s, "url:early", "alice")
+    s["matches"] = {"dave": [{"key": "url:late"}]}
+    st.set_pending(s, "url:late", "dave")
+    st.migrate_url_index(s)
+    assert s["url_index"]["ats:wd:acme:2026798"] == "url:early"
+    assert s["jobs"]["url:early"]["notified_for"] == ["alice"]
+    assert "dave" in s["jobs"]["url:late"]["pending"]
+    assert not st.was_notified(s, "url:late", "dave")
+
+
+def test_migrate_single_member_group_is_not_stamped():
+    s = st.empty_state()
+    s["_meta"]["url_index_version"] = 3
+    st.touch(s, "url:only", ["simplify"], TODAY)
+    s["matches"] = {"erin": [{"key": "url:only"}]}
+    s["url_index"] = {SR_BARE: "url:only"}
+    st.migrate_url_index(s)
+    assert s["jobs"]["url:only"]["notified_for"] == []
 
 
 def test_migrate_prefers_listed_key_when_nothing_notified():
