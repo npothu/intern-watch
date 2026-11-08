@@ -46,7 +46,11 @@ earlier ones, is seeded once on the bootstrap run.
 Adapters that serve several boards report them on `Adapter.fetched_boards`
 (board id -> backfill flag) and stamp `Job.board` with the same id. A board is
 recorded only when its fetch succeeded, even with zero rows, so a board that
-lists nothing today is known and its first real posting later is delivered.
+lists nothing today is known and its first real posting later is delivered
+(any board seen on a job also counts as answered, in case an adapter forgets
+fetched_boards). A SOURCE, by contrast, is recorded only once it has returned
+at least one job: a new list whose first answer is an empty file must not
+have its first real contents delivered as news.
 """
 
 from __future__ import annotations
@@ -84,15 +88,20 @@ def record_known(state: dict, report: FetchReport) -> None:
                                   | set(report.boards))
 
 
-def _path(key: str) -> str:
-    """A board's URL path: the dedup key up to its last "/". When the last
-    segment carries a query (Greenhouse embeds share one path and name the
-    tenant in `for=`), it is kept with its long digit runs (job ids)
-    blanked, so two tenants never share a path."""
+def _path(key: str) -> str | None:
+    """A board's URL path, or None when the key names no board.
+
+    The dedup key up to its last "/", or up to "/job/" (Workday and Oracle
+    put a per-location segment after it). A last segment with a query is a
+    shared endpoint (Greenhouse embeds): only its `for=` tenant identifies
+    the board, and without one the key is no evidence at all."""
+    if "/job/" in key:
+        return key.split("/job/", 1)[0]
     head, _, last = key.rpartition("/")
     if "?" not in last:
         return head
-    return f"{head}/{re.sub(r'[0-9]{4,}', '#', last)}"
+    tenant = re.search(r"[?&]for=([^&#]+)", last)
+    return f"{head}/?for={tenant.group(1)}" if tenant else None
 
 
 def first_sight(state: dict, raw_jobs: list[Job],
@@ -110,11 +119,13 @@ def first_sight(state: dict, raw_jobs: list[Job],
     # Board evidence: state already holds a job under the same URL path,
     # ingested through the board's own source.
     board_sources = {job.source for job in raw_jobs if job.board}
-    seen_paths = {(src, _path(key)) for key, e in jobs.items()
+    seen_paths = {(src, path) for key, e in jobs.items()
+                  if (path := _path(key)) is not None
                   for src in e.get("sources", []) if src in board_sources}
     for job in raw_jobs:
-        if (job.board and job.board not in known_boards
-                and (job.source, _path(job.dedup_key)) in seen_paths):
+        path = _path(job.dedup_key)
+        if (job.board and job.board not in known_boards and path is not None
+                and (job.source, path) in seen_paths):
             known_boards.add(job.board)
 
     def fresh(job: Job) -> str | None:

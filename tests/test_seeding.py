@@ -144,6 +144,39 @@ def test_greenhouse_embed_tenants_do_not_share_board_evidence():
     assert plan == {raw[1].dedup_key: ["greenhouse:new"]}
 
 
+def test_path_shapes():
+    p = seeding._path
+    assert p("url:https://boards.greenhouse.io/embed/job_app?token=123456") is None
+    assert (p("url:https://boards.greenhouse.io/embed/job_app?for=meta2024&token=1")
+            != p("url:https://boards.greenhouse.io/embed/job_app?for=meta2025&token=1"))
+    wd = "url:https://gm.wd5.myworkdayjobs.com/Careers_GM/job/"
+    assert p(wd + "Warren-MI/Intern_JR-1") == p(wd + "Dublin-Ireland/Java_JR-2")
+    assert p("url:https://jobs.lever.co/acme/uuid-1") == "url:https://jobs.lever.co/acme"
+
+
+def test_new_source_recorded_only_once_it_returns_jobs(monkeypatch, tmp_path):
+    listed: list = []
+
+    class Adapter:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        def fetch(self, client, today):
+            return [j.model_copy() for j in listed if j.source == self.cfg.name]
+
+    old = [_job(1, "old-src")]
+    listed += old
+    sources = [SourceConfig(name="old-src", adapter="a"),
+               SourceConfig(name="new-src", adapter="a")]
+    _wire(monkeypatch, sources, {s.name: Adapter for s in sources},
+          [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    state_file = tmp_path / "seen.json"
+    assert main.main(["--state-file", str(state_file), "--seed"]) == 0
+    state = st.load_state(state_file)
+    assert state["_meta"]["known_sources"] == ["old-src"]   # empty: not yet
+
+
 def test_board_backfill_honored_when_its_source_is_new_too():
     state = _state(known_sources={"old-src"})
     raw = [_job(1, "ats-boards", "oracle:wanted"),
@@ -187,6 +220,9 @@ def test_ats_adapter_stamps_board_and_reports_answered_boards(
         name="ats-boards", adapter="ats_boards", boards_file="boards.yaml"))
     jobs = adapter.fetch(None, TODAY)
     assert jobs and {j.board for j in jobs} == {"greenhouse:andurilindustries"}
+    # parse() itself stamps it, so any lister routed through parse gets it
+    assert {j.board for j in adapter.parse(gh, "greenhouse:X:Anduril", TODAY)} \
+        == {"greenhouse:x"}
     # zero-row boards count as answered; failed boards do not
     assert adapter.fetched_boards == {"greenhouse:andurilindustries": False,
                                       "ashby:empty": True}

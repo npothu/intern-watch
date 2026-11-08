@@ -90,8 +90,12 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date,
             prev_counts[cfg.name] = len(jobs)
             all_jobs.extend(jobs)
             if report is not None:
-                report.sources[cfg.name] = cfg.backfill
+                if jobs:
+                    report.sources[cfg.name] = cfg.backfill
                 report.boards.update(getattr(adapter, "fetched_boards", {}))
+                for job in jobs:
+                    if job.board:
+                        report.boards.setdefault(job.board, False)
     return all_jobs
 
 

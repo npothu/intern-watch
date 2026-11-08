@@ -62,10 +62,11 @@ def _iso_date(value: str | None) -> dt.date | None:
 def board_id(board: dict) -> str:
     """Identity of an ats_boards.yaml row for first-sight seeding:
     "<ats>:<slug>", slug lower-cased so a case-only edit is not a new board.
-    Every lister in fetch() gets it for free; an adapter outside this loop
-    that serves several boards must set `job.board = board_id(row)` on each
-    Job and `self.fetched_boards[board_id(row)] = bool(row.get("backfill"))`
-    for each board that answered."""
+    parse() stamps it on every Job (so every lister routed through parse gets
+    it), and fetch() records each board that answered in fetched_boards. An
+    adapter outside this class that serves several boards must do both:
+    `job.board = board_id(row)` and
+    `self.fetched_boards[board_id(row)] = bool(row.get("backfill"))`."""
     return f"{board['ats']}:{str(board['slug']).lower()}"
 
 
@@ -87,8 +88,6 @@ class AtsBoardsAdapter(Adapter):
                 log.warning("ats board %s/%s failed: %s",
                             board["ats"], board["slug"], exc)
                 continue
-            for job in parsed:
-                job.board = board_id(board)
             self.fetched_boards[board_id(board)] = bool(board.get("backfill"))
             jobs.extend(parsed)
         log.info("source %s: %d intern postings from %d boards (%d failed)",
@@ -158,5 +157,6 @@ class AtsBoardsAdapter(Adapter):
                 description=description[:JD_MAX_CHARS] if description else None,
                 jd_url=jd_url,
                 source=self.cfg.name,
+                board=board_id({"ats": ats, "slug": slug}),
             ))
         return jobs
