@@ -59,12 +59,13 @@ def load_sources(path: Path) -> list[SourceConfig]:
 
 
 def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date) -> list[Job]:
+    from .adapters.base import GitHubTokenAuth
     headers = {"User-Agent": "intern-baddie (job alert bot)"}
-    if os.environ.get("GITHUB_TOKEN"):
-        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    token = os.environ.get("GITHUB_TOKEN")
     all_jobs: list[Job] = []
     prev_counts = state["_meta"]["source_rows"]
-    with httpx.Client(headers=headers) as client:
+    with httpx.Client(headers=headers,
+                      auth=GitHubTokenAuth(token) if token else None) as client:
         for cfg in sources:
             try:
                 jobs = make_adapter(cfg).fetch(client, today)
