@@ -203,6 +203,7 @@ function groupRows(rows: TriageRow[]): Group[] {
     .filter((r) => r.priority)
     .sort(
       (a, b) =>
+        closedLast(a, b) ||
         (b.added || "").localeCompare(a.added || "") ||
         a.company.localeCompare(b.company)
     );
@@ -216,6 +217,7 @@ function groupRows(rows: TriageRow[]): Group[] {
   for (const arr of groups.values()) {
     arr.sort(
       (a, b) =>
+        closedLast(a, b) ||
         tierOf(a) - tierOf(b) ||
         (b.added || "").localeCompare(a.added || "") ||
         a.company.localeCompare(b.company)
@@ -229,6 +231,11 @@ function groupRows(rows: TriageRow[]): Group[] {
     ...(priority.length ? [{ term: PRIORITY_GROUP, kind: "priority" as const, rows: priority }] : []),
     ...order.map((t) => ({ term: t, kind: "term" as const, rows: groups.get(t)! })),
   ];
+}
+
+/** Probe-closed rows sort after every live one. */
+function closedLast(a: TriageRow, b: TriageRow): number {
+  return Number(Boolean(a.closed)) - Number(Boolean(b.closed));
 }
 
 /** 1 top company, 2 everything else - the digest's tiers below priority
@@ -331,6 +338,22 @@ function Tags({ tag, pinnedTerm }: { tag: string; pinnedTerm?: string }) {
       )}
     >
       {raw}
+    </span>
+  );
+}
+
+/**
+ * The liveness probe saw this posting gone twice in a row (Workday/Greenhouse
+ * 404, Oracle empty, a "no longer accepting" page). The row stays - it may be
+ * a probe miss - but it reads as closed and sinks to the end of its group.
+ */
+function ClosedBadge() {
+  return (
+    <span
+      title="This posting looks closed: the job board no longer lists it."
+      className="ml-1.5 inline-block rounded-full bg-[color-mix(in_srgb,var(--color-amber)_13%,transparent)] px-1.5 py-[1px] align-[2px] text-[10.5px] font-medium leading-none text-amber"
+    >
+      closed
     </span>
   );
 }
@@ -1892,6 +1915,7 @@ function RowView({
           {company}
         </span>
         <Tags tag={row.tag} pinnedTerm={pinned ? row.term : undefined} />
+        {row.closed && !applied ? <ClosedBadge /> : null}
         {row.url ? (
           <a
             data-open
@@ -2140,6 +2164,7 @@ function MobileCard({
                 {row.company}
               </span>
               <Tags tag={row.tag} pinnedTerm={pinned ? row.term : undefined} />
+              {row.closed && !applied ? <ClosedBadge /> : null}
             </div>
             {row.url ? (
               <a

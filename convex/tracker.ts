@@ -5,6 +5,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { applyStatus, removeIfUnprogressed } from "./ledger";
 import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
+import { isClosed } from "./liveness";
 import {
   createManualApplicationInLedger,
   manualApplicationDraftValidator,
@@ -345,11 +346,27 @@ export const getMatches = query({
       .query("matches")
       .withIndex("by_user", (q) => q.eq("user", user))
       .collect();
+    // Liveness probe (liveness_probe.ts): closed only for the URL the row
+    // shows now, and never for a row with a ledger entry - an application
+    // that progressed keeps its ledger row even after the applied tick is
+    // undone, and its posting closing is not news. The ledger is read only
+    // when some row is closed. Applied ticks are masked by the readers
+    // (web/app/(app)/page.tsx).
+    const closedShorts = rows.filter((r) => isClosed(r.liveness, r.item?.url)).map((r) => r.short);
+    const ledgerShorts = new Set<string>();
+    if (closedShorts.length) {
+      const apps = await ctx.db
+        .query("applications")
+        .withIndex("by_user", (q) => q.eq("user", user))
+        .collect();
+      for (const a of apps) ledgerShorts.add(a.short);
+    }
     // Item payloads in by_user index order; patched rows keep their
     // position, so this is index order, not insertion order.
     return rows.map((r) => ({
       ...r.item,
       hasJobDescription: Boolean(r.jobDescription?.trim()),
+      ...(isClosed(r.liveness, r.item?.url) && !ledgerShorts.has(r.short) ? { closed: true } : {}),
     }));
   },
 });

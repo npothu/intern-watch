@@ -1,0 +1,12 @@
+{
+ "url": "https://intel.wd1.myworkdayjobs.com/en-US/external/job/US-Oregon-Hillsboro/AI-Software-Engineering-Undergraduate-Intern_JR0285167",
+ "expect": "closed",
+ "calls": [
+  {
+   "url": "https://intel.wd1.myworkdayjobs.com/wday/cxs/intel/external/job/US-Oregon-Hillsboro/AI-Software-Engineering-Undergraduate-Intern_JR0285167",
+   "status": 404,
+   "body": "{\"errorCode\":\"HTTP_404\",\"errorCaseId\":\"673D1BMW872FBU\",\"httpStatus\":404,\"message\":\"\",\"messageParams\":{}}"
+  }
+ ],
+ "recorded": "2026-11-08"
+}
