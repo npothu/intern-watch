@@ -30,6 +30,7 @@ REQUEST_DELAY = 1.0   # seconds between requests to one board
 RETRY_DELAY = 5.0     # backoff before the single 429/5xx retry
 TIMEOUT = 30.0
 MAX_PAGES = 5         # default per-query page cap
+PAGE_CAP_CEILING = 50  # hard ceiling on any max_pages override
 
 sleep = time.sleep
 
@@ -107,7 +108,8 @@ def request_text(client: httpx.Client, pacer: Pacer, url: str, *,
 def page_cap(board: dict, default: int = MAX_PAGES) -> int:
     """Per-board override (`max_pages:` in ats_boards.yaml), else `default`."""
     try:
-        return max(1, int(board.get("max_pages") or default))
+        return min(PAGE_CAP_CEILING,
+                   max(1, int(board.get("max_pages") or default)))
     except (TypeError, ValueError):
         return default
 

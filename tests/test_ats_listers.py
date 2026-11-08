@@ -73,6 +73,7 @@ def test_page_cap_override_and_garbage():
     assert listing_http.page_cap({}) == listing_http.MAX_PAGES
     assert listing_http.page_cap({"max_pages": 2}) == 2
     assert listing_http.page_cap({"max_pages": "x"}) == listing_http.MAX_PAGES
+    assert listing_http.page_cap({"max_pages": 100000}) == listing_http.PAGE_CAP_CEILING
 
 
 # ------------------------------------------------------- SmartRecruiters
@@ -269,25 +270,31 @@ def test_enrich_jds_reads_oracle_detail(fixtures, monkeypatch):
     "CX_1/job/26011784",
     "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/"
     "CX/job/26011784/?utm_source=simplify",
-    "https://EGUG.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en-US/"
+    "https://EGUG.FA.us2.oraclecloud.com/hcmUI/CandidateExperience/en-US/"
     "sites/CX_1/requisitions/preview/26011784",
     "https://careers.americanexpress.com/en/sites/CX_1/job/26011784",
 ])
 def test_canonical_url_oracle_variants_collapse(url):
-    assert canonical_url(url) == "ats:oracle:egug:26011784"
+    assert canonical_url(url) == "ats:oracle:egug.fa.us2.oraclecloud.com:26011784"
 
 
 def test_canonical_url_oracle_pods_stay_apart_and_ids_keep_case():
     a = canonical_url("https://edbz.fa.us2.oraclecloud.com/hcmUI/"
-                      "CandidateExperience/en/sites/CX/job/240001hw")
+                      "CandidateExperience/en/sites/CX/job/240001HW")
     b = canonical_url("https://egup.fa.us2.oraclecloud.com/hcmUI/"
                       "CandidateExperience/en/sites/CX/job/240001HW")
-    assert a == "ats:oracle:edbz:240001HW"
-    assert b == "ats:oracle:egup:240001HW"
+    assert a == "ats:oracle:edbz.fa.us2.oraclecloud.com:240001HW"
+    assert b == "ats:oracle:egup.fa.us2.oraclecloud.com:240001HW"
+    # the same pod label in another data centre is a different pod
+    assert canonical_url("https://edbz.fa.em2.oraclecloud.com/hcmUI/"
+                         "CandidateExperience/en/sites/CX/job/240001HW") != a
+    # ids are not case-folded: a case-distinct id is not assumed equal
+    assert canonical_url("https://edbz.fa.us2.oraclecloud.com/hcmUI/"
+                         "CandidateExperience/en/sites/CX/job/240001hw") != a
     # no-site form some sites link
     assert canonical_url("https://eeho.fa.us2.oraclecloud.com/hcmUI/"
                          "CandidateExperience/en/job/334345/") == (
-        "ats:oracle:eeho:334345")
+        "ats:oracle:eeho.fa.us2.oraclecloud.com:334345")
 
 
 def test_oracle_listing_url_joins_aggregator_link(fixtures):
@@ -527,3 +534,4 @@ def test_missing_total_count_does_not_stop_paging_early():
         sr.fetch_pages(c, {"slug": "Acme"})
     assert [a for a in asked if a[0] == "intern"] == [
         ("intern", 0), ("intern", 100), ("intern", 200)]
+

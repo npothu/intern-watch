@@ -191,9 +191,11 @@ _SR_PATH_RE = re.compile(r"^/([^/]+)/" + _SR_ID + r"(?:-[^/]*)?$", re.I)
 _SR_API_RE = re.compile(
     r"^/v1/companies/([^/]+)/postings/" + _SR_ID + r"$", re.I)
 _WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
-# Oracle Recruiting Cloud: requisition ids are per pod (the first host label
-# of <pod>.fa.<dc>.oraclecloud.com) and shared by every career site of that
-# pod, so the site segment is not part of the identity. Some employers front
+# Oracle Recruiting Cloud: requisition ids are per pod and shared by every
+# career site of that pod, so the site segment is not part of the identity.
+# The pod is scoped by its full host (<pod>.fa.<dc>.oraclecloud.com): nothing
+# guarantees a pod label is unique across data centres, and a false join
+# suppresses a delivery. Ids keep their case for the same reason. Some employers front
 # the same pod with their own domain; those are listed explicitly (never
 # guessed) so the two spellings join.
 _ORACLE_PATH_RE = re.compile(
@@ -202,7 +204,8 @@ _ORACLE_PATH_RE = re.compile(
 _ORACLE_CUSTOM_PATH_RE = re.compile(
     r"^/[a-z]{2}(?:[-_][a-z]{2})?/sites/[^/]+/(?:job|requisitions/preview)"
     r"/([A-Za-z0-9]+)$", re.I)
-_ORACLE_CUSTOM_HOSTS = {"careers.americanexpress.com": "egug"}
+_ORACLE_CUSTOM_HOSTS = {
+    "careers.americanexpress.com": "egug.fa.us2.oraclecloud.com"}
 # Eightfold position ids are per tenant (<tenant>.eightfold.ai); employer
 # domains that front a tenant are listed explicitly. Forms: /careers/job/<id>
 # and /careers?pid=<id>.
@@ -298,13 +301,11 @@ def canonical_url(url: str) -> str | None:
     if host.endswith(".oraclecloud.com"):
         m = _ORACLE_PATH_RE.match(parts.path.rstrip("/"))
         if m:
-            pod = host.split(".", 1)[0]
-            return f"ats:oracle:{pod}:{m.group(1).upper()}"
+            return f"ats:oracle:{host}:{m.group(1)}"
     if host in _ORACLE_CUSTOM_HOSTS:
         m = _ORACLE_CUSTOM_PATH_RE.match(parts.path.rstrip("/"))
         if m:
-            return (f"ats:oracle:{_ORACLE_CUSTOM_HOSTS[host]}:"
-                    f"{m.group(1).upper()}")
+            return f"ats:oracle:{_ORACLE_CUSTOM_HOSTS[host]}:{m.group(1)}"
     ef_tenant = (host.split(".", 1)[0] if host.endswith(".eightfold.ai")
                  else _EIGHTFOLD_CUSTOM_HOSTS.get(host))
     if ef_tenant:

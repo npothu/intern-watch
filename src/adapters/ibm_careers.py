@@ -47,7 +47,8 @@ def query_body(offset: int) -> dict:
         # 400); the job-type filter does the real narrowing.
         "query": {"bool": {
             "must": [{"simple_query_string": {
-                "query": "intern",
+                # "|" is OR; a bare co-op would parse "-op" as NOT op.
+                "query": 'intern | coop | "co-op"',
                 "fields": ["title^3", "description^2", "keywords^1"]}}],
             "filter": [{"term": {"field_keyword_18": "Internship"}}]}},
         "size": PAGE_SIZE,
