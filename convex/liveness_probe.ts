@@ -14,6 +14,20 @@
 //  - URLs validateUrl rejects (private hosts etc.).
 // Skipped rows get only their `livenessDueAt` pushed back so they stop
 // occupying the front of the index; nothing else on them changes.
+//
+// Write budget (matches-table writes). Per run, at most:
+//   BATCH_LIMIT lease writes + BATCH_LIMIT verdict writes
+//   + MAX_SKIP_WRITES skip reschedules        = 12 + 12 + 40 = 64
+// At 72 runs/day (every 20 min) that caps the probe at 4,608 match writes a
+// day, of which skip reschedules are at most 2,880. Past the skip cap a run
+// still scans for probeable rows but leaves the extra skippable ones as they
+// are; later runs drain them 40 at a time.
+//
+// Network: requests are sequential, PACE_MS apart, at most 2 per row. Every
+// redirect is followed by hand (at most MAX_REDIRECTS hops) and each hop's URL
+// goes through validateUrl before it is fetched, so a public posting can't
+// bounce the probe to a private address. Bodies are streamed and cut at
+// MAX_BODY_BYTES.
 
 import { internalAction, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
@@ -41,7 +55,11 @@ const LEASE_MS = 60 * 60 * 1000;
 const PACE_MS = 1_500;
 const FETCH_TIMEOUT_MS = 15_000;
 /** Ashby boards are one JSON for the whole company and can be large. */
-const MAX_BODY_CHARS = 3_000_000;
+export const MAX_BODY_BYTES = 3_000_000;
+/** Redirect hops followed per request (Greenhouse/Avature use one or two). */
+export const MAX_REDIRECTS = 5;
+/** Skip reschedules written per claim (see the write budget above). */
+export const MAX_SKIP_WRITES = 40;
 
 // The career sites serve these pages to browsers; a browser-like UA avoids
 // the generic-bot 403 some CDNs hand out. No cookies, no auth, no challenge
@@ -91,12 +109,18 @@ export const claimBatch = internalMutation({
       .order("asc")
       .take(SCAN_LIMIT);
     const out: Claimed[] = [];
+    let skipWrites = 0;
     for (const row of rows) {
       if (out.length >= limit) break;
       if (row.livenessDueAt !== undefined && row.livenessDueAt > now) break; // index order: rest not due
       const skip = await skipReason(ctx, row);
       if (skip) {
-        await ctx.db.patch(row._id, { livenessDueAt: now + RECHECK_MS.skipped });
+        // Capped so a long run of skippable rows can't turn one claim into
+        // SCAN_LIMIT writes; the rest stay due and drain on later runs.
+        if (skipWrites < MAX_SKIP_WRITES) {
+          await ctx.db.patch(row._id, { livenessDueAt: now + RECHECK_MS.skipped });
+          skipWrites += 1;
+        }
         continue;
       }
       await ctx.db.patch(row._id, { livenessDueAt: now + LEASE_MS });
@@ -138,26 +162,74 @@ export const recordVerdict = internalMutation({
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function fetchCapped(url: string): Promise<HttpResult> {
+const HEADERS = {
+  "User-Agent": UA,
+  Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+/** Read at most `maxBytes` of a body, cancelling the stream at the cap. */
+export async function readCapped(
+  resp: Response,
+  maxBytes: number,
+): Promise<{ body: string; truncated: boolean }> {
+  if (!resp.body) return { body: "", truncated: false };
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { body: body + decoder.decode(), truncated: false };
+    const room = maxBytes - bytes;
+    if (value.byteLength > room) {
+      body += decoder.decode(value.subarray(0, room));
+      await reader.cancel().catch(() => undefined);
+      return { body, truncated: true };
+    }
+    bytes += value.byteLength;
+    body += decoder.decode(value, { stream: true });
+  }
+}
+
+/**
+ * GET with redirects followed by hand: every hop (the first included) must
+ * pass validateUrl before it is requested, and at most `maxRedirects` hops
+ * are followed. A blocked hop or a redirect loop throws, which the
+ * classifier turns into `unknown`. `rawFetch` is injectable for tests.
+ */
+export async function fetchPublic(
+  url: string,
+  rawFetch: typeof fetch = fetch,
+  opts: { maxRedirects?: number; maxBytes?: number; timeoutMs?: number } = {},
+): Promise<HttpResult> {
+  const maxRedirects = opts.maxRedirects ?? MAX_REDIRECTS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? FETCH_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": UA,
-        Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-    const text = await resp.text();
-    return {
-      status: resp.status,
-      finalUrl: resp.url || url,
-      body: text.length > MAX_BODY_CHARS ? text.slice(0, MAX_BODY_CHARS) : text,
-      truncated: text.length > MAX_BODY_CHARS,
-    };
+    let current = url;
+    for (let hop = 0; ; hop++) {
+      validateUrl(current);
+      const resp = await rawFetch(current, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: HEADERS,
+      });
+      const location = resp.headers.get("location");
+      if (resp.status >= 300 && resp.status < 400 && location) {
+        await resp.body?.cancel().catch(() => undefined);
+        if (hop >= maxRedirects) throw new Error(`too many redirects (>${maxRedirects})`);
+        current = new URL(location, current).toString();
+        continue;
+      }
+      // An opaque manual-redirect response (no status, no Location) gives
+      // nothing to validate - treat it like a failed fetch.
+      if (resp.type === "opaqueredirect" || resp.status === 0) {
+        throw new Error("opaque redirect");
+      }
+      const { body, truncated } = await readCapped(resp, opts.maxBytes ?? MAX_BODY_BYTES);
+      return { status: resp.status, finalUrl: current, body, truncated };
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -169,7 +241,7 @@ function pacedFetcher(): Fetcher {
   return async (url) => {
     if (!first) await sleep(PACE_MS);
     first = false;
-    return fetchCapped(url);
+    return fetchPublic(url);
   };
 }
 

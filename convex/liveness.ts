@@ -322,11 +322,18 @@ export const CLOSED_CONFIRMATIONS = 2;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 /** When to look at a row again, by outcome. */
+/**
+ * Minimum time between two COUNTED closed verdicts. Enforced in nextLiveness
+ * itself, not just by scheduling: a duplicate or early verdict (a re-run, an
+ * overlapping probe, a manual `npx convex run`) records but does not count,
+ * so a few-hour outage or bot block can never produce the confirmations.
+ */
+export const CLOSED_CONFIRM_GAP_MS = 1 * DAY;
+
 export const RECHECK_MS = {
   open: 3 * DAY,
-  /** One closed verdict so far: confirm a day later, so a few-hour outage
-   * or bot block can't produce both verdicts. */
-  closedPending: 1 * DAY,
+  /** One closed verdict so far: confirm once the gap has passed. */
+  closedPending: CLOSED_CONFIRM_GAP_MS,
   /** Marked closed: keep checking slowly in case it reopens. */
   closed: 7 * DAY,
   unknown: 1 * DAY,
@@ -341,6 +348,8 @@ export type LivenessRecord = {
   reason: string;
   checkedAt: number;
   closedStreak: number;
+  /** When the latest closed verdict that counted toward the streak landed. */
+  closedCountedAt?: number;
   /** Set once the streak reaches CLOSED_CONFIRMATIONS: the row is closed. */
   closedAt?: number;
 };
@@ -349,7 +358,9 @@ export type LivenessRecord = {
  * Fold one verdict into a row's record. Open clears the streak (and an
  * earlier closed mark - postings do get reposted). Unknown breaks a pending
  * streak (the closed verdicts must be consecutive) but never lifts an
- * existing closed mark - only an open verdict does that.
+ * existing closed mark - only an open verdict does that. A closed verdict
+ * counts only if CLOSED_CONFIRM_GAP_MS has passed since the last counted one;
+ * an earlier one is recorded (lastVerdict/checkedAt) without counting.
  */
 export function nextLiveness(
   prev: LivenessRecord | undefined,
@@ -369,15 +380,28 @@ export function nextLiveness(
   if (verdict.state === "open") {
     record.closedStreak = 0;
     delete record.closedAt;
+    delete record.closedCountedAt;
     return { record, dueAt: now + RECHECK_MS.open };
   }
   if (verdict.state === "unknown") {
-    if (!record.closedAt) record.closedStreak = 0;
+    if (!record.closedAt) {
+      record.closedStreak = 0;
+      delete record.closedCountedAt;
+    }
     return { record, dueAt: now + (record.closedAt ? RECHECK_MS.closed : RECHECK_MS.unknown) };
   }
+  if (record.closedAt) return { record, dueAt: now + RECHECK_MS.closed };
+  // A pending streak with no counted time (written before the field existed)
+  // dates from its last check.
+  const lastCounted = base.closedStreak > 0 ? (base.closedCountedAt ?? base.checkedAt) : undefined;
+  if (lastCounted !== undefined && now - lastCounted < CLOSED_CONFIRM_GAP_MS) {
+    // Too early to count: keep the streak, come back when the gap is up.
+    return { record, dueAt: lastCounted + CLOSED_CONFIRM_GAP_MS };
+  }
   record.closedStreak = base.closedStreak + 1;
+  record.closedCountedAt = now;
   if (record.closedStreak >= CLOSED_CONFIRMATIONS) {
-    record.closedAt = base.closedAt ?? now;
+    record.closedAt = now;
     return { record, dueAt: now + RECHECK_MS.closed };
   }
   return { record, dueAt: now + RECHECK_MS.closedPending };

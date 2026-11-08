@@ -93,6 +93,7 @@ export default defineSchema({
         reason: v.string(),
         checkedAt: v.number(),
         closedStreak: v.number(),
+        closedCountedAt: v.optional(v.number()),
         closedAt: v.optional(v.number()),
       }),
     ),

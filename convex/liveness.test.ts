@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { readFileSync, readdirSync } from "node:fs";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import { fetchPublic, MAX_SKIP_WRITES } from "./liveness_probe";
 import {
   checkLiveness,
   classifyPage,
@@ -12,6 +13,7 @@ import {
   oracleTarget,
   probePlan,
   CLOSED_CONFIRMATIONS,
+  CLOSED_CONFIRM_GAP_MS,
   RECHECK_MS,
   type Fetcher,
   type HttpResult,
@@ -147,39 +149,68 @@ describe("nextLiveness streak", () => {
   const closed = { state: "closed" as const, reason: "api-404" };
   const open = { state: "open" as const, reason: "ok" };
   const unknown = { state: "unknown" as const, reason: "http-503" };
+  const GAP = CLOSED_CONFIRM_GAP_MS;
+  const T0 = 1_000_000;
 
-  test(`needs ${CLOSED_CONFIRMATIONS} consecutive closed verdicts`, () => {
-    const a = nextLiveness(undefined, url, closed, 1000);
+  test(`needs ${CLOSED_CONFIRMATIONS} closed verdicts spaced by the confirm gap`, () => {
+    const a = nextLiveness(undefined, url, closed, T0);
     expect(a.record.closedAt).toBeUndefined();
-    expect(a.dueAt).toBe(1000 + RECHECK_MS.closedPending);
-    const b = nextLiveness(a.record, url, closed, 2000);
-    expect(b.record.closedAt).toBe(2000);
+    expect(a.dueAt).toBe(T0 + RECHECK_MS.closedPending);
+    const b = nextLiveness(a.record, url, closed, T0 + GAP);
+    expect(b.record.closedAt).toBe(T0 + GAP);
     expect(isClosed(b.record, url)).toBe(true);
   });
 
+  test("an early verdict (one second later) records but does not count", () => {
+    const a = nextLiveness(undefined, url, closed, T0).record;
+    const early = nextLiveness(a, url, closed, T0 + 1000);
+    expect(early.record.closedAt).toBeUndefined();
+    expect(early.record.closedStreak).toBe(1);
+    expect(early.record.checkedAt).toBe(T0 + 1000);
+    // Due again exactly when the gap from the COUNTED verdict ends.
+    expect(early.dueAt).toBe(T0 + GAP);
+    // The early one did not move the window: one ms short still doesn't count.
+    expect(nextLiveness(early.record, url, closed, T0 + GAP - 1).record.closedAt).toBeUndefined();
+    expect(nextLiveness(early.record, url, closed, T0 + GAP).record.closedAt).toBe(T0 + GAP);
+  });
+
+  test("duplicate verdicts at the same instant never close", () => {
+    let r = nextLiveness(undefined, url, closed, T0).record;
+    for (let i = 0; i < 5; i++) r = nextLiveness(r, url, closed, T0).record;
+    expect(r.closedAt).toBeUndefined();
+    expect(r.closedStreak).toBe(1);
+  });
+
+  test("a pending streak from before closedCountedAt dates from its last check", () => {
+    const legacy = { url, lastVerdict: "closed" as const, reason: "x", checkedAt: T0, closedStreak: 1 };
+    expect(nextLiveness(legacy, url, closed, T0 + 5).record.closedAt).toBeUndefined();
+    expect(nextLiveness(legacy, url, closed, T0 + GAP).record.closedAt).toBe(T0 + GAP);
+  });
+
   test("unknown breaks a pending streak (verdicts must be consecutive); open resets", () => {
-    const a = nextLiveness(undefined, url, closed, 1);
-    const b = nextLiveness(a.record, url, unknown, 2);
+    const a = nextLiveness(undefined, url, closed, T0);
+    const b = nextLiveness(a.record, url, unknown, T0 + GAP);
     expect(b.record.closedStreak).toBe(0);
-    expect(nextLiveness(b.record, url, closed, 3).record.closedAt).toBeUndefined();
-    const c = nextLiveness(a.record, url, open, 3);
+    expect(nextLiveness(b.record, url, closed, T0 + 2 * GAP).record.closedAt).toBeUndefined();
+    const c = nextLiveness(a.record, url, open, T0 + GAP);
     expect(c.record.closedStreak).toBe(0);
-    const d = nextLiveness(c.record, url, closed, 4);
+    const d = nextLiveness(c.record, url, closed, T0 + 2 * GAP);
     expect(d.record.closedAt).toBeUndefined();
   });
 
-  test("open after a closed mark reopens; unknown keeps the mark", () => {
-    let r = nextLiveness(undefined, url, closed, 1).record;
-    r = nextLiveness(r, url, closed, 2).record;
-    expect(nextLiveness(r, url, unknown, 3).record.closedAt).toBe(2);
-    expect(nextLiveness(r, url, open, 3).record.closedAt).toBeUndefined();
+  test("open after a closed mark reopens; unknown and repeat closed keep the mark", () => {
+    let r = nextLiveness(undefined, url, closed, T0).record;
+    r = nextLiveness(r, url, closed, T0 + GAP).record;
+    expect(nextLiveness(r, url, unknown, T0 + 2 * GAP).record.closedAt).toBe(T0 + GAP);
+    expect(nextLiveness(r, url, closed, T0 + 9 * GAP).record.closedAt).toBe(T0 + GAP);
+    expect(nextLiveness(r, url, open, T0 + 2 * GAP).record.closedAt).toBeUndefined();
   });
 
   test("a changed URL starts a fresh streak and invalidates the mark", () => {
-    let r = nextLiveness(undefined, url, closed, 1).record;
-    r = nextLiveness(r, url, closed, 2).record;
+    let r = nextLiveness(undefined, url, closed, T0).record;
+    r = nextLiveness(r, url, closed, T0 + GAP).record;
     expect(isClosed(r, "https://x.example/job/2")).toBe(false);
-    const fresh = nextLiveness(r, "https://x.example/job/2", closed, 3).record;
+    const fresh = nextLiveness(r, "https://x.example/job/2", closed, T0 + GAP + 1).record;
     expect(fresh.closedStreak).toBe(1);
     expect(fresh.closedAt).toBeUndefined();
   });
@@ -249,7 +280,10 @@ describe("claimBatch / recordVerdict", () => {
     let items = await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET });
     expect(items.find((i: { short: string }) => i.short === "fresh")?.closed).toBeUndefined();
 
-    expect(await rec(3000)).toEqual({ recorded: true, closed: true });
+    // One second later does not count (Astra's case) ...
+    expect(await rec(3000)).toEqual({ recorded: true, closed: false });
+    // ... a verdict a full gap after the first does.
+    expect(await rec(2000 + CLOSED_CONFIRM_GAP_MS)).toEqual({ recorded: true, closed: true });
     items = await t.query(api.tracker.getMatches, { user: "u1", secret: SECRET });
     const fresh = items.find((i: { short: string }) => i.short === "fresh");
     expect(fresh?.closed).toBe(true);
@@ -268,7 +302,7 @@ describe("claimBatch / recordVerdict", () => {
       secret: SECRET,
       writes: [{ short: "fresh", field: "applied", value: true }],
     });
-    const res = await t.mutation(internal.liveness_probe.recordVerdict, { id: row.id, url: row.url, state: "closed", reason: "x", now: 3000 });
+    const res = await t.mutation(internal.liveness_probe.recordVerdict, { id: row.id, url: row.url, state: "closed", reason: "x", now: 2000 + CLOSED_CONFIRM_GAP_MS });
     expect(res).toEqual({ recorded: false, why: "applied" });
     const doc = await t.run((ctx) => ctx.db.get(row.id));
     expect(doc?.liveness?.closedAt).toBeUndefined();
@@ -278,12 +312,12 @@ describe("claimBatch / recordVerdict", () => {
     const t = convexTest(schema);
     await seed(t);
     const [row] = await t.mutation(internal.liveness_probe.claimBatch, { now: 1000, limit: 1 });
-    for (const now of [2000, 3000]) {
+    for (const now of [2000, 2000 + CLOSED_CONFIRM_GAP_MS]) {
       await t.mutation(internal.liveness_probe.recordVerdict, { id: row.id, url: row.url, state: "closed", reason: "x", now });
     }
     await t.mutation(api.tracker.pushMatches, { user: "u1", secret: SECRET, items: [{ short: "fresh", url: row.url, title: "T" }] });
     let doc = await t.run((ctx) => ctx.db.get(row.id));
-    expect(doc?.liveness?.closedAt).toBe(3000);
+    expect(doc?.liveness?.closedAt).toBe(2000 + CLOSED_CONFIRM_GAP_MS);
 
     await t.mutation(api.tracker.pushMatches, {
       user: "u1",
@@ -305,5 +339,136 @@ describe("claimBatch / recordVerdict", () => {
     const claimed = await t.mutation(internal.liveness_probe.claimBatch, { now: 1000, limit: 1 });
     const doc = await t.run((ctx) => ctx.db.get(claimed[0].id));
     expect(doc?.short).toBe("legacy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchPublic: manual redirects with per-hop validation, streamed body cap
+// ---------------------------------------------------------------------------
+
+describe("fetchPublic", () => {
+  type Hop = { status: number; location?: string; body?: string | Uint8Array[] };
+  function fakeFetch(hops: Record<string, Hop>) {
+    const requested: string[] = [];
+    let cancelled = 0;
+    const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requested.push(url);
+      expect(init?.redirect).toBe("manual");
+      const hop = hops[url];
+      if (!hop) throw new Error(`unexpected fetch ${url}`);
+      const chunks = Array.isArray(hop.body) ? hop.body : [new TextEncoder().encode(hop.body ?? "")];
+      let i = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (i < chunks.length) c.enqueue(chunks[i++]);
+          else c.close();
+        },
+        cancel() {
+          cancelled += 1;
+        },
+      });
+      return new Response(stream, {
+        status: hop.status,
+        headers: hop.location ? { location: hop.location } : {},
+      });
+    }) as typeof fetch;
+    return { f, requested, cancelled: () => cancelled };
+  }
+
+  test("follows relative and absolute redirects and reports the final URL", async () => {
+    const { f, requested } = fakeFetch({
+      "https://boards.example.com/acme/jobs/1": { status: 302, location: "/acme?error=true" },
+      "https://boards.example.com/acme?error=true": { status: 301, location: "https://careers.acme.example/" },
+      "https://careers.acme.example/": { status: 200, body: "home" },
+    });
+    const res = await fetchPublic("https://boards.example.com/acme/jobs/1", f);
+    expect(res).toMatchObject({ status: 200, finalUrl: "https://careers.acme.example/", body: "home", truncated: false });
+    expect(requested).toHaveLength(3);
+  });
+
+  test("a redirect to a private or local address is never requested", async () => {
+    for (const target of ["http://127.0.0.1/admin", "http://169.254.169.254/latest/meta-data", "http://localhost:3210/", "file:///etc/passwd"]) {
+      const { f, requested } = fakeFetch({
+        "https://jobs.example.com/1": { status: 302, location: target },
+      });
+      await expect(fetchPublic("https://jobs.example.com/1", f)).rejects.toThrow();
+      expect(requested).toEqual(["https://jobs.example.com/1"]);
+    }
+  });
+
+  test("the first URL is validated too", async () => {
+    const { f, requested } = fakeFetch({});
+    await expect(fetchPublic("http://10.0.0.5/job", f)).rejects.toThrow();
+    expect(requested).toEqual([]);
+  });
+
+  test("stops after the redirect cap", async () => {
+    const hops: Record<string, Hop> = {};
+    for (let i = 0; i < 10; i++) hops[`https://loop.example.com/${i}`] = { status: 302, location: `/${i + 1}` };
+    const { f, requested } = fakeFetch(hops);
+    await expect(fetchPublic("https://loop.example.com/0", f, { maxRedirects: 3 })).rejects.toThrow(/too many redirects/);
+    expect(requested).toHaveLength(4);
+  });
+
+  test("an oversized body is cut at the byte cap and the stream cancelled", async () => {
+    const chunk = new Uint8Array(1000).fill(97); // "a"
+    const { f, cancelled } = fakeFetch({
+      "https://big.example.com/board": { status: 200, body: [chunk, chunk, chunk, chunk] },
+    });
+    const res = await fetchPublic("https://big.example.com/board", f, { maxBytes: 2500 });
+    expect(res.truncated).toBe(true);
+    expect(res.body.length).toBe(2500);
+    expect(cancelled()).toBe(1);
+  });
+
+  test("a body that exactly fits is not truncated", async () => {
+    const chunk = new Uint8Array(1000).fill(98);
+    const { f } = fakeFetch({ "https://fit.example.com/": { status: 200, body: [chunk, chunk] } });
+    const res = await fetchPublic("https://fit.example.com/", f, { maxBytes: 2000 });
+    expect(res).toMatchObject({ truncated: false });
+    expect(res.body.length).toBe(2000);
+  });
+
+  test("a truncated Ashby board without the id is unknown, not closed", async () => {
+    const calls: Call[] = [];
+    const fetcher: Fetcher = async (url) => {
+      calls.push({ url, status: 200, body: "" });
+      return { status: 200, finalUrl: url, body: '{"jobs":[{"id":"other"', truncated: true };
+    };
+    const v = await checkLiveness("https://jobs.ashbyhq.com/acme/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", fetcher);
+    expect(v.state).toBe("unknown");
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("claimBatch skip-write cap", () => {
+  test(`writes at most ${MAX_SKIP_WRITES} skip reschedules per claim and still finds probeable rows`, async () => {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      for (let i = 0; i < MAX_SKIP_WRITES + 15; i++) {
+        await ctx.db.insert("matches", {
+          user: "u3",
+          short: `skip${i}`,
+          pushedAt: 0,
+          item: { short: `skip${i}`, url: `https://jobs.example.com/${i}`, applied: true },
+          livenessDueAt: i,
+        });
+      }
+      await ctx.db.insert("matches", {
+        user: "u3",
+        short: "live",
+        pushedAt: 0,
+        item: { short: "live", url: "https://jobs.example.com/live" },
+        livenessDueAt: 999,
+      });
+    });
+    const claimed = await t.mutation(internal.liveness_probe.claimBatch, { now: 5000, limit: 12 });
+    expect(claimed).toHaveLength(1);
+    const rows = await t.run((ctx) => ctx.db.query("matches").collect());
+    const rescheduled = rows.filter((r) => r.short.startsWith("skip") && r.livenessDueAt === 5000 + RECHECK_MS.skipped);
+    expect(rescheduled).toHaveLength(MAX_SKIP_WRITES);
+    // The un-written skippable rows are still due and still untouched.
+    expect(rows.filter((r) => r.short.startsWith("skip") && (r.livenessDueAt ?? 0) < 5000)).toHaveLength(15);
   });
 });
