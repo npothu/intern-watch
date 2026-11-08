@@ -560,3 +560,27 @@ def test_canonical_url_smartrecruiters_companies_stay_apart():
     a = canonical_url("https://jobs.smartrecruiters.com/AECOM2/744000155565444")
     b = canonical_url("https://jobs.smartrecruiters.com/Other/744000155565444")
     assert a == "ats:sr:aecom2:744000155565444" and a != b
+
+
+@pytest.mark.parametrize("url", [
+    "https://app.eightfold.ai/careers?domain=qualcomm.com&pid=446721230796",
+    "https://app.eightfold.ai/careers/job/446721230796?domain=Qualcomm.com",
+    "https://qualcomm.eightfold.ai/careers/job/446721230796",
+])
+def test_canonical_url_eightfold_shared_host_takes_tenant_from_domain(url):
+    assert canonical_url(url) == "ats:eightfold:qualcomm:446721230796"
+
+
+def test_canonical_url_eightfold_shared_host_without_domain_is_not_a_token():
+    got = canonical_url("https://app.eightfold.ai/careers?pid=446721230796")
+    assert got is not None and not got.startswith("ats:")
+
+
+def test_jibe_honours_amd_crawl_delay(no_sleep):
+    def handler(req):
+        return httpx.Response(200, json={"totalCount": 0, "jobs": []})
+
+    from src.adapters import jibe
+    with _client(handler) as c:
+        jibe.fetch_pages(c, {"slug": "careers.amd.com"})
+    assert no_sleep == [5.0]          # 2 queries: one wait between them

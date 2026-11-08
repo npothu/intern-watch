@@ -27,6 +27,8 @@ PAGE_SIZE = 100
 SEARCH_URL = ("https://{host}/api/jobs?keywords={query}&page={page}"
               "&limit={limit}&sortBy=relevance")
 POSTING_URL = "https://{host}/jobs/{req_id}"
+# robots.txt crawl-delay per host (careers.amd.com: "crawl-delay: 5").
+CRAWL_DELAY = {"careers.amd.com": 5.0}
 
 
 def _jobs(data: dict) -> list[dict]:
@@ -36,7 +38,7 @@ def _jobs(data: dict) -> list[dict]:
 
 def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     host = board["slug"]
-    pacer = Pacer()
+    pacer = Pacer(CRAWL_DELAY.get(host, 0.0))
     pages: list[str] = []
     for query in QUERIES:
         seen = 0

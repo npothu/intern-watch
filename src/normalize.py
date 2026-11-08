@@ -308,6 +308,12 @@ def canonical_url(url: str) -> str | None:
             return f"ats:oracle:{_ORACLE_CUSTOM_HOSTS[host]}:{m.group(1)}"
     ef_tenant = (host.split(".", 1)[0] if host.endswith(".eightfold.ai")
                  else _EIGHTFOLD_CUSTOM_HOSTS.get(host))
+    if host == "app.eightfold.ai":
+        # The shared host names the tenant by ?domain=qualcomm.com; its first
+        # label is the tenant of qualcomm.eightfold.ai. No domain: no token.
+        ef_tenant = next((v.lower().split(".", 1)[0] for k, v in
+                          parse_qsl(parts.query)
+                          if k.lower() == "domain" and "." in v), None)
     if ef_tenant:
         m = _EIGHTFOLD_PATH_RE.match(path)
         if m:

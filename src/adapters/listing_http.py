@@ -75,14 +75,17 @@ def spell_country(raw: str, *, min_parts: int = 3) -> str:
 
 
 class Pacer:
-    """Sleeps REQUEST_DELAY before every request except the first."""
+    """Sleeps `delay` (default REQUEST_DELAY; a host's robots.txt
+    crawl-delay when it names a longer one) before every request except the
+    first."""
 
-    def __init__(self) -> None:
+    def __init__(self, delay: float = REQUEST_DELAY) -> None:
         self._first = True
+        self._delay = max(delay, REQUEST_DELAY)
 
     def wait(self) -> None:
         if not self._first:
-            sleep(REQUEST_DELAY)
+            sleep(self._delay)
         self._first = False
 
 
