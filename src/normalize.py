@@ -180,9 +180,10 @@ _WD_OTHER_REQID_RE = re.compile(r"_((?:[a-z]{1,6}-?)?\d{4,})(?:-\d{1,2})?$", re.
 # after a word), not a reqid: two different postings would share the token.
 _WD_YEAR_ONLY_RE = re.compile(r"(?:[a-z]{1,6}-?)?(?:19|20)\d{2}", re.I)
 # jobs.smartrecruiters.com/<Company>/<postingId>[-slug]; the id is numeric
-# or (older postings) a UUID.
+# or (older postings) a UUID. The UUID branch is tried first: a UUID whose
+# first group is all digits must not be read as an 8-digit id plus a slug.
 _SR_PATH_RE = re.compile(
-    r"^/([^/]+)/(\d{6,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"^/([^/]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{6,})"
     r"(?:-[^/]*)?$", re.I)
 _WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
 # Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),

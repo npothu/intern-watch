@@ -44,9 +44,26 @@ SR_SLUG = ("https://jobs.smartrecruiters.com/AcmeCorp/"
       "https://jobs.smartrecruiters.com/AcmeCorp/"
       "3FA85F64-5717-4562-B3FC-2C963F66AFA6-widget-systems-intern"),
      "ats:sr:acmecorp:3fa85f64-5717-4562-b3fc-2c963f66afa6"),
+    (("https://jobs.smartrecruiters.com/AcmeCorp/"
+      "12345678-1111-2222-3333-444444444444",
+      "https://jobs.smartrecruiters.com/AcmeCorp/"
+      "12345678-1111-2222-3333-444444444444-widget-systems-intern"),
+     "ats:sr:acmecorp:12345678-1111-2222-3333-444444444444"),
 ])
 def test_variant_spellings_share_one_canonical(urls, token):
     assert {canonical_url(u) for u in urls} == {token}
+
+
+def test_digit_leading_smartrecruiters_uuids_stay_distinct():
+    # A UUID whose first group is all digits must not collapse to that
+    # 8-digit prefix (which would also equal a numeric id with a slug).
+    base = "https://jobs.smartrecruiters.com/AcmeCorp/"
+    tokens = {canonical_url(base + "12345678-1111-2222-3333-444444444444"),
+              canonical_url(base + "12345678-aaaa-bbbb-cccc-dddddddddddd"),
+              canonical_url(base + "12345678-widget-systems-intern")}
+    assert len(tokens) == 3
+    assert canonical_url(base + "12345678-widget-systems-intern") \
+        == "ats:sr:acmecorp:12345678"
 
 
 @pytest.mark.parametrize("suffix", ["2027", "Summer-2027", "Intern2027",
@@ -156,6 +173,59 @@ def test_migrate_prefers_delivered_key_over_earlier_undelivered_one():
                                 ["Summer 2027"], TODAY)
     assert kept == []
     assert s["jobs"]["url:third"]["dup_of"] == "url:delivered"
+
+
+def _two_spellings_v3(s, early_key, late_key):
+    s["_meta"]["url_index_version"] = 3
+    st.touch(s, early_key, ["simplify"], TODAY - dt.timedelta(days=10))
+    st.touch(s, late_key, ["zshah-2027"], TODAY)
+    s["url_index"] = {
+        "https://acme.wd1.myworkdayjobs.com/acme_careers/job/X/"
+        "Widget-Systems-Intern_2026798": early_key,
+        "https://acme.wd1.myworkdayjobs.com/Acme_Careers/job/X/"
+        "Widget-Systems-Intern_2026798": late_key,
+    }
+
+
+def _third_spelling(key):
+    j = _job("https://acme.wd1.myworkdayjobs.com/en-US/Acme_Careers/job/X/"
+             "Widget-Systems-Intern_2026798-1", "speedyapply")
+    j.dedup_key = key
+    return j
+
+
+def test_migrate_keeps_every_users_ownership_across_colliding_keys():
+    # Bob was notified on the earlier key, Alice on the later one. Whichever
+    # key survives, a later spelling must stay suppressed for BOTH users once
+    # their dashboard rows are gone.
+    s = st.empty_state()
+    _two_spellings_v3(s, "url:early", "url:late")
+    st.mark_notified(s, "url:early", "bob")
+    st.mark_notified(s, "url:late", "alice")
+    st.migrate_url_index(s)
+    survivor = s["url_index"]["ats:wd:acme:2026798"]
+    assert set(s["jobs"][survivor]["notified_for"]) == {"alice", "bob"}
+    for user in ("alice", "bob"):
+        kept = main._drop_url_dupes(s, user, [(_third_spelling(f"url:{user}-3"),
+                                               ["always"])],
+                                    ["Summer 2027"], TODAY)
+        assert kept == [], user
+
+
+def test_migrate_notified_key_beats_earlier_outbox_only_key():
+    # An earlier key that is only queued in an outbox must not displace a
+    # later key that was actually delivered; and the queued user still owns
+    # the survivor after their outbox row is gone.
+    s = st.empty_state()
+    _two_spellings_v3(s, "url:queued", "url:sent")
+    s["outbox"] = {"carol": [{"key": "url:queued"}]}
+    st.mark_notified(s, "url:sent", "alice")
+    st.migrate_url_index(s)
+    assert s["url_index"]["ats:wd:acme:2026798"] == "url:sent"
+    s["outbox"] = {}
+    kept = main._drop_url_dupes(s, "carol", [(_third_spelling("url:c3"), ["always"])],
+                                ["Summer 2027"], TODAY)
+    assert kept == []
 
 
 def test_migrate_prefers_listed_key_when_nothing_notified():

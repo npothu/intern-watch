@@ -162,12 +162,14 @@ def migrate_url_index(state: dict) -> int:
     token are left alone. Idempotent via _meta['url_index_version'].
 
     Order: group old entries by their new token, resolve each group's
-    collisions (delivered-first: an owned key -- notified, or on a matches /
-    outbox list -- then lowest first_seen, then a non-jr: key, then the
+    collisions (delivered-first: a notified key, then one on a matches /
+    outbox list, then lowest first_seen, then a non-jr: key, then the
     lexicographically smallest key; a pruned unlisted key sorts last), write
-    the new index, refresh each survivor's canon back-reference and clear
-    stale ones, backfill jr: apply_urls into the index (first-wins),
-    then set the version flag.
+    the new index (the survivor is marked notified for every user owning
+    any collider),
+    refresh each survivor's canon back-reference and clear stale ones,
+    backfill jr: apply_urls into the index (first-wins), then set the version
+    flag.
 
     Returns the number of changed entries: re-keyed + merged-away + backfilled.
     A second call returns 0 (the version flag is already current).
@@ -188,28 +190,48 @@ def migrate_url_index(state: dict) -> int:
         groups.setdefault(group_for(canon), []).append((canon, key))
 
     # Keys some user owns: notified, or still on a matches/outbox list.
-    listed = {item.get("key") for bucket in ("matches", "outbox")
-              for items in state.get(bucket, {}).values() for item in items}
+    listed_by: dict[str, list[str]] = {}
+    for bucket in ("matches", "outbox"):
+        for user, items in state.get(bucket, {}).items():
+            for item in items:
+                listers = listed_by.setdefault(item.get("key"), [])
+                if user not in listers:
+                    listers.append(user)
+    listed = set(listed_by)
 
     def job_rank(key: str) -> tuple:
-        # Delivered-first wins: an owned key (notified_for non-empty, or on a
-        # matches/outbox list) beats an unowned one, so the url-index gate
-        # keeps suppressing re-spellings of a delivered req after its match
-        # row is pruned. Then lowest first_seen, then a non-jr: key, then the
-        # lexicographically smallest key. A key with no job entry (pruned
-        # from jobs) sorts last unless it is still listed.
+        # Delivered-first wins: a notified key beats a key that is only on a
+        # matches/outbox list, which beats an unowned key, so the url-index
+        # gate keeps suppressing re-spellings of a delivered req after its
+        # match row is pruned. Then lowest first_seen, then a non-jr: key,
+        # then the lexicographically smallest key. A key with no job entry
+        # (pruned from jobs) sorts after live keys of the same ownership.
         entry = state["jobs"].get(key)
-        owned = bool(entry and entry.get("notified_for")) or key in listed
+        owner = 2 if entry and entry.get("notified_for") else int(key in listed)
         if entry is None:
-            return (int(not owned), 1, "", 0, key)
-        return (int(not owned), 0, entry.get("first_seen") or "",
+            return (-owner, 1, "", 0, key)
+        return (-owner, 0, entry.get("first_seen") or "",
                 int(key.startswith("jr:")), key)
 
     new_index: dict[str, str] = {}
     re_keyed = 0
     merged = 0
     for token, members in groups.items():
-        new_index[token] = min((k for _, k in members), key=job_rank)
+        survivor = min((k for _, k in members), key=job_rank)
+        new_index[token] = survivor
+        # The index keeps one key per req, and _drop_url_dupes suppresses
+        # only when THIS user owns it: every user who owns any colliding key
+        # (notified, or listed on matches/outbox) is recorded as notified on
+        # the survivor, so no user loses ownership when their row is pruned.
+        if survivor in state["jobs"]:
+            users: list[str] = list(state["jobs"][survivor].get("notified_for", []))
+            for _, k in members:
+                for u in (*state["jobs"].get(k, {}).get("notified_for", []),
+                          *listed_by.get(k, [])):
+                    if u not in users:
+                        users.append(u)
+            if users:
+                state["jobs"][survivor]["notified_for"] = users
         for canon, _ in members:
             if canon != token:
                 re_keyed += 1
