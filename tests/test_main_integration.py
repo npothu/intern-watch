@@ -354,10 +354,11 @@ def test_cross_source_url_dupe_reaches_outbox_once(monkeypatch, tmp_path):
           [_user_cfg()])
     _freeze_clock(monkeypatch)
 
-    # not a first run: pre-seed an unrelated entry.
+    # not a first run: pre-seed an unrelated entry. It names the jobs' source
+    # so that source counts as already known (not first sight, src/seeding.py).
     state_file = tmp_path / "seen.json"
     pre = st.empty_state()
-    st.touch(pre, "jr:preexisting", ["x"], TODAY)
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
     st.save_state(pre, state_file)
 
     rc = main.main(["--state-file", str(state_file)])
