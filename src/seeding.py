@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -84,8 +85,14 @@ def record_known(state: dict, report: FetchReport) -> None:
 
 
 def _path(key: str) -> str:
-    """A dedup key up to its last "/" (the board's URL path for url: keys)."""
-    return key.rsplit("/", 1)[0]
+    """A board's URL path: the dedup key up to its last "/". When the last
+    segment carries a query (Greenhouse embeds share one path and name the
+    tenant in `for=`), it is kept with its long digit runs (job ids)
+    blanked, so two tenants never share a path."""
+    head, _, last = key.rpartition("/")
+    if "?" not in last:
+        return head
+    return f"{head}/{re.sub(r'[0-9]{4,}', '#', last)}"
 
 
 def first_sight(state: dict, raw_jobs: list[Job],
@@ -112,10 +119,11 @@ def first_sight(state: dict, raw_jobs: list[Job],
 
     def fresh(job: Job) -> str | None:
         """The first-sight origin this raw row came from, or None if known."""
+        board_backfill = report.boards.get(job.board or "", False)
         if job.source not in known_sources:
-            if not report.sources.get(job.source, False):
-                return job.source
-            return None
+            if report.sources.get(job.source, False) or board_backfill:
+                return None
+            return job.source
         if (job.board and job.board not in known_boards
                 and not report.boards.get(job.board, False)):
             return job.board

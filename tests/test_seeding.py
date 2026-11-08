@@ -125,6 +125,35 @@ def test_bootstrap_evidence_ignores_jobs_ingested_by_another_source():
     assert plan == {raw[1].dedup_key: ["oracle:new"]}
 
 
+def test_greenhouse_embed_tenants_do_not_share_board_evidence():
+    # Embed URLs share one path; the tenant lives in the query. An old
+    # tenant's history must not make a new tenant's board look known.
+    def gh(tenant, n, board):
+        j = _job(n, "ats-boards", board)
+        j.url = (f"https://boards.greenhouse.io/embed/job_app?for={tenant}"
+                 f"&token={n}000000")
+        return j
+    state = st.empty_state()
+    old = gh("old", 1, "greenhouse:old")
+    dedupe([old])
+    st.touch(state, old.dedup_key, ["ats-boards"], TODAY)
+    raw = [gh("old", 2, "greenhouse:old"), gh("new", 3, "greenhouse:new")]
+    plan = _plan(state, raw, _report({"ats-boards": False},
+                                     {"greenhouse:old": False,
+                                      "greenhouse:new": False}))
+    assert plan == {raw[1].dedup_key: ["greenhouse:new"]}
+
+
+def test_board_backfill_honored_when_its_source_is_new_too():
+    state = _state(known_sources={"old-src"})
+    raw = [_job(1, "ats-boards", "oracle:wanted"),
+           _job(2, "ats-boards", "oracle:other")]
+    plan = _plan(state, raw, _report({"ats-boards": False},
+                                     {"oracle:wanted": True,
+                                      "oracle:other": False}))
+    assert plan == {raw[1].dedup_key: ["ats-boards"]}
+
+
 def test_record_known_unions_and_sorts():
     state = _state(known_sources={"b"}, known_boards={"x:1"})
     seeding.record_known(state, _report({"a": False},
