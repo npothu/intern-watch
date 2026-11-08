@@ -33,6 +33,12 @@ if [ "${IW_PREVIEW_PHASE:-}" = "build" ]; then
 
   echo "Preview backend $name starts empty. Production snapshots are never imported."
 
+  # Fill it with synthetic data (fictional companies, .invalid URLs) so the
+  # preview has something to click through. Best effort: a seeding failure
+  # must not fail the build.
+  cp "$REPO/scripts/seed-preview.mjs" "$REPO/scripts/preview-seed-data.mjs" "$CONVEX_SCRATCH/"
+  (cd "$CONVEX_SCRATCH" && node seed-preview.mjs) || echo "warning: preview seed failed; backend stays empty"
+
   # Inline the preview's URLs into the Next.js bundles (web/next.config.ts):
   # the server code reads process.env.CONVEX_URL at runtime, and the runtime
   # env is the shared Preview environment, not this deployment.

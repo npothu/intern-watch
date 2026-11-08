@@ -74,8 +74,9 @@ SHORTs, credentials, resume files and document ids do not change.
    - Then map your email to `nathan`, and change each `"user":"example"` key entry to
      `"nathan"`. Redeploy.
    - Verify: every entry that resolves to `nathan` is yours; none still says `example`.
-   - Preview/Development: the preview seed (`convex-seed`) still holds `example`
-     rows, so leave preview env on `example` until the seed is republished.
+   - Preview: set the Preview `TRACKER_USER_MAP` to the same user. Preview backends
+     never hold production data; `scripts/seed-preview.mjs` seeds synthetic rows
+     for `PREVIEW_SEED_USER` (default `nathan`).
 6. **Data repo** (one commit, from an up-to-date main):
    - `python scripts/rename_state_user.py --data-dir <data-repo> --from nathan --delete --write`
    - `python scripts/rename_state_user.py --data-dir <data-repo> --from example --to nathan --write`
