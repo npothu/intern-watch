@@ -191,6 +191,18 @@ _SR_PATH_RE = re.compile(r"^/([^/]+)/" + _SR_ID + r"(?:-[^/]*)?$", re.I)
 _SR_API_RE = re.compile(
     r"^/v1/companies/([^/]+)/postings/" + _SR_ID + r"$", re.I)
 _WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
+# Oracle Recruiting Cloud: requisition ids are per pod (the first host label
+# of <pod>.fa.<dc>.oraclecloud.com) and shared by every career site of that
+# pod, so the site segment is not part of the identity. Some employers front
+# the same pod with their own domain; those are listed explicitly (never
+# guessed) so the two spellings join.
+_ORACLE_PATH_RE = re.compile(
+    r"^/hcmUI/CandidateExperience/[a-z]{2}(?:[-_][a-z]{2})?(?:/sites/[^/]+)?"
+    r"/(?:job|requisitions/preview)/([A-Za-z0-9]+)$", re.I)
+_ORACLE_CUSTOM_PATH_RE = re.compile(
+    r"^/[a-z]{2}(?:[-_][a-z]{2})?/sites/[^/]+/(?:job|requisitions/preview)"
+    r"/([A-Za-z0-9]+)$", re.I)
+_ORACLE_CUSTOM_HOSTS = {"careers.americanexpress.com": "egug"}
 # Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
 # so this pattern carries its own optional two-letter locale segment.
 _AMAZON_RE = re.compile(r"^(?:/[a-z]{2})?/jobs/(\d+)(?:/.*)?$", re.I)
@@ -266,6 +278,16 @@ def canonical_url(url: str) -> str | None:
         m = _WORKABLE_PATH_RE.match(path)
         if m:
             return f"ats:workable:{m.group(1).lower()}:{m.group(2).upper()}"
+    if host.endswith(".oraclecloud.com"):
+        m = _ORACLE_PATH_RE.match(parts.path.rstrip("/"))
+        if m:
+            pod = host.split(".", 1)[0]
+            return f"ats:oracle:{pod}:{m.group(1).upper()}"
+    if host in _ORACLE_CUSTOM_HOSTS:
+        m = _ORACLE_CUSTOM_PATH_RE.match(parts.path.rstrip("/"))
+        if m:
+            return (f"ats:oracle:{_ORACLE_CUSTOM_HOSTS[host]}:"
+                    f"{m.group(1).upper()}")
     if host == "amazon.jobs":
         m = _AMAZON_RE.match(path)
         if m:

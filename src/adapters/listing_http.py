@@ -17,6 +17,7 @@ one board costs several requests. These helpers keep that cheap and polite:
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -28,6 +29,10 @@ TIMEOUT = 30.0
 MAX_PAGES = 5         # default per-query page cap
 
 sleep = time.sleep
+
+# Title-level internship test shared by every board parser (and the listers'
+# relevancy-paging stop rule). Word-bounded: "Internal Audit" is not a hit.
+INTERN_RE = re.compile(r"\bintern(ship)?s?\b|\bco-?op\b", re.I)
 
 
 class Pacer:

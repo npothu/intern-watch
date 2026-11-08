@@ -20,6 +20,9 @@ boards:
 - company: Amazon
   ats: lever
   slug: zoox
+- company: American Express
+  ats: oracle
+  slug: egug.fa.us2.oraclecloud.com/CX_1
 - company: Anduril
   ats: greenhouse
   slug: andurilindustries
@@ -44,6 +47,9 @@ boards:
 - company: Block
   ats: greenhouse
   slug: block
+- company: BNY
+  ats: oracle
+  slug: eofe.fa.us2.oraclecloud.com/CX_1001
 - company: Bosch
   ats: smartrecruiters
   slug: BoschGroup
@@ -87,6 +93,9 @@ boards:
 - company: Datadog
   ats: greenhouse
   slug: datadog
+- company: Dell Technologies
+  ats: oracle
+  slug: iawmqy.fa.ocs.oraclecloud.com/careers
 - company: Discord
   ats: greenhouse
   slug: discord
@@ -123,6 +132,9 @@ boards:
 - company: FullStory
   ats: ashby
   slug: fullstory
+- company: GM Financial
+  ats: oracle
+  slug: fa-exvu-saasfaprod1.fa.ocs.oraclecloud.com/CX_1
 - company: Google
   ats: greenhouse
   slug: deepmind
@@ -132,6 +144,12 @@ boards:
 - company: Gusto
   ats: greenhouse
   slug: gusto
+- company: Honeywell
+  ats: oracle
+  slug: ibqbjb.fa.ocs.oraclecloud.com/Honeywell
+- company: Honeywell Aerospace
+  ats: oracle
+  slug: icfcjb.fa.ocs.oraclecloud.com/Aerospace
 - company: IMC
   ats: greenhouse
   slug: imc
@@ -141,6 +159,9 @@ boards:
 - company: Jane Street
   ats: greenhouse
   slug: janestreet
+- company: JPMorgan Chase
+  ats: oracle
+  slug: jpmc.fa.oraclecloud.com/CX_1001
 - company: Jump Trading
   ats: greenhouse
   slug: jumptrading
@@ -158,6 +179,9 @@ boards:
 - company: Lyft
   ats: greenhouse
   slug: lyft
+- company: Mayo Clinic
+  ats: oracle
+  slug: fa-euwp-saasfaprod1.fa.ocs.oraclecloud.com/CX_1
 - company: Mercury
   ats: greenhouse
   slug: mercury
@@ -170,9 +194,15 @@ boards:
 - company: MongoDB
   ats: greenhouse
   slug: mongodb
+- company: Navy Federal Credit Union
+  ats: oracle
+  slug: fa-etbx-saasfaprod1.fa.ocs.oraclecloud.com/nfcu
 - company: Neon
   ats: ashby
   slug: neon
+- company: Nokia
+  ats: oracle
+  slug: fa-evmr-saasfaprod1.fa.ocs.oraclecloud.com/CX_1
 - company: Notion
   ats: ashby
   slug: notion
@@ -185,12 +215,18 @@ boards:
 - company: OneTrust
   ats: greenhouse
   slug: onetrust
+- company: onsemi
+  ats: oracle
+  slug: hctz.fa.us2.oraclecloud.com/CX_1001
 - company: OpenAI
   ats: ashby
   slug: openai
 - company: OpenSea
   ats: ashby
   slug: opensea
+- company: Oracle
+  ats: oracle
+  slug: eeho.fa.us2.oraclecloud.com/CX_45001
 - company: Palantir
   ats: lever
   slug: palantir
@@ -273,12 +309,18 @@ boards:
 - company: Temporal
   ats: ashby
   slug: temporal
+- company: Texas Instruments
+  ats: oracle
+  slug: edbz.fa.us2.oraclecloud.com/CX
 - company: Together AI
   ats: greenhouse
   slug: togetherai
 - company: Tower Research
   ats: greenhouse
   slug: towerresearchcapital
+- company: Tradeweb
+  ats: oracle
+  slug: ecnf.fa.us2.oraclecloud.com/CX
 - company: Twilio
   ats: greenhouse
   slug: twilio
@@ -295,6 +337,9 @@ boards:
 - company: Verkada
   ats: greenhouse
   slug: verkada
+- company: Vertiv
+  ats: oracle
+  slug: egup.fa.us2.oraclecloud.com/CX
 - company: Virtu
   ats: greenhouse
   slug: virtu

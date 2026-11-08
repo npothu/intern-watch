@@ -11,7 +11,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import re
 from collections.abc import Callable
 
 import httpx
@@ -20,12 +19,14 @@ import yaml
 from ..models import Job
 from ..normalize import infer_terms, split_locations, strip_html, strip_tracking
 from ..paths import ROOT as ROOT
+from . import listing_http
+from . import oracle_cx as oracle
 from . import smartrecruiters_api as sr
 from .base import Adapter, fetch_text
 
 log = logging.getLogger(__name__)
 
-INTERN_RE = re.compile(r"\bintern(ship)?s?\b|\bco-?op\b", re.I)
+INTERN_RE = listing_http.INTERN_RE
 
 JD_MAX_CHARS = 20000  # full JD; late qualification sections score double
 
@@ -39,6 +40,7 @@ _API = {
 # returns the raw pages; every page goes through parse() like a one-shot board.
 _LISTERS: dict[str, Callable[[httpx.Client, dict], list[str]]] = {
     "smartrecruiters": sr.fetch_pages,
+    "oracle": oracle.fetch_pages,
 }
 
 
@@ -149,6 +151,7 @@ class AtsBoardsAdapter(Adapter):
                  sr.DETAIL_URL.format(slug=slug, posting_id=j["id"])
                  if j.get("id") else None)
                 for j in data.get("content", [])],
+            "oracle": lambda: oracle.rows(data, slug),
         }
         rows = builders[ats]()
 
