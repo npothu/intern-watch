@@ -72,6 +72,9 @@ const PIN = "@max-[960px]:sticky @max-[960px]:z-[1]";
 const PIN_FILL = {
   bg: "@max-[960px]:bg-bg",
   surface: "@max-[960px]:bg-surface",
+  /* The cursor row's wash (CursorRail), made opaque over the surface, so
+     the tint reads across the pinned cells too. */
+  wash: "@max-[960px]:bg-[color-mix(in_srgb,var(--color-accent)_4%,var(--color-surface))]",
 } as const;
 type Fill = keyof typeof PIN_FILL;
 
@@ -128,6 +131,9 @@ export function DenseTable<R, K extends string>({
   const colCount = tracks.length;
   const pinLeft = parseFloat(lead.track) || 0;
   const orderKey = rows.map(rowKey).join("\n");
+  // Header + one row per entry (or the empty row) + the open panel's row.
+  const panelOpen = openKey !== null && rows.some((r) => rowKey(r) === openKey);
+  const rowCount = 1 + Math.max(rows.length, 1) + (panelOpen ? 1 : 0);
 
   /* The lead cell pins at the frame's left edge; the first column pins just
      after it, reaching back over the gap so nothing shows through. */
@@ -136,7 +142,7 @@ export function DenseTable<R, K extends string>({
 
   return (
     <div className="@container overflow-x-auto rounded-lg border border-line-2 bg-surface">
-      <div role="table" aria-label={label} aria-rowcount={rows.length + 1} style={{ minWidth: MIN_WIDTH }}>
+      <div role="table" aria-label={label} aria-rowcount={rowCount} style={{ minWidth: MIN_WIDTH }}>
         <div role="rowgroup">
           <div
             role="row"
@@ -201,7 +207,7 @@ export function DenseTable<R, K extends string>({
               const key = rowKey(row);
               const open = key === openKey;
               const panelId = `${idBase}-panel-${key}`;
-              const fill: Fill = open ? "bg" : "surface";
+              const fill: Fill = open ? "bg" : key === cursorKey ? "wash" : "surface";
               const node = (
                 <div key={key} data-row={key} style={rowStyle?.(i)}>
                   <div
@@ -258,9 +264,11 @@ export function DenseTable<R, K extends string>({
                       </button>
                     </div>
                   </div>
-                  <div role="row">
-                    <div role="cell" aria-colspan={colCount}>
-                      <PresenceCollapse open={open}>
+                  {/* The panel's row exists only while the panel is mounted,
+                      so a closed row exposes no empty row after it. */}
+                  <PresenceCollapse open={open}>
+                    <div role="row">
+                      <div role="cell" aria-colspan={colCount}>
                         <div
                           id={panelId}
                           role="region"
@@ -269,9 +277,9 @@ export function DenseTable<R, K extends string>({
                         >
                           {renderPanel(row)}
                         </div>
-                      </PresenceCollapse>
+                      </div>
                     </div>
-                  </div>
+                  </PresenceCollapse>
                 </div>
               );
               return wrapRow ? wrapRow(row, node) : node;

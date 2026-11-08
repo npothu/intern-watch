@@ -22,6 +22,7 @@ import {
   sortRows,
   splitUnwatched,
   tagIsInformative,
+  tagLabel,
   tagText,
   termFromSlug,
   termShort,
@@ -247,6 +248,8 @@ describe("row facts", () => {
     expect(tagText(" [PRIORITY] ")).toBe("priority");
     expect(tagText("[atl]")).toBe("atl");
     expect(tagText("")).toBe("");
+    expect(tagLabel("[ATL]")).toBe("ATL");
+    expect(tagLabel("[TOP*]")).toBe("TOP");
     expect(tagIsInformative("[PRIORITY]")).toBe(false);
     expect(tagIsInformative("")).toBe(false);
     expect(tagIsInformative("[TOP*]")).toBe(true);
@@ -259,9 +262,17 @@ describe("row facts", () => {
       "Priority employer on your list.",
       "Term not stated in the posting.",
       "Tagged as a top company.",
-      "No job description found; the resume uses only title, company and location.",
+      "No job description found.",
     ]);
     expect(worthKnowing(row("c", { tag: "[atl]" }))).toEqual([]);
+  });
+  test("worth knowing: a stub-built resume is a separate fact", () => {
+    expect(worthKnowing(row("d", { hasJobDescription: false }), { jdSource: "stub" })).toEqual([
+      "No job description found.",
+      "This resume was built from the title, company and location only.",
+    ]);
+    expect(worthKnowing(row("e"), { jdSource: "fetched" })).toEqual([]);
+    expect(worthKnowing(row("f"), null)).toEqual([]);
   });
   test("report summary", () => {
     const report = {
@@ -273,6 +284,21 @@ describe("row facts", () => {
       ],
     } as unknown as ResumeReport;
     expect(reportSummary(report)).toBe("1 of 2 projects rewritten · 1 note · JD fetched");
+  });
+  test("report summary: zero projects and zero notes", () => {
+    const report = { jdSource: "stub", notes: [], projects: [] } as unknown as ResumeReport;
+    expect(reportSummary(report)).toBe("0 of 0 projects rewritten · 0 notes · no JD, title only");
+  });
+  test("report summary: a pasted JD", () => {
+    const report = {
+      jdSource: "manual",
+      notes: ["a", "b"],
+      projects: [
+        { name: "a", before: [], after: [], llmRewritten: true, overridden: false },
+        { name: "b", before: [], after: [], llmRewritten: true, overridden: false },
+      ],
+    } as unknown as ResumeReport;
+    expect(reportSummary(report)).toBe("2 of 2 projects rewritten · 2 notes · JD pasted");
   });
   test("report summary: singulars and an unknown JD source pass through", () => {
     const report = {

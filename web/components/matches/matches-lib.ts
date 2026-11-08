@@ -325,9 +325,14 @@ export function rowStatus(row: Pick<TriageRow, "applied" | "saved">): RowStatus 
   return row.applied ? "applied" : row.saved ? "saved" : "new";
 }
 
-/** The tag's text without brackets or the LLM star, lowercased: "[TOP*]" -> "top". */
+/** The tag without brackets or the LLM star, case kept for display: "[TOP*]" -> "TOP". */
+export function tagLabel(tag: string): string {
+  return tag.replace(/[[\]*]/g, "").trim();
+}
+
+/** tagLabel lowercased, for comparing: "[TOP*]" -> "top". */
 export function tagText(tag: string): string {
-  return tag.replace(/[[\]*]/g, "").trim().toLowerCase();
+  return tagLabel(tag).toLowerCase();
 }
 
 /** The tag is worth a line of its own: not empty and not just "priority". */
@@ -338,15 +343,20 @@ export function tagIsInformative(tag: string): boolean {
 
 /**
  * The "Worth knowing" lines: plain facts the row carries that its cells do
- * not already say. Only what TriageRow states; no reasons are inferred.
+ * not already say. Only what the row (and, once built, its resume report)
+ * states; no reasons are inferred and nothing is predicted.
  */
-export function worthKnowing(row: TriageRow): string[] {
+export function worthKnowing(
+  row: TriageRow,
+  report?: Pick<ResumeReport, "jdSource"> | null
+): string[] {
   const out: string[] = [];
   if (row.priority) out.push("Priority employer on your list.");
   if (!row.term) out.push("Term not stated in the posting.");
   if (tagText(row.tag) === "top") out.push("Tagged as a top company.");
-  if (!row.hasJobDescription) {
-    out.push("No job description found; the resume uses only title, company and location.");
+  if (!row.hasJobDescription) out.push("No job description found.");
+  if (report?.jdSource === "stub") {
+    out.push("This resume was built from the title, company and location only.");
   }
   return out;
 }

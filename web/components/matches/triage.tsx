@@ -659,11 +659,13 @@ export function Triage({
     [shown, animateWindowScroll]
   );
 
-  /* What to keep in view, by what just changed:
-       - a row opened: that row and its panel, once the panel has expanded;
-       - the order changed (sort, filter, term, search, hide, restore): the
-         open row if there is one, else the cursor row;
-       - the cursor moved: the cursor row. */
+  /* What to keep in view, by what just changed, in this priority:
+       - a row opened at the cursor: that row and its panel, once the panel
+         has expanded;
+       - the cursor moved (j/k, a palette jump - even one that also cleared
+         filters and so changed the order): the cursor row;
+       - only the order changed (sort, filter, term, search, hide, restore):
+         the open row if there is one, else the cursor row. */
   const scrollBlock = useRef<ScrollLogicalPosition>("nearest");
   // Starts empty so a deep link (?job=, ?open=) scrolls its row in on mount.
   const seen = useRef<{ cursor: string | null; orderKey: string; open: string | null }>({
@@ -676,21 +678,24 @@ export function Triage({
     seen.current = { cursor, orderKey, open: activeOpen };
     const block = scrollBlock.current;
     scrollBlock.current = "nearest";
-    if (activeOpen && activeOpen !== prev.open) {
+    if (activeOpen && activeOpen !== prev.open && activeOpen === cursor) {
       const t = window.setTimeout(() => scrollToRow(activeOpen, "nearest"), COLLAPSE_MS + 20);
       return () => window.clearTimeout(t);
+    }
+    if (cursor && cursor !== prev.cursor) {
+      scrollToRow(cursor, block);
+      return;
     }
     if (orderKey !== prev.orderKey) {
       const target = activeOpen ?? cursor;
       if (target) scrollToRow(target, block);
-      return;
     }
-    if (cursor && cursor !== prev.cursor) scrollToRow(cursor, block);
   }, [cursor, orderKey, activeOpen, scrollToRow]);
 
   /* Focus follows a row that closes or leaves: when focus was inside it (a
      keyboard press on the panel's Hide, Esc from a panel button), it moves
-     to that row's expand button - or the next row's, when the row is gone -
+     to that row's expand control (`data-expand`: the table's chevron, a
+     card's ⋯ button) - or the next row's, when the row is gone -
      instead of falling to <body> with the unmounting panel. A pointer click
      has already given focus up (blurOnPointerActivate), so it stays put. */
   function focusWasIn(short: string): boolean {
@@ -1867,6 +1872,7 @@ function MobileCard({
           </div>
           <button
             type="button"
+            data-expand={row.short}
             aria-label={expanded ? "Collapse actions" : "More actions"}
             onClick={(e) => {
               e.stopPropagation();
@@ -2076,11 +2082,14 @@ function Dock({
         ring="var(--color-ink-2)"
         pressed={pressed}
         title="Switch view"
-        className={cn(db, "text-ink-2")}
+        className={cn(db, "text-ink-2 max-[359px]:hidden")}
       >
         <span className={kbd}>t</span>
       </DockButton>
-      <Divider />
+      {/* Below 360px the view-switch key gives way (the switch also heads
+          the page, and `t` still works) so the other eight fit a 320px
+          screen. */}
+      <Divider className="max-[359px]:hidden" />
       <DockButton
         act="up"
         ring="var(--color-amber)"

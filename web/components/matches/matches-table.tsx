@@ -18,7 +18,7 @@ import {
   reportSummary,
   rowStatus,
   tagIsInformative,
-  tagText,
+  tagLabel,
   termLabel,
   termOf,
   termShort,
@@ -432,8 +432,8 @@ function MatchPanel({
   meta: ResumeMeta | null;
   handlers: MatchHandlers;
 }) {
-  const notes = worthKnowing(row);
   const report = state === "built" ? meta?.report ?? null : null;
+  const notes = worthKnowing(row, report);
   const resumeUrl = state === "built" ? row.resumeUrl : null;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_232px] gap-6 text-[13px] text-ink">
@@ -451,7 +451,7 @@ function MatchPanel({
         {tagIsInformative(row.tag) && (
           <>
             <dt className={DT}>Tag</dt>
-            <dd className="m-0">{tagText(row.tag)}</dd>
+            <dd className="m-0">{tagLabel(row.tag)}</dd>
           </>
         )}
         <dt className={DT}>Key</dt>
