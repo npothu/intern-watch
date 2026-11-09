@@ -613,6 +613,12 @@ def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
     out: list[Job] = []
     refreshed = 0
     for job in stale:
+        # Restore the JD term it was judged on (infer_terms_from_jds only
+        # sees new/pending jobs), so the term step reads what it read then.
+        jd_terms = state["jobs"].get(job.dedup_key, {}).get("jd_terms")
+        if not job.terms and jd_terms:
+            job.terms, job.term_confidence = list(jd_terms), "inferred"
+            job.terms_from_jd = True
         # Judge with the cached LLM term, as _finalize would, so a still-
         # unwanted inferred term is re-fingerprinted here for free.
         term = None if job.terms else st.llm_cache_get(

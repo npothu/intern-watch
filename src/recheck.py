@@ -166,11 +166,15 @@ def llm_configured(uf: UserFilter) -> bool:
 
 
 def _terms(job: Job, state: dict) -> list[str]:
-    """The job's terms as the pipeline judged them. A source term, else the
-    cached LLM term: main._finalize writes that onto the run's Job, but the
-    next run's freshly fetched Job has no term, and both must hash alike."""
+    """The job's terms as the pipeline judged them: a source term, else the
+    JD-inferred term kept at record time, else the cached LLM term. The JD
+    and LLM terms are written onto the run's Job only, and the next run's
+    freshly fetched Job has neither, yet both must hash alike."""
     if job.terms:
         return list(job.terms)
+    jd_terms = state["jobs"].get(job.dedup_key, {}).get("jd_terms")
+    if jd_terms:
+        return list(jd_terms)
     term = st.llm_cache_get(state, job.dedup_key).get("term")
     return [term] if term else []
 
@@ -230,6 +234,10 @@ def record(state: dict, uf: UserFilter, job: Job, stage: str) -> None:
     fp = fingerprint(uf, stage, job, state)
     entry = state["jobs"].setdefault(job.dedup_key, {})
     entry.setdefault("rj", {})[uf.name] = f"{stage}:{fp}"
+    if job.terms_from_jd and job.terms:
+        # main.infer_terms_from_jds only runs on new/pending jobs, so a later
+        # run's fresh Job has no term: keep the JD term it was judged on.
+        entry["jd_terms"] = list(job.terms)
 
 
 def mark_stale(state: dict, key: str, user: str) -> None:

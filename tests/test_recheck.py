@@ -512,3 +512,24 @@ def test_turning_the_llm_on_rechecks_rules_rejects():
                     ROOT, today=TODAY)
     assert (recheck.fingerprint(off, "rules", job, state)
             != recheck.fingerprint(on, "rules", job, state))
+
+
+def test_jd_inferred_term_fingerprint_is_stable_across_runs():
+    # infer_terms_from_jds only runs on new/pending jobs: the next run's
+    # fresh Job has no term, and must still match its record.
+    uf = UserFilter(_cfg(), ROOT, today=TODAY)
+    job = _job(1)
+    job.terms, job.term_confidence = ["Summer 2031"], "inferred"
+    job.terms_from_jd = True
+    state = _state(job)
+    v = uf.evaluate(job, today=TODAY)
+    assert recheck.stage_of(v) == "term"   # an unwanted JD term is accept-only
+    recheck.record(state, uf, job, recheck.stage_of(v))
+    fresh = _job(1)
+    fresh.terms, fresh.term_confidence = [], "unknown"
+    assert recheck.stale(state, uf, {fresh.dedup_key: fresh}, set()) == []
+    # once that term is wanted, the record goes stale and the recheck judges
+    # the job on the kept JD term
+    wider = UserFilter(_cfg(terms_wanted=["Summer 2027", "Summer 2031"]),
+                       ROOT, today=TODAY)
+    assert recheck.stale(state, wider, {fresh.dedup_key: fresh}, set()) == [fresh]
