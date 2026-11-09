@@ -69,6 +69,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from . import state as st
@@ -93,9 +94,9 @@ RECHECK_LIMIT_MAX = 2000   # config_check's sanity bound for both knobs
 def limits(cfg: dict) -> tuple[int | None, int]:
     """(daily delivery limit or None for unlimited, re-runs per run) for a
     user, from the yaml/overlaid config's optional `recheck:` block:
-    `daily_limit` (int; null or 0 = no daily limit) and `per_run` (int;
-    0 pauses pipeline rechecks, the free re-fingerprint pass and bootstrap
-    marking still run).
+    `daily_limit` (int; null = no daily limit, 0 = no recheck deliveries)
+    and `per_run` (int; 0 pauses pipeline rechecks). With either at 0 the
+    free re-fingerprint pass and bootstrap marking still run.
     Defaults are the module constants. A malformed value falls back to the
     default (config_check reports it) rather than taking the watcher down."""
     block = cfg.get("recheck")
@@ -112,11 +113,10 @@ def limits(cfg: dict) -> tuple[int | None, int]:
     daily: int | None = RECHECK_DAILY_DELIVERIES
     if "daily_limit" in block:
         raw = block["daily_limit"]
-        v = _int(raw)
-        if raw is None or v == 0:       # null or a real 0: no daily limit
+        if raw is None:                  # null: no daily limit
             daily = None
-        elif v is not None:
-            daily = v
+        elif (v := _int(raw)) is not None:
+            daily = v                    # 0: no recheck deliveries (paused)
     per_run = _int(block.get("per_run"))
     return daily, RECHECK_CAP if per_run is None else per_run
 LEGACY = "legacy"  # bootstrap stage marker; its empty fingerprint never matches
@@ -165,31 +165,43 @@ def llm_configured(uf: UserFilter) -> bool:
     return bool(llm.get("enabled"))
 
 
-def _terms(job: Job, state: dict) -> list[str]:
-    """The job's terms as the pipeline judged them: a source term, else the
-    JD-inferred term kept at record time, else the cached LLM term. The JD
-    and LLM terms are written onto the run's Job only, and the next run's
-    freshly fetched Job has neither, yet both must hash alike."""
+def _terms(job: Job, state: dict) -> tuple[list[str], bool]:
+    """(terms the pipeline judged the job on, whether they came from the JD
+    body): a source term, else the JD-inferred term kept at record time,
+    else the cached LLM term. The JD and LLM terms are written onto the
+    run's Job only, and the next run's freshly fetched Job has neither, yet
+    both must hash alike."""
     if job.terms:
-        return list(job.terms)
-    jd_terms = state["jobs"].get(job.dedup_key, {}).get("jd_terms")
-    if jd_terms:
-        return list(jd_terms)
+        return list(job.terms), job.terms_from_jd
+    kept = inferred_terms(state, job.dedup_key)
+    if kept:
+        return kept
     term = st.llm_cache_get(state, job.dedup_key).get("term")
-    return [term] if term else []
+    return ([term] if term else []), False
+
+
+def _judged_terms(uf: UserFilter, job: Job, state: dict) -> list[str] | None:
+    """The terms evaluate() acted on, or None when it treated the term as
+    unknown: no term at all, or a JD term this user does not want (a JD
+    term is accept-only, filters.UserFilter.evaluate)."""
+    terms, from_jd = _terms(job, state)
+    if not terms or (from_jd and not set(terms) & uf.terms_wanted):
+        return None
+    return terms
 
 
 def _term_fp(uf: UserFilter, job: Job, state: dict) -> str:
-    terms = _terms(job, state)
-    if terms:
+    terms = _judged_terms(uf, job, state)
+    if terms is not None:
         return _h("term", sorted(set(terms) & uf.terms_wanted))
     return _h("term", "unknown", uf.unknown_term_policy, llm_configured(uf),
               "term_inference" in uf.llm_tasks)
 
 
 def _rules_fp(uf: UserFilter, job: Job, state: dict) -> str:
-    terms = _terms(job, state)
-    matched = set(terms) & uf.terms_wanted if terms else set(uf.terms_wanted)
+    terms = _judged_terms(uf, job, state)
+    matched = (set(terms) & uf.terms_wanted if terms is not None
+               else set(uf.terms_wanted))
     conds = []
     for rule in uf.rules:
         when = set(rule.get("when", {}).get("term", []))
@@ -234,10 +246,22 @@ def record(state: dict, uf: UserFilter, job: Job, stage: str) -> None:
     fp = fingerprint(uf, stage, job, state)
     entry = state["jobs"].setdefault(job.dedup_key, {})
     entry.setdefault("rj", {})[uf.name] = f"{stage}:{fp}"
-    if job.terms_from_jd and job.terms:
-        # main.infer_terms_from_jds only runs on new/pending jobs, so a later
-        # run's fresh Job has no term: keep the JD term it was judged on.
-        entry["jd_terms"] = list(job.terms)
+    if job.terms and (job.terms_inferred or job.terms_from_jd):
+        # main.infer_terms_from_jds read it from the JD body or the URL; a
+        # later run's fresh Job may not (its body is fetched lazily): keep
+        # the term it was judged on.
+        entry["inferred_terms"] = {"terms": list(job.terms),
+                                   "jd": bool(job.terms_from_jd)}
+    elif job.terms:
+        entry.pop("inferred_terms", None)   # a source/LLM term now
+
+
+def inferred_terms(state: dict, key: str) -> tuple[list[str], bool] | None:
+    """(terms, from the JD body) kept by `record`, or None."""
+    kept = state["jobs"].get(key, {}).get("inferred_terms")
+    if not isinstance(kept, dict) or not kept.get("terms"):
+        return None
+    return list(kept["terms"]), bool(kept.get("jd"))
 
 
 def mark_stale(state: dict, key: str, user: str) -> None:
@@ -273,14 +297,45 @@ def _eligible(state: dict, key: str, user: str, owned: set[str]) -> bool:
             and user not in entry.get("pending", []))
 
 
-def owned_keys(state: dict, user: str) -> set[str]:
-    """Keys this user's outbox or dashboard already holds."""
-    return {i.get("key", "") for bucket in ("outbox", "matches")
-            for i in state.get(bucket, {}).get(user, [])}
+def owned_keys(state: dict, user: str,
+               ledger_keys: Iterable[str] = ()) -> set[str]:
+    """Keys this user already has, which a recheck must never touch: in the
+    outbox or on the dashboard, under a content signature (delivered, or
+    suppressed as a content duplicate of a delivery), or in the
+    applications ledger (`ledger_keys`; it outlives the 120-day matches
+    prune, which matters for dashboard-only users with no notified_for)."""
+    owned = {i.get("key", "") for bucket in ("outbox", "matches")
+             for i in state.get(bucket, {}).get(user, [])}
+    owned |= {k for sig in state.get("content", {}).get(user, {}).values()
+              for k in sig.get("keys", [])}
+    owned |= set(ledger_keys)
+    return owned
+
+
+def _has_history(state: dict, user: str) -> bool:
+    if state.get("last_email", {}).get(user) or state.get("matches", {}).get(user):
+        return True
+    return any(user in e.get("notified_for", []) for e in state["jobs"].values())
+
+
+def _quiet_days(state: dict) -> list[str]:
+    """first_seen days on which nothing was delivered to anyone and nothing
+    reached the LLM: a first-run seed or a `--seed` run (no evaluation),
+    not an evaluated day. On the reference instance this is only the first
+    run's seed day."""
+    active: set[str] = set()
+    days: set[str] = set()
+    for e in state["jobs"].values():
+        if not (day := e.get("first_seen")):
+            continue
+        days.add(day)
+        if "llm" in e or e.get("notified_for"):
+            active.add(day)
+    return sorted(days - active)
 
 
 def bootstrap(state: dict, user: str, listed: dict[str, Job],
-              skip: set[str], today: dt.date) -> int:
+              skip: set[str], today: dt.date, owned: set[str]) -> int:
     """Mark still-listed legacy rejections (judged before this code) for
     recheck. Runs every run, so a legacy rejection that was off its list on
     the first run is still picked up when it comes back. Returns how many
@@ -288,19 +343,21 @@ def bootstrap(state: dict, user: str, listed: dict[str, Job],
     boot = state["_meta"].setdefault("recheck_bootstrap", {})
     rec = boot.get(user)
     if not isinstance(rec, dict):
-        # The first run's seed day, fixed once: after pruning, the oldest
-        # first_seen in state is just an ordinary evaluated day.
+        # Fixed once. A user with no history in state (added to an existing
+        # instance) never judged the jobs already there: nothing qualifies.
+        history = _has_history(state, user)
         dates = [d for e in state["jobs"].values() if (d := e.get("first_seen"))]
         rec = boot[user] = {
-            "since": rec if isinstance(rec, str) else today.isoformat(),
-            "seed_day": min(dates, default="")}
+            "since": (rec if isinstance(rec, str) else today.isoformat())
+            if history else "",
+            "seed_day": min(dates, default=""),
+            "skip_days": _quiet_days(state)}
     since, seed_day = rec["since"], rec["seed_day"]
+    # Days the operator knows were seeded (a `--seed` run before seeded
+    # tags existed, mixed into an otherwise evaluated day).
+    skip_days = set(rec.get("skip_days", ())) | set(
+        state["_meta"].get("recheck_skip_days", ()))
     jobs = state["jobs"]
-    owned = owned_keys(state, user)
-    # Keys a content signature already carries were delivered or suppressed
-    # as a content duplicate of a delivery: accepted, not rejected.
-    owned |= {k for sig in state.get("content", {}).get(user, {}).values()
-              for k in sig.get("keys", [])}
     n = 0
     for key in listed:
         entry = jobs.get(key)
@@ -310,8 +367,8 @@ def bootstrap(state: dict, user: str, listed: dict[str, Job],
         first = entry.get("first_seen")
         if not first or first > since:
             continue  # unknown age, or judged by this code (it records rj)
-        if "llm" not in entry and first <= seed_day:
-            continue  # seeded by the first run, never evaluated
+        if "llm" not in entry and (first <= seed_day or first in skip_days):
+            continue  # seeded (first run / --seed), never evaluated
         entry.setdefault("rj", {})[user] = f"{LEGACY}:"
         n += 1
     if n:
@@ -321,10 +378,11 @@ def bootstrap(state: dict, user: str, listed: dict[str, Job],
 
 
 def stale(state: dict, uf: UserFilter, listed: dict[str, Job],
-          skip: set[str]) -> list[Job]:
+          skip: set[str], owned: set[str] | None = None) -> list[Job]:
     """Still-listed rejected jobs whose fingerprint no longer matches,
     newest first_seen first."""
-    owned = owned_keys(state, uf.name)
+    if owned is None:
+        owned = owned_keys(state, uf.name)
     out: list[Job] = []
     for key, job in listed.items():
         rec = get(state, key, uf.name)

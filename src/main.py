@@ -142,7 +142,8 @@ def enrich_jds(jobs: list[Job]) -> int:
     return fetched
 
 
-def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
+def infer_terms_from_jds(jobs: list[Job], today: dt.date,
+                         quiet: bool = False) -> int:
     """Fill the term of unknown-term jobs from a JD body already in hand
     (ATS boards: Lever/Ashby inline, Greenhouse/SmartRecruiters via
     enrich_jds). Fetches nothing. Runs before any user's filter, so the term
@@ -165,10 +166,12 @@ def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
             # Only a term read from the JD body is accept-only; one found
             # in the URL slug is source data, like a title term.
             job.terms_from_jd = got.source == "jd"
+            job.terms_inferred = True
             resolved += 1
-            log.info("term from %s for %s: %s (%s)", got.source,
-                     job.dedup_key, ", ".join(got.terms), got.confidence)
-    if resolved:
+            if not quiet:
+                log.info("term from %s for %s: %s (%s)", got.source,
+                         job.dedup_key, ", ".join(got.terms), got.confidence)
+    if resolved and not quiet:
         log.info("inferred the term of %d job(s) from their JD", resolved)
     return resolved
 
@@ -187,6 +190,10 @@ class _JobrightEnricher:
         self.session = session
         self.client: httpx.Client | None = None
         self.fetched = 0
+        # Rechecks draw on their own budget (also JD_FETCH_CAP), so a large
+        # recheck backlog for one user never starves a later user's
+        # screening of brand-new jobs.
+        self.recheck_fetched = 0
         self.attempted: set[str] = set()
 
     def _ensure_client(self) -> httpx.Client:
@@ -194,7 +201,7 @@ class _JobrightEnricher:
             self.client = httpx.Client(timeout=20.0, follow_redirects=True)
         return self.client
 
-    def keeps(self, job: Job) -> bool:
+    def keeps(self, job: Job, recheck: bool = False) -> bool:
         """True if `job` should still be notified. Fetches the jobright JD on
         demand and re-applies the user's elimination rules to it."""
         from .adapters.jobright_page import fetch_description
@@ -204,9 +211,10 @@ class _JobrightEnricher:
             return True
         if job.dedup_key in self.attempted:  # cached miss this run
             return True
-        if self.fetched >= JD_FETCH_CAP:
-            log.info("jobright JD enrichment capped at %d this run -- "
-                     "keeping %s unchecked", JD_FETCH_CAP, job.dedup_key)
+        if (self.recheck_fetched if recheck else self.fetched) >= JD_FETCH_CAP:
+            log.info("jobright JD enrichment capped at %d this run%s -- "
+                     "keeping %s unchecked", JD_FETCH_CAP,
+                     " (rechecks)" if recheck else "", job.dedup_key)
             return True
         self.attempted.add(job.dedup_key)
         try:
@@ -221,7 +229,10 @@ class _JobrightEnricher:
             if not job.description:
                 job.description = fetch_description(self._ensure_client(),
                                                     job.jobright_id)
-            self.fetched += 1
+            if recheck:
+                self.recheck_fetched += 1
+            else:
+                self.fetched += 1
         except Exception as exc:  # noqa: BLE001 - a jobright change must never
             log.warning("jobright JD fetch failed for %s (%s) -- keeping job",
                         job.dedup_key, exc)  # suppress real matches
@@ -250,7 +261,7 @@ def _drop_eliminated(uf: UserFilter, accepted: list[tuple[Job, list[str]]],
         # user's elimination against the JD (freshly fetched or cached from an
         # earlier user this run -- per-user rules can differ).
         if job.jobright_id:
-            enricher.keeps(job)
+            enricher.keeps(job, recheck=RECHECK_REASON in reasons)
             if RECHECK_REASON in reasons and not job.description:
                 # Capped or failed: a recheck is never delivered unjudged on
                 # its JD (a new job is; it has no earlier verdict to keep).
@@ -453,7 +464,8 @@ def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
     if facts.get("term") and _jd_term_unwanted(uf, job):
         job = job.model_copy(deep=True, update={"terms": [facts["term"]],
                                                 "term_confidence": "inferred",
-                                                "terms_from_jd": False})
+                                                "terms_from_jd": False,
+                                                "terms_inferred": False})
     elif facts.get("term") and not job.terms:
         job.terms, job.term_confidence = [facts["term"]], "inferred"
     return uf.evaluate(job, llm_facts=facts), job
@@ -600,25 +612,40 @@ def _hold_over_budget(state: dict, uf: UserFilter,
 
 
 def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
-              candidates: list[Job], today: dt.date) -> list[Job]:
+              candidates: list[Job], today: dt.date, owned: set[str],
+              llm_slots: int | None) -> list[Job]:
     """Still-listed rejected jobs whose rejecting config changed (see
     src/recheck.py). A deterministic reject is re-fingerprinted here for
     free; the rest (now accepted, or needing the LLM) are returned, capped,
-    for the full pipeline. Rechecks needing a Greenhouse-style JD fetch are
-    limited to what enrich_jds will fetch this run, so none is judged
-    without its JD."""
+    for the full pipeline.
+
+    Selection is per seat, not head-of-line: one that needs a fresh LLM
+    call takes one of `llm_slots` (what this run's new jobs left of the LLM
+    cap; None = no cap), at most one per employer whose top-company verdict
+    is missing (one call judges the employer), and is skipped (still stale)
+    when none is left, while deterministic ones behind it still get a seat.
+    Rechecks needing a Greenhouse-style JD fetch are limited to what
+    enrich_jds will fetch this run, so none is judged without its JD."""
+    name = uf.name
     skip = {job.dedup_key for job in candidates}
-    recheck.bootstrap(state, uf.name, listed, skip, today)
-    stale = recheck.stale(state, uf, listed, skip)
-    out: list[Job] = []
+    recheck.bootstrap(state, name, listed, skip, today, owned)
+    # Read the term from a JD body / URL already in hand, as a new job's
+    # would be, before fingerprinting or judging (fetches nothing; quiet,
+    # since the same jobs come through every run).
+    infer_terms_from_jds(
+        [job for key, job in listed.items()
+         if key not in skip and recheck.get(state, key, name) is not None],
+        today, quiet=True)
+    stale = recheck.stale(state, uf, listed, skip, owned)
+    out: list[tuple[Job, bool, str | None]] = []   # (job, needs llm, employer)
     refreshed = 0
     for job in stale:
-        # Restore the JD term it was judged on (infer_terms_from_jds only
-        # sees new/pending jobs), so the term step reads what it read then.
-        jd_terms = state["jobs"].get(job.dedup_key, {}).get("jd_terms")
-        if not job.terms and jd_terms:
-            job.terms, job.term_confidence = list(jd_terms), "inferred"
-            job.terms_from_jd = True
+        # Restore the inferred term it was judged on, so the term step
+        # reads what it read then.
+        kept = recheck.inferred_terms(state, job.dedup_key)
+        if not job.terms and kept:
+            job.terms, job.term_confidence = kept[0], "inferred"
+            job.terms_from_jd, job.terms_inferred = kept[1], True
         # Judge with the cached LLM term, as _finalize would, so a still-
         # unwanted inferred term is re-fingerprinted here for free.
         term = None if job.terms else st.llm_cache_get(
@@ -627,30 +654,56 @@ def _rechecks(uf: UserFilter, state: dict, listed: dict[str, Job],
                                         "term_confidence": "inferred"})
                  if term else job)
         verdict = uf.evaluate(probe, today=today)
-        if verdict.status == "reject":
+        if (verdict.status == "reject" and job.jd_url and not job.description
+                and not job.terms
+                and recheck.stage_of(verdict) not in ("role", "elim")):
+            # Its JD (not fetched yet) may name the term: judge it with the
+            # body in the full pass rather than record a term-less verdict.
+            # (No JD term can undo a role or elimination reject.)
+            out.append((job, False, None))
+        elif verdict.status == "reject":
             recheck.record(state, uf, job, recheck.stage_of(verdict))
             refreshed += 1
         else:
-            out.append(job)
+            needs_llm = (verdict.status == "ambiguous" and not _cache_covers(
+                verdict.needs, _cached_facts(state, probe, name)))
+            employer = (norm_company(job.company)
+                        if needs_llm and "top_company" in verdict.needs
+                        and st.company_top_get(state, job.company, name) is None
+                        else None)
+            out.append((job, needs_llm, employer))
     selected: list[Job] = []
     jd_budget = JD_FETCH_CAP
     daily, per_run = recheck.limits(uf.cfg)
     budget_spent = (daily is not None
-                    and recheck.delivered_today(state, uf.name, today) >= daily)
-    for job in out:
+                    and recheck.delivered_today(state, name, today) >= daily)
+    employers: set[str] = set()
+    for job, needs_llm, employer in out:
         if budget_spent or len(selected) >= per_run:
             break
+        if needs_llm:
+            if employer is not None and employer in employers:
+                continue
+            if llm_slots is not None and llm_slots <= 0:
+                continue
         if job.jd_url and not job.description:
             if jd_budget <= 0:
                 continue
             jd_budget -= 1
+        if needs_llm:
+            if employer is not None:
+                employers.add(employer)
+            if llm_slots is not None:
+                llm_slots -= 1
         selected.append(job)
     if stale:
         log.info("user %s: recheck: %d stale rejection(s); %d still rejected "
                  "(re-fingerprinted), %d re-run now, %d left for later runs",
-                 uf.name, len(stale), refreshed, len(selected),
+                 name, len(stale), refreshed, len(selected),
                  len(out) - len(selected))
     enrich_jds(selected)
+    infer_terms_from_jds([job for job in selected if not job.terms], today,
+                         quiet=True)
     # A JD that could not be fetched leaves the job unjudged on its body:
     # keep its stale record (retried next run) rather than deliver it.
     return [job for job in selected if not (job.jd_url and not job.description)]
@@ -695,20 +748,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
 
     accepted: list[tuple[Job, list[str]]] = []
     llm_queue: list[Job] = []
-    # Rechecks run after this run's new/pending jobs: they queue behind them
-    # for the LLM cap and are never parked as pending (a deferred recheck
-    # keeps its stale fingerprint and is picked up again next run).
-    # The yaml wants the LLM but this run cannot call it (key missing): skip
-    # rechecks entirely. Without the model an unknown term reads as "keep"
-    # (accepted) and a top-company rule hard-rejects; either verdict would
-    # be committed (delivered, or re-hashed as rejected) and never revisited.
-    llm_down = recheck.llm_configured(uf) and not uf.llm_enabled
-    if llm_down and listed is not None:
-        log.warning("user %s: llm configured but unavailable this run -- "
-                    "rechecks skipped until it is back", name)
-    rechecks = (_rechecks(uf, state, listed, candidates, today)
-                if listed is not None and not llm_down else [])
-    recheck_keys = {job.dedup_key for job in rechecks}
+    recheck_keys: set[str] = set()
 
     def _accept(job: Job, reasons: list[str]) -> None:
         if job.dedup_key in recheck_keys:
@@ -716,7 +756,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         accepted.append((job, reasons))
         recheck.clear(state, job.dedup_key, name)
 
-    for job in [*candidates, *rechecks]:
+    def _judge(job: Job) -> None:
         verdict = uf.evaluate(job, today=today)
         if verdict.status == "accept":
             _accept(_delivered(uf, job), verdict.reasons)
@@ -736,6 +776,32 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                 st.clear_pending(state, job.dedup_key, name)
             else:
                 llm_queue.append(job)
+
+    for job in candidates:
+        _judge(job)
+
+    # Rechecks run after this run's new/pending jobs: they get only the LLM
+    # slots those left and are never parked as pending (a deferred recheck
+    # keeps its stale fingerprint and is picked up again next run).
+    # The yaml wants the LLM but this run cannot call it (key missing): skip
+    # rechecks entirely. Without the model an unknown term reads as "keep"
+    # (accepted) and a top-company rule hard-rejects; either verdict would
+    # be committed (delivered, or re-hashed as rejected) and never revisited.
+    llm_down = recheck.llm_configured(uf) and not uf.llm_enabled
+    if llm_down and listed is not None:
+        log.warning("user %s: llm configured but unavailable this run -- "
+                    "rechecks skipped until it is back", name)
+    if listed is not None and not llm_down:
+        ledger_keys = {rec.get("key", "") for rec in ledger.load_ledger(
+            ledger.ledger_path(DATA_ROOT)).get(name, {}).values()}
+        owned = recheck.owned_keys(state, name, ledger_keys)
+        llm_slots = (max(0, int(llm_cfg.get("max_jobs_per_run", 40))
+                         - len(llm_queue)) if uf.llm_enabled else None)
+        rechecks = _rechecks(uf, state, listed, candidates, today, owned,
+                             llm_slots)
+        recheck_keys.update(job.dedup_key for job in rechecks)
+        for job in rechecks:
+            _judge(job)
 
     # ---- LLM stage: one batched call, cost-guarded, verdicts cached
     if llm_queue:
@@ -829,7 +895,11 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                            {**item, "added": now.date().isoformat(),
                             "applied": False})
     if notify_cfg.get("discord_webhook_env"):
-        _notify_discord(user_cfg, accepted, state, dry_run, now, terms_order)
+        # Rechecks go to the digest/dashboard only (batched), like the
+        # priority email: a config change must not burst the instant channel.
+        _notify_discord(user_cfg, [(j, r) for j, r in accepted
+                                   if RECHECK_REASON not in r],
+                        state, dry_run, now, terms_order)
     if notify_cfg.get("email"):
         _notify_email(user_cfg, accepted, state, dry_run, now, terms_order,
                       send_now, resume_paths)

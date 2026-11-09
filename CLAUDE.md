@@ -60,15 +60,19 @@ a still-listed job whose fingerprint no longer matches is re-run from the top;
 an accept is delivered tagged `[RECHECK]` via the digest (never the immediate
 priority email), at most `recheck.per_run` re-runs per run and
 `recheck.daily_limit` deliveries per day (user yaml `recheck:` block,
-defaults `RECHECK_CAP`=50 / `RECHECK_DAILY_DELIVERIES`=40, null/0 = no daily
-limit, `per_run: 0` pauses re-runs while the free re-fingerprint pass and
-bootstrap keep going; validated by config_check), behind new jobs for the LLM
+defaults `RECHECK_CAP`=50 / `RECHECK_DAILY_DELIVERIES`=40; `daily_limit:
+null` = no daily limit, `0` = no recheck deliveries, `per_run: 0` = no
+re-runs, and either pause leaves the free re-fingerprint pass and bootstrap
+running; validated by config_check), behind new jobs for the LLM
 cap. A run whose configured LLM is unavailable (key missing) skips rechecks
 entirely, so a degraded verdict is never committed. Jobs no longer listed,
-delivered, or `seeded` are never rechecked, and nothing is ever un-delivered. A matching-code change must bump
+delivered, or `seeded` are never rechecked, and nothing is ever
+un-delivered. A matching-code change must bump
 its stage's version (`filters.ROLE_MATCH_VERSION`, `ELIM_MATCH_VERSION`) to
-recheck. An instant Discord webhook, if configured, still sends recheck
-accepts right away (only the priority email is suppressed).
+recheck. Recheck accepts never go to the priority email or the instant
+Discord webhook. Keys in the outbox, on the dashboard, under a content
+signature or in the applications ledger count as delivered and are never
+rechecked.
 
 ## Sources (`sources.yaml`)
 

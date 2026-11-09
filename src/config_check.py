@@ -215,7 +215,9 @@ def validate_user(user: dict, label: str, *, root: Path,
 
 
 def _validate_recheck(user: dict, rep: Report) -> None:
-    """`recheck: {daily_limit: int|null, per_run: int}` (src/recheck.py)."""
+    """`recheck: {daily_limit: int|null, per_run: int}` (src/recheck.py).
+    daily_limit null = unlimited, 0 = no recheck deliveries; per_run 0 =
+    no re-runs (both pause, the free re-fingerprint pass still runs)."""
     if "recheck" not in user:
         return
     block = user["recheck"]

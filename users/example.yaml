@@ -120,7 +120,8 @@ location:
 # passes, delivered tagged [RECHECK] in the digest. Both knobs are optional;
 # the values shown are the defaults.
 # recheck:
-#   daily_limit: 40    # recheck deliveries per day; null or 0 = no limit
+#   daily_limit: 40    # recheck deliveries per day; null = no limit,
+#                      # 0 = none (paused)
 #   per_run: 50        # rechecked jobs re-run through the pipeline per run;
 #                      # 0 pauses them (still-rejected jobs are re-hashed
 #                      # for free either way)

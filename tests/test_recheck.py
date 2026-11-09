@@ -43,12 +43,18 @@ def _job(i, title="Software Engineer Intern", company=None, **kw):
     return job
 
 
-def _state(*jobs, first_seen=TODAY - dt.timedelta(days=5)):
+def _state(*jobs, first_seen=TODAY - dt.timedelta(days=5), history=True):
     state = st.empty_state()
+    if history:   # the user has been receiving digests on this instance
+        state["last_email"]["example"] = "2026-06-01T12:00:00+00:00"
     st.touch(state, "url:https://x.example/oldest", ["s"],
              TODAY - dt.timedelta(days=60))   # the first run's seed day
     for job in jobs:
         st.touch(state, job.dedup_key, job.sources, first_seen)
+    if history:
+        # an evaluated day delivers something (a quiet day reads as a seed)
+        st.touch(state, "url:https://x.example/delivered", ["s"], first_seen)
+        st.mark_notified(state, "url:https://x.example/delivered", "example")
     return state
 
 
@@ -247,12 +253,14 @@ def test_bootstrap_marks_evaluated_still_listed_once():
     st.touch(state, dupe.dedup_key, ["s"], TODAY - dt.timedelta(days=5))
     st.content_mark(state, "example", "sig", dupe.dedup_key, TODAY)
     listed = {j.dedup_key: j for j in (evaluated, from_seed_day, dupe)}
-    n = recheck.bootstrap(state, "example", listed, set(), TODAY)
+    n = recheck.bootstrap(state, "example", listed, set(), TODAY,
+                          recheck.owned_keys(state, "example"))
     assert n == 1
     assert state["jobs"][evaluated.dedup_key]["rj"]["example"] == "legacy:"
     assert "rj" not in state["jobs"][from_seed_day.dedup_key]
     assert "rj" not in state["jobs"][gone.dedup_key]
-    assert recheck.bootstrap(state, "example", listed, set(), TODAY) == 0
+    assert recheck.bootstrap(state, "example", listed, set(), TODAY,
+                             recheck.owned_keys(state, "example")) == 0
 
 
 def test_bootstrap_then_current_config_delivers(_no_email):
@@ -347,7 +355,7 @@ def test_jd_capped_recheck_stays_queued(monkeypatch):
     class CappedEnricher:
         attempted: set = set()
 
-        def keeps(self, j):
+        def keeps(self, j, recheck=False):
             return True
 
     phd = _cfg(eliminate={"grad_only": "phd"})
@@ -367,7 +375,7 @@ def test_failed_jd_fetch_holds_recheck(monkeypatch):
     class FailingEnricher:
         attempted = {job.dedup_key}       # tried, fetch raised
 
-        def keeps(self, j):
+        def keeps(self, j, recheck=False):
             return True
 
     main.process_user(_cfg(eliminate={"grad_only": "phd"}), [], state,
@@ -395,17 +403,19 @@ def test_bootstrap_keeps_marking_later_runs_and_fixes_seed_day():
     state = _state(a, b)
     state["jobs"]["shell"] = {"apply_url": "x"}           # no first_seen
     assert recheck.bootstrap(state, "example", {a.dedup_key: a}, set(),
-                             TODAY) == 1
+                             TODAY, recheck.owned_keys(state, "example")) == 1
     rec = state["_meta"]["recheck_bootstrap"]["example"]
     assert rec["seed_day"] == (TODAY - dt.timedelta(days=60)).isoformat()
     # b was off its list on the bootstrap run; it is marked when it returns
     assert recheck.bootstrap(state, "example", {b.dedup_key: b}, set(),
-                             TODAY + dt.timedelta(days=1)) == 1
+                             TODAY + dt.timedelta(days=1),
+                             recheck.owned_keys(state, "example")) == 1
     # a job first seen after the bootstrap date was judged by this code
     c = _job(3, "Software Engineer Intern (Masters)")
     st.touch(state, c.dedup_key, ["s"], TODAY + dt.timedelta(days=2))
     assert recheck.bootstrap(state, "example", {c.dedup_key: c}, set(),
-                             TODAY + dt.timedelta(days=2)) == 0
+                             TODAY + dt.timedelta(days=2),
+                             recheck.owned_keys(state, "example")) == 0
 
 
 # ---------------------------------------------------------- per-user limits
@@ -415,7 +425,7 @@ def test_bootstrap_keeps_marking_later_runs_and_fixes_seed_day():
     ({}, (40, 50)),
     ({"daily_limit": 10, "per_run": 700}, (10, 700)),     # override
     ({"daily_limit": None}, (None, 50)),                  # null: no limit
-    ({"daily_limit": 0}, (None, 50)),                     # 0: no limit
+    ({"daily_limit": 0}, (0, 50)),                        # 0: paused
     ({"daily_limit": "lots", "per_run": -1}, (40, 50)),   # malformed: default
     ({"daily_limit": True, "per_run": 3.5}, (40, 50)),
     ({"daily_limit": False}, (40, 50)),    # yaml no/off/false: not "unlimited"
@@ -533,3 +543,203 @@ def test_jd_inferred_term_fingerprint_is_stable_across_runs():
     wider = UserFilter(_cfg(terms_wanted=["Summer 2027", "Summer 2031"]),
                        ROOT, today=TODAY)
     assert recheck.stale(state, wider, {fresh.dedup_key: fresh}, set()) == [fresh]
+
+
+# ---------------------------------------------------------- bootstrap evidence
+
+def test_bootstrap_skips_quiet_seed_days_and_operator_skip_days():
+    # A pre-#97 `--seed` run: a day whose rows nothing ever evaluated (no
+    # delivery, no LLM fact) reads as a seed; an operator-listed day too.
+    evaluated = _job(1, "Software Engineer Intern (Masters)")
+    state = _state(evaluated)                       # day D1, delivered sibling
+    seed_day = TODAY - dt.timedelta(days=3)
+    seeded = [_job(i, "Software Engineer Intern (Masters)") for i in (10, 11)]
+    for j in seeded:
+        st.touch(state, j.dedup_key, ["s"], seed_day)
+    mixed_day = TODAY - dt.timedelta(days=2)
+    mixed = _job(20, "Software Engineer Intern (Masters)")
+    st.touch(state, mixed.dedup_key, ["s"], mixed_day)
+    st.touch(state, "url:https://x.example/other", ["s"], mixed_day)
+    st.mark_notified(state, "url:https://x.example/other", "example")
+    state["_meta"]["recheck_skip_days"] = [mixed_day.isoformat()]
+    listed = {j.dedup_key: j for j in (evaluated, *seeded, mixed)}
+    assert recheck.bootstrap(state, "example", listed, set(), TODAY,
+                             recheck.owned_keys(state, "example")) == 1
+    assert "rj" in state["jobs"][evaluated.dedup_key]
+    assert all("rj" not in state["jobs"][j.dedup_key] for j in (*seeded, mixed))
+    assert (seed_day.isoformat()
+            in state["_meta"]["recheck_bootstrap"]["example"]["skip_days"])
+
+
+def test_new_user_without_history_bootstraps_nothing():
+    job = _job(1, "Software Engineer Intern (Masters)")
+    state = _state(job, history=False)
+    st.touch(state, "url:https://x.example/d", ["s"], TODAY - dt.timedelta(days=5))
+    st.mark_notified(state, "url:https://x.example/d", "someone-else")
+    _run(_cfg(eliminate={"grad_only": "phd"}), state, [job])
+    assert st.outbox_items(state, "example") == []
+    assert "rj" not in state["jobs"][job.dedup_key]
+    assert state["_meta"]["recheck_bootstrap"]["example"]["since"] == ""
+
+
+def test_ledger_and_content_keys_are_owned(monkeypatch):
+    a = _job(1, "Software Engineer Intern (Masters)")
+    b = _job(2, "Software Engineer Intern (Masters)")
+    state = _state(a, b)
+    for j in (a, b):
+        state["jobs"][j.dedup_key]["rj"] = {"example": "legacy:"}
+    st.content_mark(state, "example", "sig", b.dedup_key, TODAY)
+    monkeypatch.setattr(main.ledger, "load_ledger", lambda path: {
+        "example": {"abc": {"key": a.dedup_key}}})
+    _run(_cfg(eliminate={"grad_only": "phd"}), state, [a, b])
+    assert st.outbox_items(state, "example") == []
+
+
+# ---------------------------------------------------------- inferred terms
+
+def test_url_slug_term_survives_the_next_run(monkeypatch):
+    # Run 1 infers Fall 2027 from the URL slug (body in hand) and rejects
+    # it; run 2's fresh Job has no body, hence no term: same fingerprint,
+    # no LLM call.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    calls = []
+    monkeypatch.setattr(main, "classify",
+                        lambda batch, *a: calls.append(batch) or {})
+    cfg = _cfg(unknown_term_policy="llm",
+               llm={"enabled": True, "provider": "gemini",
+                    "tasks": ["term_inference"]})
+    url = "https://jobs.lever.co/acme/software-engineer-intern-fall-2027"
+    job = Job(company="Acme", title="Software Engineer Intern", url=url,
+              source="s", description="We build things.")
+    job.dedup_key = f"url:{url}"
+    state = _state(job)
+    main.infer_terms_from_jds([job], TODAY)
+    _run(cfg, state, [], candidates=[job])
+    assert recheck.get(state, job.dedup_key, "example")[0] == "term"
+    fresh = Job(company="Acme", title="Software Engineer Intern", url=url,
+                source="s")
+    fresh.dedup_key = job.dedup_key
+    _run(cfg, state, [fresh])
+    assert calls == []
+    assert recheck.stale(state, UserFilter(cfg, ROOT, today=TODAY),
+                         {fresh.dedup_key: fresh}, set()) == []
+
+
+def test_inline_jd_term_beats_cached_llm_term():
+    # The JD says Fall 2027 (rule: top companies only); the cached LLM term
+    # says Summer (anything). The recheck must judge the JD term.
+    cfg = _cfg(terms_wanted=["Summer 2027", "Fall 2027"],
+               rules=[{"when": {"term": ["Summer 2027"]},
+                       "accept_if_any": [{"always": True}]},
+                      {"when": {"term": ["Fall 2027"]},
+                       "accept_if_any": [{"company_in_file":
+                                          "data/top_companies.txt"}]}])
+    job = _job(1, company="Obscure Co")
+    job.terms, job.term_confidence = [], "unknown"
+    job.description = "Join us for our Fall 2027 internship program."
+    state = _state(job)
+    state["jobs"][job.dedup_key]["llm"] = {"term": "Summer 2027"}
+    state["jobs"][job.dedup_key]["rj"] = {"example": "legacy:"}
+    _run(cfg, state, [job])
+    assert st.outbox_items(state, "example") == []
+
+
+def test_unwanted_jd_term_hashes_as_unknown():
+    # #92: a JD term outside the wanted set is judged as an unknown term, so
+    # the unknown-term policy is what its fingerprint must cover.
+    state = st.empty_state()
+    job = _job(1)
+    job.terms, job.term_confidence = ["Winter 2027"], "inferred"
+    job.terms_from_jd = True
+    drop = UserFilter(_cfg(unknown_term_policy="drop"), ROOT, today=TODAY)
+    keep = UserFilter(_cfg(unknown_term_policy="keep"), ROOT, today=TODAY)
+    assert (recheck.fingerprint(drop, "term", job, state)
+            != recheck.fingerprint(keep, "term", job, state))
+
+
+def test_explicit_term_clears_kept_inferred_term():
+    uf = UserFilter(_cfg(), ROOT, today=TODAY)
+    job = _job(1)
+    job.terms, job.terms_inferred = ["Fall 2031"], True
+    state = _state(job)
+    recheck.record(state, uf, job, "term")
+    assert state["jobs"][job.dedup_key]["inferred_terms"]["terms"] == ["Fall 2031"]
+    explicit = _job(1)
+    explicit.terms = ["Winter 2031"]
+    recheck.record(state, uf, explicit, "term")
+    assert "inferred_terms" not in state["jobs"][job.dedup_key]
+
+
+# ---------------------------------------------------------- selection
+
+def test_llm_needing_rechecks_do_not_block_deterministic_ones(monkeypatch):
+    # New job takes the only LLM slot; two newer LLM-needing rechecks wait;
+    # the deterministic accept behind them still gets its seat.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main, "classify", lambda batch, *a: {
+        j.dedup_key: {"term": "Summer 2027"} for j in batch})
+    cfg = _cfg(unknown_term_policy="llm",
+               llm={"enabled": True, "provider": "gemini",
+                    "tasks": ["term_inference"], "max_jobs_per_run": 1},
+               eliminate={"grad_only": "phd"},
+               recheck={"daily_limit": None, "per_run": 2})
+    det = _job(1, "Software Engineer Intern (Masters)")
+    state = _state(det, first_seen=TODAY - dt.timedelta(days=9))
+    unk = []
+    for i in (2, 3):
+        j = _job(i)
+        j.terms, j.term_confidence = [], "unknown"
+        st.touch(state, j.dedup_key, ["s"], TODAY - dt.timedelta(days=4))
+        unk.append(j)
+    new = _job(9)
+    new.terms, new.term_confidence = [], "unknown"
+    st.touch(state, new.dedup_key, ["s"], TODAY)
+    for j in (det, *unk):
+        state["jobs"][j.dedup_key]["rj"] = {"example": "legacy:"}
+    _run(cfg, state, [det, *unk, new], candidates=[new])
+    keys = {i["key"] for i in st.outbox_items(state, "example")}
+    assert det.dedup_key in keys and new.dedup_key in keys
+    assert all(recheck.get(state, j.dedup_key, "example") == ("legacy", "")
+               for j in unk)
+
+
+def test_one_llm_seat_per_employer_missing_a_verdict(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    seen = []
+    monkeypatch.setattr(main, "classify", lambda batch, *a: seen.extend(
+        j.dedup_key for j in batch) or {})
+    cfg = _cfg(llm={"enabled": True, "provider": "gemini",
+                    "tasks": ["top_company_judgment"]},
+               rules=[{"when": {"term": ["Summer 2027"]},
+                       "accept_if_any": [{"company_in_file":
+                                          "data/top_companies.txt"}]}],
+               recheck={"daily_limit": None, "per_run": 700})
+    jobs = [_job(i, company="Unjudged Corp") for i in range(3)]
+    state = _state(*jobs)
+    for j in jobs:
+        state["jobs"][j.dedup_key]["rj"] = {"example": "legacy:"}
+    _run(cfg, state, jobs)
+    assert len(seen) == 1
+
+
+def test_daily_limit_zero_pauses_deliveries():
+    jobs = [_job(i, "Software Engineer Intern (Masters)") for i in range(3)]
+    state = _state(*jobs)
+    _run(_cfg(), state, [], candidates=jobs)
+    _run(_cfg(eliminate={"grad_only": "phd"},
+              recheck={"daily_limit": 0, "per_run": 700}), state, jobs)
+    assert st.outbox_items(state, "example") == []
+
+
+def test_discord_never_gets_rechecks(monkeypatch):
+    sent = []
+    monkeypatch.setattr(main, "_notify_discord",
+                        lambda cfg, accepted, *a: sent.extend(accepted))
+    job = _job(1, "Software Engineer Intern (Masters)")
+    state = _state(job)
+    _run(_cfg(), state, [], candidates=[job])
+    cfg = _cfg(eliminate={"grad_only": "phd"})
+    cfg["notify"]["discord_webhook_env"] = "HOOK"
+    _run(cfg, state, [job])
+    assert sent == []
+    assert [i["key"] for i in st.outbox_items(state, "example")] == [job.dedup_key]
