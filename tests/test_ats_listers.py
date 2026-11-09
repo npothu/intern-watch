@@ -867,3 +867,17 @@ def test_oracle_sorts_by_posting_date_and_tolerates_two_unlisted_rows():
     with _client(handler) as c:
         pages = oracle_cx.fetch_pages(c, {"slug": ORACLE_SLUG})
     assert len(pages) == 4                     # 2 pages x 2 queries
+
+
+@pytest.mark.parametrize("url", [
+    "https://careers.amd.com/jobs/91238",
+    "https://campus-amd.icims.com/jobs/91238/login",
+    "https://campus-amd.icims.com/jobs/91238/some-title/job?in_iframe=1",
+])
+def test_amd_icims_apply_link_joins_its_jibe_posting(url):
+    assert canonical_url(url) == "ats:jibe:careers.amd.com:91238"
+
+
+def test_other_icims_portals_keep_their_own_token():
+    assert canonical_url("https://careers-gdms.icims.com/jobs/75637/login") == (
+        "ats:icims:careers-gdms:75637")

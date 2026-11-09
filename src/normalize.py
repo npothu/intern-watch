@@ -220,6 +220,10 @@ _AVATURE_PATH_RE = re.compile(r"/JobDetail(?:/[^/]+)?/(\d+)$", re.I)
 # <host>/careers-home/jobs/<req id>. Only hosts known to be Jibe sites: the
 # path shape alone is far too common to trust on an arbitrary domain.
 _JIBE_HOSTS = {"careers.amd.com"}
+# iCIMS portals behind a Jibe site share its req ids (careers.amd.com/jobs/
+# 91238 applies at campus-amd.icims.com/jobs/91238/login), so they get the
+# Jibe token. Listed explicitly, never guessed.
+_ICIMS_JIBE_PORTALS = {"campus-amd": "careers.amd.com"}
 _JIBE_PATH_RE = re.compile(r"^(?:/careers-home)?/jobs/(\d+)(?:/[^/]*)?$")
 # iCIMS portals: <portal>.icims.com/jobs/<id>[/<title-slug>]/job[?in_iframe=1].
 _ICIMS_PATH_RE = re.compile(r"^/jobs/(\d+)(?:/[^/]+)?/(?:job|login)$|^/jobs/(\d+)$")
@@ -339,7 +343,10 @@ def canonical_url(url: str) -> str | None:
         m = _ICIMS_PATH_RE.match(path)
         if m:
             portal = host.split(".", 1)[0]
-            return f"ats:icims:{portal}:{m.group(1) or m.group(2)}"
+            req = m.group(1) or m.group(2)
+            if portal in _ICIMS_JIBE_PORTALS:
+                return f"ats:jibe:{_ICIMS_JIBE_PORTALS[portal]}:{req}"
+            return f"ats:icims:{portal}:{req}"
     if host == "amazon.jobs":
         m = _AMAZON_RE.match(path)
         if m:
