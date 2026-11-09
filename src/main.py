@@ -123,6 +123,7 @@ def enrich_jds(jobs: list[Job], state: dict | None = None,
     from .adapters import eightfold
     from .adapters import oracle_cx as oracle
     from .adapters import smartrecruiters_api as sr
+    from .adapters import workday_api as wd
     from .adapters.ats_boards import JD_MAX_CHARS
     from .normalize import strip_html
 
@@ -160,13 +161,21 @@ def enrich_jds(jobs: list[Job], state: dict | None = None,
                     body = oracle.jd_text(payload)
                 elif eightfold.is_detail_payload(payload):
                     body = eightfold.jd_text(payload)
+                elif "jobPostingInfo" in payload:
+                    # Workday: a listing row that says only "N Locations"
+                    # arrives with no location; take them from the detail
+                    # (the primary with its country) so the country
+                    # elimination can see them.
+                    body = wd.jd_text(payload)
+                    if not job.locations:
+                        job.locations = wd.detail_locations(payload)
                 else:
                     body = strip_html(payload.get("content") or "") or None
                 job.description = (body or "")[:JD_MAX_CHARS] or None
                 fetched += 1
             except Exception as exc:  # noqa: BLE001 - JD is best-effort extra signal
                 log.warning("jd fetch failed for %s (%s)", job.dedup_key, exc)
-    log.info("fetched %d/%d greenhouse JD(s)", fetched, len(targets))
+    log.info("fetched %d/%d ats JD(s)", fetched, len(targets))
     return fetched
 
 

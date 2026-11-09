@@ -2,6 +2,9 @@
 # A company may legitimately appear on multiple ATS (migrations);
 # delete rows that look stale or wrong.
 boards:
+- company: Adobe
+  ats: workday
+  slug: adobe.wd5/external_experienced
 - company: Affirm
   ats: greenhouse
   slug: affirm
@@ -26,12 +29,24 @@ boards:
 - company: American Express
   ats: oracle
   slug: egug.fa.us2.oraclecloud.com/CX_1
+- company: Amgen
+  ats: workday
+  slug: amgen.wd1/careers
+- company: Analog Devices
+  ats: workday
+  slug: analogdevices.wd1/External
 - company: Anduril
   ats: greenhouse
   slug: andurilindustries
 - company: Anthropic
   ats: greenhouse
   slug: anthropic
+- company: Applied Materials
+  ats: workday
+  slug: amat.wd1/External
+- company: Aptiv
+  ats: workday
+  slug: aptiv.wd5/aptiv_careers
 - company: AQR
   ats: greenhouse
   slug: aqr
@@ -47,9 +62,18 @@ boards:
 - company: Benchling
   ats: ashby
   slug: benchling
+- company: BlackRock
+  ats: workday
+  slug: blackrock.wd1/BlackRock_Early_Careers_Program
+- company: BlackRock
+  ats: workday
+  slug: blackrock.wd1/BlackRock_Professional
 - company: Block
   ats: greenhouse
   slug: block
+- company: Blue Origin
+  ats: workday
+  slug: blueorigin.wd5/blueorigin
 - company: BNY
   ats: oracle
   slug: eofe.fa.us2.oraclecloud.com/CX_1001
@@ -58,6 +82,9 @@ boards:
   slug: BoschGroup
   manual: true
   max_pages: 20
+- company: Boston Dynamics
+  ats: workday
+  slug: bostondynamics.wd1/Boston_Dynamics
 - company: Brex
   ats: greenhouse
   slug: brex
@@ -70,6 +97,9 @@ boards:
 - company: Canva
   ats: smartrecruiters
   slug: Canva
+- company: Capital One
+  ats: workday
+  slug: capitalone.wd12/Capital_One
 - company: Carta
   ats: greenhouse
   slug: carta
@@ -79,9 +109,18 @@ boards:
 - company: Chime
   ats: greenhouse
   slug: chime
+- company: Cigna Group
+  ats: workday
+  slug: cigna.wd5/cignacareers
+- company: Cisco
+  ats: workday
+  slug: cisco.wd5/Cisco_Careers
 - company: Cloudflare
   ats: greenhouse
   slug: cloudflare
+- company: CME Group
+  ats: workday
+  slug: cmegroup.wd1/cme_careers
 - company: Cohere
   ats: ashby
   slug: cohere
@@ -94,6 +133,12 @@ boards:
 - company: Cursor
   ats: ashby
   slug: cursor
+- company: CVS Health
+  ats: workday
+  slug: cvshealth.wd1/CVS_Health_Careers
+- company: Danaher
+  ats: workday
+  slug: danaher.wd1/danaherjobs
 - company: Databricks
   ats: greenhouse
   slug: databricks
@@ -115,6 +160,9 @@ boards:
 - company: Duolingo
   ats: greenhouse
   slug: duolingo
+- company: Ecolab
+  ats: workday
+  slug: ecolab.wd1/ecolab_external
 - company: Elastic
   ats: greenhouse
   slug: elastic
@@ -124,6 +172,12 @@ boards:
 - company: Epic Games
   ats: greenhouse
   slug: epicgames
+- company: Expedia Group
+  ats: workday
+  slug: expedia.wd108/search
+- company: F5
+  ats: workday
+  slug: ffive.wd5/f5jobs
 - company: Faire
   ats: greenhouse
   slug: faire
@@ -139,6 +193,12 @@ boards:
 - company: FullStory
   ats: ashby
   slug: fullstory
+- company: GE Healthcare
+  ats: workday
+  slug: gehc.wd5/GEHC_ExternalSite
+- company: General Motors
+  ats: workday
+  slug: generalmotors.wd5/Careers_GM
 - company: GM Financial
   ats: oracle
   slug: fa-exvu-saasfaprod1.fa.ocs.oraclecloud.com/CX_1
@@ -151,12 +211,21 @@ boards:
 - company: Gusto
   ats: greenhouse
   slug: gusto
+- company: Hewlett Packard Enterprise
+  ats: workday
+  slug: hpe.wd5/jobsathpe
 - company: Honeywell
   ats: oracle
   slug: ibqbjb.fa.ocs.oraclecloud.com/Honeywell
 - company: Honeywell Aerospace
   ats: oracle
   slug: icfcjb.fa.ocs.oraclecloud.com/Aerospace
+- company: HP
+  ats: workday
+  slug: hp.wd5/EXTEU-AC-CareerSite
+- company: Humana
+  ats: workday
+  slug: humana.wd5/humana_external_career_site
 - company: IBM
   ats: ibm
   slug: careers
@@ -166,15 +235,30 @@ boards:
 - company: Instacart
   ats: greenhouse
   slug: instacart
+- company: Intel
+  ats: workday
+  slug: intel.wd1/external
 - company: Jane Street
   ats: greenhouse
   slug: janestreet
+- company: Johnson & Johnson
+  ats: workday
+  slug: jj.wd5/JJ
 - company: JPMorgan Chase
   ats: oracle
   slug: jpmc.fa.oraclecloud.com/CX_1001
 - company: Jump Trading
   ats: greenhouse
   slug: jumptrading
+- company: KLA
+  ats: workday
+  slug: kla.wd1/UR
+- company: KLA
+  ats: workday
+  slug: kla.wd1/search
+- company: Leidos
+  ats: workday
+  slug: leidos.wd5/External
 - company: Linear
   ats: ashby
   slug: linear
@@ -189,6 +273,15 @@ boards:
 - company: Lyft
   ats: greenhouse
   slug: lyft
+- company: Mastercard
+  ats: workday
+  slug: mastercard.wd1/Campus
+- company: Mastercard
+  ats: workday
+  slug: mastercard.wd1/CorporateCareers
+- company: Mastercard
+  ats: workday
+  slug: mastercard.wd1/campusapplyonly
 - company: Mayo Clinic
   ats: oracle
   slug: fa-euwp-saasfaprod1.fa.ocs.oraclecloud.com/CX_1
@@ -198,6 +291,9 @@ boards:
 - company: Micron Technology
   ats: eightfold
   slug: micron.eightfold.ai/micron.com
+- company: Micron Technology
+  ats: workday
+  slug: micron.wd1/External
 - company: Microsoft
   ats: eightfold
   slug: apply.careers.microsoft.com/microsoft.com
@@ -210,6 +306,9 @@ boards:
 - company: MongoDB
   ats: greenhouse
   slug: mongodb
+- company: Motorola
+  ats: workday
+  slug: motorolasolutions.wd5/Careers
 - company: Navy Federal Credit Union
   ats: oracle
   slug: fa-etbx-saasfaprod1.fa.ocs.oraclecloud.com/nfcu
@@ -222,12 +321,18 @@ boards:
 - company: Northrop Grumman
   ats: eightfold
   slug: ngc.eightfold.ai/ngc.com
+- company: Northrop Grumman
+  ats: workday
+  slug: ngc.wd1/Northrop_Grumman_External_Site
 - company: Notion
   ats: ashby
   slug: notion
 - company: Nuro
   ats: greenhouse
   slug: nuro
+- company: NVIDIA
+  ats: workday
+  slug: nvidia.wd5/NVIDIAExternalCareerSite
 - company: Okta
   ats: greenhouse
   slug: okta
@@ -249,6 +354,9 @@ boards:
 - company: Palantir
   ats: lever
   slug: palantir
+- company: Palo Alto Networks
+  ats: workday
+  slug: paloaltonetworks.wd5/panwexternalcareers
 - company: PayPal
   ats: eightfold
   slug: paypal.eightfold.ai/paypal.com
@@ -291,9 +399,18 @@ boards:
 - company: Rocket Lab
   ats: greenhouse
   slug: rocketlab
+- company: RTX
+  ats: workday
+  slug: globalhr.wd5/rec_rtx_ext_gateway
 - company: Runway
   ats: ashby
   slug: runway
+- company: Salesforce
+  ats: workday
+  slug: salesforce.wd12/External_Career_Site
+- company: Salesforce
+  ats: workday
+  slug: salesforce.wd12/Futureforce_NewGradRoles
 - company: Salesloft
   ats: greenhouse
   slug: salesloft
@@ -328,15 +445,24 @@ boards:
 - company: Stripe
   ats: greenhouse
   slug: stripe
+- company: Stryker
+  ats: workday
+  slug: stryker.wd1/StrykerCareers
 - company: Supabase
   ats: ashby
   slug: supabase
+- company: T-Mobile
+  ats: workday
+  slug: tmobile.wd1/External
 - company: Temporal
   ats: ashby
   slug: temporal
 - company: Texas Instruments
   ats: oracle
   slug: edbz.fa.us2.oraclecloud.com/CX
+- company: The Walt Disney Company
+  ats: workday
+  slug: disney.wd5/disneycareerdc
 - company: Together AI
   ats: greenhouse
   slug: togetherai
@@ -349,6 +475,9 @@ boards:
 - company: Twilio
   ats: greenhouse
   slug: twilio
+- company: Unity
+  ats: workday
+  slug: unitytech.wd1/Unity
 - company: Vanta
   ats: ashby
   slug: vanta
@@ -368,14 +497,32 @@ boards:
 - company: Virtu
   ats: greenhouse
   slug: virtu
+- company: Visa
+  ats: workday
+  slug: visa.wd5/Visa
+- company: Visa
+  ats: workday
+  slug: visa.wd5/Visa_Early_Careers
+- company: Visa
+  ats: workday
+  slug: visa.wd5/visa_talent_portal
 - company: Wellmark
   ats: smartrecruiters
   slug: WellmarkInc
   manual: true
+- company: Wells Fargo
+  ats: workday
+  slug: wf.wd1/wellsfargojobs
 - company: Western Digital
   ats: smartrecruiters
   slug: WesternDigital
   manual: true
+- company: Workday
+  ats: workday
+  slug: workday.wd5/Workday_Early_Career
 - company: xAI
   ats: greenhouse
   slug: xai
+- company: Zebra Technologies
+  ats: workday
+  slug: zebra.wd501/Zebra_careers
