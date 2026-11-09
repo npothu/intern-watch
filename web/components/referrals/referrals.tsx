@@ -4,7 +4,7 @@ import { useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Archive, Plus, Search, Users } from "lucide-react";
 import { toast } from "sonner";
-import { PAGE_CONTAINER } from "@/lib/layout";
+import { PAGE } from "@/lib/layout";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/command-palette";
 import { VIEWS } from "@/lib/view";
@@ -220,7 +220,7 @@ export function Referrals({
 
   return (
     <div
-      className={`${PAGE_CONTAINER} pt-5 pb-24 min-[700px]:pt-7`}
+      className={PAGE}
       aria-busy={pending}
     >
       <div className="flex flex-wrap items-center justify-end gap-3">
@@ -518,7 +518,7 @@ export function Referrals({
         }}
         actions={VIEWS.map((v) => ({
           id: v.id,
-          label: "Go to " + v.label,
+          label: v.paletteLabel,
           icon: <v.icon className="size-4" />,
           run: () => router.push(v.href),
         }))}

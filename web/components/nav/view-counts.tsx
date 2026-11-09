@@ -9,57 +9,65 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { NavCounts } from "@/lib/view";
 
 /**
  * Counts the header's pill nav shows next to Matches, Tracker and Inbox.
  *
- * Inbox's pending count comes from the layout's one getHealth call, so it is
- * known on every page. Matches and Tracker counts live in the `/` page's data,
- * which the layout never sees: the surfaces publish them upward through
- * `usePublishViewCount`, and the provider keeps the last value, so after one
- * visit to `/` the counts stay on the nav while you are on Inbox or Settings.
- * A page loaded cold away from `/` shows no Matches/Tracker count until then
- * (the pill renders without one rather than a wrong zero).
+ * The app layout computes all three on the server for every screen (Inbox
+ * from getHealth, Matches and Tracker via lib/app-data.ts) and seeds this
+ * provider with them, so a cold load of Settings still shows them. The `/`
+ * surfaces then override with live numbers through `usePublishViewCount` -
+ * Triage republishes as rows are hidden, AppViews publishes Tracker - and an
+ * override outlives the surface, so the nav keeps the newest number while you
+ * move to Inbox. A fresh seed (a refresh re-renders the layout) drops the
+ * overrides: it is newer than anything published before it.
  */
 
 type CountKey = "matches" | "tracker";
-type Counts = Partial<Record<CountKey, number>>;
+type Seed = Partial<Record<CountKey, number>>;
 
-const InboxPendingContext = createContext(0);
 const CountsContext = createContext<{
-  counts: Counts;
+  counts: NavCounts;
   publish: (key: CountKey, n: number) => void;
-}>({ counts: {}, publish: () => {} });
+}>({ counts: { inbox: 0 }, publish: () => {} });
 
-export function InboxPendingProvider({
-  value,
+export function ViewCountsProvider({
+  inboxPending,
+  seed,
   children,
 }: {
-  value: number;
+  inboxPending: number;
+  /** Server-computed Matches/Tracker counts; absent when the read failed. */
+  seed: Seed;
   children: ReactNode;
 }) {
-  const [counts, setCounts] = useState<Counts>({});
+  const [state, setState] = useState<{ seed: Seed; published: Seed }>({ seed, published: {} });
+  if (state.seed.matches !== seed.matches || state.seed.tracker !== seed.tracker) {
+    // Adjusting state during render: a new seed supersedes older overrides.
+    setState({ seed, published: {} });
+  }
   const publish = useCallback((key: CountKey, n: number) => {
-    setCounts((prev) => (prev[key] === n ? prev : { ...prev, [key]: n }));
+    setState((prev) =>
+      prev.published[key] === n ? prev : { ...prev, published: { ...prev.published, [key]: n } }
+    );
   }, []);
-  const ctx = useMemo(() => ({ counts, publish }), [counts, publish]);
-  return (
-    <InboxPendingContext.Provider value={value}>
-      <CountsContext.Provider value={ctx}>{children}</CountsContext.Provider>
-    </InboxPendingContext.Provider>
+  const ctx = useMemo(
+    () => ({
+      counts: { ...state.seed, ...state.published, inbox: inboxPending },
+      publish,
+    }),
+    [state, inboxPending, publish]
   );
+  return <CountsContext.Provider value={ctx}>{children}</CountsContext.Provider>;
 }
 
-export function useInboxPending(): number {
-  return useContext(InboxPendingContext);
-}
-
-/** The last published Matches/Tracker counts (undefined until published). */
-export function useViewCounts(): Counts {
+/** Matches/Tracker (undefined while unknown) and the inbox's pending count. */
+export function useViewCounts(): NavCounts {
   return useContext(CountsContext).counts;
 }
 
-/** Publish a surface's count to the header nav whenever it changes. */
+/** Publish a surface's live count to the header nav whenever it changes. */
 export function usePublishViewCount(key: CountKey, n: number | undefined) {
   const { publish } = useContext(CountsContext);
   useEffect(() => {

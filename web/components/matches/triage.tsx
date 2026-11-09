@@ -73,7 +73,7 @@ import {
 import { SegmentedPills, type PillOption } from "@/components/filter-pills";
 import { usePublishViewCount } from "@/components/nav/view-counts";
 import { composeMatchesHeading, isAddedOn } from "@/lib/headline";
-import { PAGE_CONTAINER } from "@/lib/layout";
+import { PAGE_WITH_DOCK } from "@/lib/layout";
 import {
   ResumeReportDialog,
   type RebuildOpts,
@@ -108,6 +108,7 @@ import {
   formatUrlState,
   isPrimaryTerm,
   isUnwatched,
+  liveMatchCount,
   orderTerms,
   resolveOpen,
   sortLabel,
@@ -281,8 +282,15 @@ export function Triage({
   initialView = DEFAULT_URL_STATE,
   initialSelected,
   wantedTerms = null,
+  todayIso,
 }: {
   rows: TriageRow[];
+  /**
+   * Today as a UTC day ("YYYY-MM-DD"), read once on the server. `added` is a
+   * UTC day too, so the header's "new today" compares like with like, and
+   * the server and client render the same headline.
+   */
+  todayIso: string;
   /**
    * Terms Settings > Preferences wants today. Rows in a known term outside
    * this set (Fall 2026 after it started, a term switched off) stay out of
@@ -583,9 +591,13 @@ export function Triage({
   const activeOpen = resolveOpen(openShort, visible);
   if (openShort !== activeOpen) setOpenShort(null);
 
-  const liveCount = useMemo(() => scoped.filter((r) => !r.dismissed).length, [scoped]);
-  // The header nav's Matches count (it used to ride this surface's own
-  // view switch): live matches in watched terms, whatever the filters.
+  // The header nav's Matches count: live matches in the terms this list is
+  // showing, whatever the filters. The only publisher of it - the layout's
+  // server seed uses the same definition (matches-lib liveMatchCount).
+  const liveCount = useMemo(
+    () => liveMatchCount(rows, wantedTerms, showUnwatched),
+    [rows, wantedTerms, showUnwatched]
+  );
   usePublishViewCount("matches", liveCount);
 
   /* View state in the URL: ?filter= ?term= ?sort= ?open=, replacing the
@@ -1222,7 +1234,6 @@ export function Triage({
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && visible.length === 0;
   const today = todayLocal();
-  const todayIso = `${today.y}-${String(today.m).padStart(2, "0")}-${String(today.d).padStart(2, "0")}`;
 
   /* The page header's label and headline, from the rows the table shows. */
   const heading = (() => {
@@ -1266,7 +1277,7 @@ export function Triage({
   return (
     <div
       ref={rootRef}
-      className={cn(PAGE_CONTAINER, "pt-5 pb-32 min-[700px]:pt-7")}
+      className={PAGE_WITH_DOCK}
     >
       {/* Page header: a mono label and a headline composed from the rows on
           screen (lib/headline.ts), with the status and term groups on the
@@ -1276,14 +1287,10 @@ export function Triage({
           in its own row. */}
       <div className="mb-[18px] flex flex-wrap items-end justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-2">
-          <div
-            suppressHydrationWarning
-            className="font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase"
-          >
+          <div className="font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase">
             {heading.label}
           </div>
           <h1
-            suppressHydrationWarning
             className="m-0 text-[28px] leading-[1.05] font-semibold tracking-[-0.03em] text-ink min-[700px]:text-[40px]"
           >
             {heading.headline}
@@ -1308,7 +1315,7 @@ export function Triage({
             options={statusPills}
             value={filter}
             onChange={(key) => setFilter(key as StatusFilter)}
-            className="self-start"
+            className="min-[700px]:self-start"
           />
           <SegmentedPills
             label="Filter by term"
@@ -1316,7 +1323,7 @@ export function Triage({
             options={termPills}
             value={activeTerm}
             onChange={setTermFilter}
-            className="self-start"
+            className="min-[700px]:self-start"
           />
         </div>
       </div>

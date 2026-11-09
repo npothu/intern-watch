@@ -1,7 +1,8 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { fetchProfile } from "./profile-actions";
 import { ProfileEditor } from "@/components/profile/profile-editor";
-import { PAGE_CONTAINER } from "@/lib/layout";
+import { PAGE } from "@/lib/layout";
+import { LoadedAt } from "@/components/loaded-at";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,8 @@ export default async function ProfilePage() {
   // down - the editor's empty state invites re-seeding from scratch.
   const data = res.ok ? res.data ?? null : null;
   return (
-    <div className={`${PAGE_CONTAINER} pt-5 pb-24 min-[700px]:pt-7`}>
+    <div className={PAGE}>
+      <LoadedAt />
       <div className="mb-4">
         <h1 className="text-[15px] font-semibold text-ink">Resume profile</h1>
       </div>

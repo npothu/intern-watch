@@ -4,11 +4,9 @@ import { Triage } from "@/components/matches/triage";
 import { Tracker } from "@/components/tracker/tracker";
 import { useSearchParams } from "next/navigation";
 import { useAppView } from "@/lib/view";
-import { PAGE_CONTAINER } from "@/lib/layout";
-import { cn } from "@/lib/utils";
+import { PAGE } from "@/lib/layout";
 import { usePublishViewCount } from "@/components/nav/view-counts";
-import { parseUrlState, splitUnwatched } from "@/components/matches/matches-lib";
-import { useMemo } from "react";
+import { parseUrlState } from "@/components/matches/matches-lib";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
 
@@ -29,29 +27,25 @@ export function AppViews({
   matches,
   applications,
   wantedTerms,
+  todayIso,
 }: {
   matches: TriageRow[];
   applications: TrackerRow[];
   /** Terms the preferences want today; null when unknown (nothing hidden). */
   wantedTerms: string[] | null;
+  /** The UTC day the server read this at, for "new today" (lib/headline.ts). */
+  todayIso: string;
 }) {
   const { view, job } = useAppView();
   const params = useSearchParams();
-  // The header nav's counts. Matches starts from the server rows (live, in
-  // watched terms - Triage's own definition) so a cold load on the tracker
-  // view still shows it; Triage then republishes as hides change it.
+  // The header nav's Tracker count. Matches has a single publisher, Triage,
+  // which knows whether unwatched terms are being shown; the layout seeds
+  // both on the server for every screen.
   usePublishViewCount("tracker", applications.length);
-  usePublishViewCount(
-    "matches",
-    useMemo(
-      () => splitUnwatched(matches, wantedTerms).watched.filter((r) => !r.dismissed).length,
-      [matches, wantedTerms]
-    )
-  );
 
   if (view === "tracker") {
     return (
-      <div className={cn(PAGE_CONTAINER, "pt-5 pb-5 min-[700px]:pt-7")}>
+      <div className={PAGE}>
         <Tracker key={job ?? "tracker"} rows={applications} initialSelected={job} />
       </div>
     );
@@ -66,6 +60,7 @@ export function AppViews({
       initialSelected={job}
       initialView={parseUrlState(params)}
       wantedTerms={wantedTerms}
+      todayIso={todayIso}
     />
   );
 }

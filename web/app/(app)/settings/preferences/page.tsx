@@ -1,6 +1,7 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { getHealth, getWatchSettings } from "@/lib/convex";
-import { PAGE_CONTAINER } from "@/lib/layout";
+import { FORM_COLUMN } from "@/lib/layout";
+import { LoadedAt } from "@/components/loaded-at";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { Preferences } from "@/components/settings/preferences";
 
@@ -35,8 +36,8 @@ export default async function PreferencesPage() {
   const todayIso = new Date(nowMs).toISOString().slice(0, 10);
 
   return (
-    // The shared column, with every child capped at the form's 640px.
-    <div className={`${PAGE_CONTAINER} pt-5 pb-24 *:max-w-[640px] min-[700px]:pt-7`}>
+    <div className={FORM_COLUMN}>
+      <LoadedAt />
       <div className="mb-4">
         <h1 className="text-[15px] font-semibold text-ink">Settings</h1>
       </div>

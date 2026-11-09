@@ -1,32 +1,24 @@
 "use client";
 
-// The header's pill nav: Matches, Tracker, Inbox, Profile, Referrals in one
-// bordered rounded container, the active pill filled ink. Replaces the old
-// icon view switch (view-switch.tsx), which every surface used to render in
-// its own first row; the header now owns navigation on every screen.
+// The header's pill nav: the `nav` entries of the view registry (lib/view.ts
+// VIEWS - Matches, Tracker, Inbox, Profile, Referrals) in one bordered rounded
+// container, the active pill filled ink. The header owns navigation on every
+// screen; no surface renders its own switch any more.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { useAppView, viewHref, type AppView } from "@/lib/view";
-import { useInboxPending, useViewCounts } from "./view-counts";
+import { useAppView, VIEWS, type AppView, type DestId } from "@/lib/view";
+import { useViewCounts } from "./view-counts";
 
-type NavId = AppView | "inbox" | "profile" | "referrals";
+const NAV = VIEWS.filter((v) => v.nav);
 
-const NAV: { id: NavId; label: string; href: string }[] = [
-  { id: "matches", label: "Matches", href: viewHref("matches") },
-  { id: "tracker", label: "Tracker", href: viewHref("tracker") },
-  { id: "inbox", label: "Inbox", href: viewHref("inbox") },
-  { id: "profile", label: "Profile", href: "/profile" },
-  { id: "referrals", label: "Referrals", href: viewHref("referrals") },
-];
-
-function activeNav(pathname: string, view: AppView): NavId | null {
+function activeDest(pathname: string, view: AppView): DestId | null {
   if (pathname === "/") return view;
-  if (pathname.startsWith("/inbox")) return "inbox";
-  if (pathname.startsWith("/profile")) return "profile";
-  if (pathname.startsWith("/referrals")) return "referrals";
-  return null; // Settings and the dev pages have no pill
+  // Longest-prefix match against the registry's routes (Settings has no pill,
+  // so it simply never matches one).
+  const hit = NAV.find((v) => v.href !== "/" && !v.href.includes("?") && pathname.startsWith(v.href));
+  return hit?.id ?? null;
 }
 
 export function AppNav({
@@ -42,29 +34,21 @@ export function AppNav({
   const pathname = usePathname();
   const { view, show } = useAppView();
   const counts = useViewCounts();
-  const inboxPending = useInboxPending();
-  const active = activeNav(pathname, view);
+  const active = activeDest(pathname, view);
 
   return (
     <nav
       aria-label="Views"
       className={cn(
         row
-          ? "no-scrollbar flex items-center gap-1.5 overflow-x-auto px-4 pt-0.5 pb-2.5"
+          ? "no-scrollbar flex items-center gap-1.5 overflow-x-auto px-4 pt-2.5 pb-1"
           : "flex items-center gap-0.5 rounded-full border border-line bg-surface p-[3px]",
         className
       )}
     >
       {NAV.map((item) => {
         const isActive = item.id === active;
-        const count =
-          item.id === "matches"
-            ? counts.matches
-            : item.id === "tracker"
-              ? counts.tracker
-              : item.id === "inbox" && inboxPending > 0
-                ? inboxPending
-                : undefined;
+        const count = item.count?.(counts);
         return (
           <Link
             key={item.id}
@@ -93,11 +77,7 @@ export function AppNav({
               <span
                 className={cn(
                   "font-mono text-[11px] tabular-nums",
-                  isActive
-                    ? "opacity-80"
-                    : item.id === "inbox"
-                      ? "text-amber"
-                      : "text-ink-2"
+                  isActive ? "opacity-80" : item.countTone === "amber" ? "text-amber" : "text-ink-2"
                 )}
               >
                 {count}

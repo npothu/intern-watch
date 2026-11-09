@@ -2,7 +2,15 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { LayoutList, ListChecks, Mail, Users, type LucideIcon } from "lucide-react";
+import {
+  FileText,
+  LayoutList,
+  ListChecks,
+  Mail,
+  Settings,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * Which of the app's top-level surfaces is on screen.
@@ -31,13 +39,16 @@ import { LayoutList, ListChecks, Mail, Users, type LucideIcon } from "lucide-rea
  *
  * Inbox and Referrals use separate routes and fetch their own data.
  * `ViewId` is the union of the views the `t` shortcut cycles through
- * (components/nav/view-cycle.tsx); the header's pill nav
- * (components/nav/app-nav.tsx) adds Profile on top. `AppView` stays the
- * narrower matches/tracker pair that `/` itself switches between.
+ * (components/nav/view-cycle.tsx); `DestId` adds Profile and Settings, the
+ * rest of the registry (`VIEWS`). `AppView` stays the narrower
+ * matches/tracker pair that `/` itself switches between.
  */
 
 export type AppView = "matches" | "tracker";
 export type ViewId = AppView | "inbox" | "referrals";
+/** Every destination in the registry: the cycled views plus Profile and
+ *  Settings, which you visit on purpose rather than cycle through. */
+export type DestId = ViewId | "profile" | "settings";
 
 const VIEW_PARAM = "view";
 const FILTER_PARAM = "filter";
@@ -45,10 +56,12 @@ const FILTER_PARAM = "filter";
 /** The route that owns both views. Everything else is a real navigation. */
 const APP_PATH = "/";
 
-/** The canonical, directly-linkable URL for a view. */
-export function viewHref(view: ViewId, filter?: string): string {
+/** The canonical, directly-linkable URL for a destination. */
+export function viewHref(view: DestId, filter?: string): string {
   if (view === "inbox") return "/inbox";
   if (view === "referrals") return "/referrals";
+  if (view === "profile") return "/profile";
+  if (view === "settings") return "/settings";
   const params = new URLSearchParams();
   if (view === "tracker") params.set(VIEW_PARAM, "tracker");
   if (filter) params.set(FILTER_PARAM, filter);
@@ -56,26 +69,67 @@ export function viewHref(view: ViewId, filter?: string): string {
   return query ? `${APP_PATH}?${query}` : APP_PATH;
 }
 
+/** The counts the header nav can show (components/nav/view-counts.tsx). */
+export type NavCounts = { matches?: number; tracker?: number; inbox: number };
+
 /** One row in the shared navigation registry. */
 export type ViewEntry = {
-  id: ViewId;
+  id: DestId;
   label: string;
   icon: LucideIcon;
   href: string;
+  /** Gets a pill in the header nav. */
+  nav: boolean;
+  /** Part of the `t` cycle (components/nav/view-cycle.tsx). */
+  cycle: boolean;
+  /** The command palette's wording for going there. */
+  paletteLabel: string;
+  /** The pill's count, if it has one right now. */
+  count?: (c: NavCounts) => number | undefined;
+  /** An inactive pill's count in amber (it wants attention). */
+  countTone?: "amber";
 };
 
-// Matches -> LayoutList and Tracker -> ListChecks already name these two
-// surfaces in the command palette ("Go to Matches" / "Go to Tracker"); reusing
-// them here keeps one icon vocabulary instead of inventing a second.
+const entry = (
+  id: DestId,
+  label: string,
+  icon: LucideIcon,
+  rest: Partial<Omit<ViewEntry, "id" | "label" | "icon" | "href">> = {}
+): ViewEntry => ({
+  id,
+  label,
+  icon,
+  href: viewHref(id),
+  nav: true,
+  cycle: true,
+  paletteLabel: `Go to ${label}`,
+  ...rest,
+});
+
+/**
+ * The one navigation registry: the header's pill nav, the shell's fallback
+ * palette, the referrals palette and the `t` cycle all derive from it.
+ * Matches -> LayoutList and Tracker -> ListChecks match the icons the
+ * surfaces' own palettes use for the same moves.
+ */
 export const VIEWS: ViewEntry[] = [
-  { id: "matches", label: "Matches", icon: LayoutList, href: viewHref("matches") },
-  { id: "tracker", label: "Tracker", icon: ListChecks, href: viewHref("tracker") },
-  { id: "inbox", label: "Inbox", icon: Mail, href: viewHref("inbox") },
-  { id: "referrals", label: "Referrals", icon: Users, href: viewHref("referrals") },
+  entry("matches", "Matches", LayoutList, { count: (c) => c.matches }),
+  entry("tracker", "Tracker", ListChecks, { count: (c) => c.tracker }),
+  entry("inbox", "Inbox", Mail, {
+    count: (c) => (c.inbox > 0 ? c.inbox : undefined),
+    countTone: "amber",
+  }),
+  entry("profile", "Profile", FileText, { cycle: false }),
+  entry("referrals", "Referrals", Users),
+  entry("settings", "Settings", Settings, {
+    nav: false,
+    cycle: false,
+    paletteLabel: "Open Settings",
+  }),
 ];
 
 /** Cycle order for the `t` shortcut (components/nav/view-cycle.tsx). */
-export const VIEW_ORDER: ViewId[] = VIEWS.map((v) => v.id);
+export const VIEW_ORDER: ViewId[] = VIEWS.filter((v) => v.cycle).map((v) => v.id as ViewId);
 
 /** The view after `current` in cycle order; wraps, and treats "no current
  *  view" (e.g. on Resume, which has no cell) as if it were one step before

@@ -58,7 +58,15 @@ export type PaletteAction = {
 
 const MAX_JUMPS = 6;
 
-/** Surface palettes currently mounted; the shell's fallback defers to them. */
+/**
+ * Surface palettes currently mounted; the shell's fallback defers to them.
+ * A module counter rather than context: the fallback lives in the layout's
+ * header and the surface palettes in the page, sibling subtrees whose only
+ * shared ancestor is the layout's provider; carrying a flag through it means
+ * state in the layout and a header re-render on every surface mount, for a
+ * value nothing renders. It is read
+ * only inside event handlers, never during render, so it cannot tear.
+ */
 let surfacePalettes = 0;
 
 type Entry =
@@ -100,14 +108,8 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Ctrl/Cmd+K toggles. Registered in the capture phase so it wins over the
-  // triage surface's own window-level key handling, whatever the focus is.
-  // Every open starts from a clean query at the top of the list.
-  //
-  // The same reset runs for OPEN_PALETTE_EVENT, which is how the toolbar's
-  // button opens it. An event rather than lifted state keeps the palette the
-  // sole owner of its open flag, so a trigger can sit anywhere on the page
-  // without threading props to it.
+  // A surface palette registers itself for as long as it is mounted, which
+  // is what the fallback checks before answering (see `surfacePalettes`).
   useEffect(() => {
     if (fallback) return;
     surfacePalettes += 1;
@@ -116,6 +118,14 @@ export function CommandPalette({
     };
   }, [fallback]);
 
+  // Ctrl/Cmd+K toggles. Registered in the capture phase so it wins over the
+  // triage surface's own window-level key handling, whatever the focus is.
+  // Every open starts from a clean query at the top of the list.
+  //
+  // The same reset runs for OPEN_PALETTE_EVENT, which is how the header's
+  // search button opens it. An event rather than lifted state keeps the
+  // palette the sole owner of its open flag, so a trigger can sit anywhere on
+  // the page without threading props to it.
   useEffect(() => {
     const reset = (next: boolean | ((v: boolean) => boolean)) => {
       setOpen(next);

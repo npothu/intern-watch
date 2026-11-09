@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { PAGE_CONTAINER } from "@/lib/layout";
+import { utcDayIso } from "@/lib/headline";
 import { Triage } from "@/components/matches/triage";
 import { MotionPreviewToggle } from "@/components/motion-preview";
 import type { TriageRow } from "@/app/(app)/page";
@@ -69,7 +70,7 @@ export default function MotionLabPage() {
       <div className={`${PAGE_CONTAINER} pt-5`}>
         <MotionPreviewToggle />
       </div>
-      <Triage rows={ROWS} demo />
+      <Triage rows={ROWS} demo todayIso={utcDayIso()} />
     </>
   );
 }

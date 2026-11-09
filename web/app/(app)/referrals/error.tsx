@@ -1,11 +1,11 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { PAGE_CONTAINER } from "@/lib/layout";
+import { PAGE } from "@/lib/layout";
 
 export default function ReferralError({ reset }: { reset: () => void }) {
   return (
-    <div className={`${PAGE_CONTAINER} pt-5 pb-24 min-[700px]:pt-7`}>
+    <div className={PAGE}>
       <div
         role="alert"
         className="rounded-md border border-line bg-surface p-5"

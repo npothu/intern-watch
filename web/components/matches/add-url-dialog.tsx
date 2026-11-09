@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { addJobUrl, getIngestStatusAction } from "@/app/(app)/ingest-actions";
 import { useSyncRefresh } from "@/lib/sync-pulse";
+import { addUrlFieldOnOpen } from "@/lib/url";
 
 const POLL_INTERVAL = 1500;
 const POLL_TIMEOUT = 60000;
@@ -86,8 +87,7 @@ export function AddUrlDialog() {
 
   useEffect(() => {
     const onOpen = (e: Event) => {
-      const detail = (e as CustomEvent<string | undefined>).detail;
-      if (typeof detail === "string") setUrl(detail.trim());
+      setUrl(addUrlFieldOnOpen((e as CustomEvent<unknown>).detail));
       setError(null);
       setOpen(true);
     };
@@ -128,9 +128,14 @@ export function AddUrlDialog() {
     void trackIngest(res.ingestId, syncRefresh);
   }
 
+  // Closing by any route (Cancel, Escape, the overlay) drops the typed text,
+  // so the next open starts from its own prefill or empty.
   const handleOpenChange = (v: boolean) => {
     setOpen(v);
-    if (!v) setError(null);
+    if (!v) {
+      setError(null);
+      setUrl("");
+    }
   };
 
   return (
@@ -167,7 +172,7 @@ export function AddUrlDialog() {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => setOpen(false)}
+              onClick={() => handleOpenChange(false)}
               disabled={submitting}
             >
               Cancel

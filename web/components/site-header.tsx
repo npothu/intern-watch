@@ -6,7 +6,8 @@
 // Settings and the user chip. It runs edge to edge (no content-width cap).
 //
 // Below 700px it folds to the phone layout: brand left, a round search button
-// and the avatar right, and the nav as its own horizontally scrolling row. The
+// and the avatar right, then the hairline, and the nav below it as its own
+// horizontally scrolling row. The
 // freshness readout and the Settings link move into the avatar's menu there.
 // Both layouts are server-rendered and CSS picks one, like the Matches table.
 //
@@ -18,17 +19,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import {
-  FileText,
-  LayoutList,
-  ListChecks,
-  Mail,
-  Moon,
-  Search,
-  Settings,
-  Sun,
-  Users,
-} from "lucide-react";
+import { Moon, Search, Settings, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UserChip } from "@/components/user-chip";
 import { AppNav } from "@/components/nav/app-nav";
@@ -40,7 +31,7 @@ import {
 } from "@/components/command-palette";
 import { AddUrlDialog } from "@/components/matches/add-url-dialog";
 import { useSyncPulse } from "@/lib/sync-pulse";
-import { viewHref } from "@/lib/view";
+import { VIEWS } from "@/lib/view";
 import type { TrackerHealth } from "@/lib/convex";
 
 /** "47m" / "3h" / "2d" - compact age for the health line. */
@@ -217,15 +208,21 @@ function Brand() {
   );
 }
 
-/** The design's search "input": really a button that opens the palette. */
+/**
+ * The design's search "input": really a button that opens the palette. At
+ * 1400px and up it takes the design's flex 1 1 240px up to 420px; below that
+ * it narrows (flex 1 1 200px, at most 320px, free to shrink) so the header
+ * stays one row from 1024px.
+ */
 function SearchButton() {
   return (
     <button
       type="button"
       onClick={openCommandPalette}
       aria-label="Search or paste a URL"
+      aria-haspopup="dialog"
       aria-keyshortcuts="Control+K Meta+K"
-      className="flex min-h-[38px] max-w-[420px] flex-[1_1_240px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-line bg-surface py-2 pr-2.5 pl-3.5 text-left text-[13px] text-ink-2 transition-colors hover:border-line-2 focus-visible:border-accent focus-visible:outline-none"
+      className="flex min-h-[38px] max-w-[320px] min-w-0 flex-[1_1_200px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-line bg-surface py-2 pr-2.5 pl-3.5 text-left text-[13px] text-ink-2 transition-colors hover:border-line-2 focus-visible:border-accent focus-visible:outline-none min-[1400px]:max-w-[420px] min-[1400px]:flex-[1_1_240px]"
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <Search aria-hidden className="size-3.5 shrink-0" />
@@ -240,21 +237,40 @@ function SearchButton() {
 
 /**
  * Navigation-only palette for screens without one of their own (Inbox,
- * Profile, Referrals, Settings). Inert while Matches or Tracker is mounted -
- * those palettes carry the same moves plus their row jumps.
+ * Profile, Settings), built from the view registry. Inert while the Matches,
+ * Tracker or Referrals palette is mounted - those carry the same moves plus
+ * their own jumps.
  */
 function ShellPalette() {
   const router = useRouter();
-  const go = (href: string) => () => router.push(href);
-  const actions: PaletteAction[] = [
-    { id: "matches", label: "Go to Matches", icon: <LayoutList className="size-4" />, run: go(viewHref("matches")) },
-    { id: "tracker", label: "Go to Tracker", icon: <ListChecks className="size-4" />, run: go(viewHref("tracker")) },
-    { id: "inbox", label: "Go to Inbox", icon: <Mail className="size-4" />, run: go(viewHref("inbox")) },
-    { id: "profile", label: "Go to Profile", icon: <FileText className="size-4" />, run: go("/profile") },
-    { id: "referrals", label: "Go to Referrals", icon: <Users className="size-4" />, run: go(viewHref("referrals")) },
-    { id: "settings", label: "Open Settings", icon: <Settings className="size-4" />, run: go("/settings") },
-  ];
+  const actions: PaletteAction[] = VIEWS.map((v) => ({
+    id: v.id,
+    label: v.paletteLabel,
+    icon: <v.icon className="size-4" />,
+    run: () => router.push(v.href),
+  }));
   return <CommandPalette fallback jumps={[]} onJump={() => {}} actions={actions} />;
+}
+
+/**
+ * The header's bottom rule, doubling as the sync sweep: keyed by the sync
+ * counter so one pass runs per data load - the first paint and every refresh
+ * after it - and then it sits still as a plain hairline.
+ */
+function SweepRule({ pulse, className }: { pulse: number; className?: string }) {
+  return (
+    <div className={cn("relative h-px overflow-hidden bg-line", className)}>
+      <span
+        key={pulse}
+        aria-hidden
+        className="absolute inset-y-0 left-0 w-[18%]"
+        style={{
+          background: "linear-gradient(90deg, transparent, var(--color-accent), transparent)",
+          animation: "sweep 1.4s ease-in-out .1s 1 both",
+        }}
+      />
+    </div>
+  );
 }
 
 export function SiteHeader({
@@ -269,28 +285,38 @@ export function SiteHeader({
 
   return (
     <header className="relative bg-bg">
-      {/* Desktop and tablet: one wrapping row, edge to edge. */}
-      <div className="hidden flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3 min-[700px]:flex">
-        <div className="min-w-[140px]">
+      {/* Desktop and tablet: one row from 1024px (it may wrap between 700 and
+          1023), edge to edge. Below 1400 the gaps tighten, the search
+          narrows and Settings goes icon-only; below 1100 the freshness text
+          hides behind its refresh button's tooltip. */}
+      <div className="hidden flex-wrap items-center gap-x-4 gap-y-3 px-6 py-3 min-[700px]:flex min-[1024px]:flex-nowrap min-[1400px]:gap-x-6">
+        <div className="shrink-0 min-[1400px]:min-w-[140px]">
           <Brand />
         </div>
-        <AppNav />
+        <AppNav className="shrink-0" />
         <SearchButton />
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <HealthDot health={health} />
-          <FreshnessReadout freshness={freshness} className="mr-1.5" />
+          <FreshnessReadout freshness={freshness} className="min-[1100px]:mr-1.5" />
           <ThemeToggle />
           <Link
             href="/settings"
-            className="inline-flex min-h-9 items-center rounded-full border border-line px-3 font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase transition-colors hover:border-line-2 hover:text-ink"
+            aria-label="Settings"
+            title="Settings"
+            className="inline-flex size-9 items-center justify-center rounded-full border border-line text-ink-2 transition-colors hover:border-line-2 hover:text-ink min-[1400px]:w-auto min-[1400px]:px-3"
           >
-            Settings
+            <Settings aria-hidden className="size-3.5 min-[1400px]:hidden" />
+            <span aria-hidden className="hidden font-mono text-[11px] tracking-[0.06em] uppercase min-[1400px]:inline">
+              Settings
+            </span>
           </Link>
           <UserChip trackerUser={trackerUser} />
         </div>
       </div>
+      <SweepRule pulse={syncPulse} className="hidden min-[700px]:block" />
 
-      {/* Phones: brand + round search + avatar, then the nav as a row. */}
+      {/* Phones (MobileCards.dc.html): brand + round search + avatar, the
+          hairline, then the nav as its own scrolling row below it. */}
       <div className="min-[700px]:hidden">
         <div className="flex items-center justify-between gap-2 px-4 py-2.5">
           <Brand />
@@ -300,6 +326,8 @@ export function SiteHeader({
               type="button"
               onClick={openCommandPalette}
               aria-label="Search or paste a URL"
+              aria-haspopup="dialog"
+              aria-keyshortcuts="Control+K Meta+K"
               className="inline-flex size-[34px] cursor-pointer items-center justify-center rounded-full border border-line bg-surface text-ink-2"
             >
               <Search aria-hidden className="size-3.5" />
@@ -307,24 +335,8 @@ export function SiteHeader({
             <UserChip trackerUser={trackerUser} compact freshness={freshness} />
           </div>
         </div>
+        <SweepRule pulse={syncPulse} />
         <AppNav variant="row" />
-      </div>
-
-      {/* Sync sweep: a hairline track standing in for the header's bottom
-          border, keyed by the sync counter so one pass runs per data load -
-          the first paint and every refresh after it - and then it sits
-          still as a plain rule. */}
-      <div className="relative h-px overflow-hidden bg-line">
-        <span
-          key={syncPulse}
-          aria-hidden
-          className="absolute inset-y-0 left-0 w-[18%]"
-          style={{
-            background:
-              "linear-gradient(90deg, transparent, var(--color-accent), transparent)",
-            animation: "sweep 1.4s ease-in-out .1s 1 both",
-          }}
-        />
       </div>
 
       <ShellPalette />
