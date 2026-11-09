@@ -1,10 +1,10 @@
 "use client";
 
-import { Fragment, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useMemo, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { AlertTriangle, Download, FileSearch, Loader2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useReplay, TICK_POP, TICK_POP_OPTS, CHECK_DRAW, CHECK_DRAW_OPTS } from "@/lib/motion";
-import type { Day } from "@/lib/terms";
+import { dayFromIso } from "@/lib/terms";
 import type { ResumeMeta } from "@/lib/convex";
 import type { TriageRow } from "@/app/(app)/page";
 import { ReferralLink } from "@/components/referrals/referral-link";
@@ -15,6 +15,10 @@ import {
   foundAge,
   isClosed,
   isPrimaryTerm,
+  TIME_SLOT,
+  clockTime,
+  dateTime,
+  dayPart,
   panelFacts,
   reportSummary,
   rowStatus,
@@ -65,7 +69,7 @@ export function MatchesTable({
   openShort,
   cursor,
   wantedTerms,
-  today,
+  todayIso,
   hiding,
   entering,
   rowStyle,
@@ -84,7 +88,8 @@ export function MatchesTable({
   openShort: string | null;
   cursor: string | null;
   wantedTerms: string[] | null;
-  today: Day;
+  /** The server's UTC day ("YYYY-MM-DD"), the one the headline uses. */
+  todayIso: string;
   hiding: ReadonlySet<string>;
   entering: ReadonlySet<string>;
   rowStyle: (index: number) => CSSProperties;
@@ -97,6 +102,7 @@ export function MatchesTable({
   handlers: MatchHandlers;
   empty: ReactNode;
 }) {
+  const today = useMemo(() => dayFromIso(todayIso), [todayIso]);
   const columns: DenseColumn<TriageRow, SortKey>[] = [
     {
       id: "company",
@@ -242,7 +248,7 @@ export function MatchesTable({
         </CollapseShell>
       )}
       renderPanel={(r) => (
-        <MatchPanel row={r} today={today} state={buildStateFor(r)} meta={metaFor(r)} handlers={handlers} />
+        <MatchPanel row={r} todayIso={todayIso} state={buildStateFor(r)} meta={metaFor(r)} handlers={handlers} />
       )}
       empty={empty}
     />
@@ -429,20 +435,20 @@ function ResumeCell({
 /** The open row: facts, worth knowing, actions. */
 function MatchPanel({
   row,
-  today,
+  todayIso,
   state,
   meta,
   handlers,
 }: {
   row: TriageRow;
-  today: Day;
+  todayIso: string;
   state: BuildState;
   meta: ResumeMeta | null;
   handlers: MatchHandlers;
 }) {
   const report = state === "built" ? meta?.report ?? null : null;
   const notes = worthKnowing(row, report);
-  const facts = panelFacts(row, today);
+  const facts = panelFacts(row, todayIso);
   const resumeUrl = state === "built" ? row.resumeUrl : null;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_232px] gap-6 text-[13px] text-ink">
@@ -450,9 +456,8 @@ function MatchPanel({
         {facts.map((f) => (
           <Fragment key={f.label}>
             <dt className={DT}>{f.label}</dt>
-            {/* Times are in the viewer's zone; the server's render may differ. */}
-            <dd className={cn("m-0", f.mono && "font-mono text-[12px]")} suppressHydrationWarning={f.local}>
-              {f.value}
+            <dd className={cn("m-0", f.mono && "font-mono text-[12px]")}>
+              {f.time ? <FactWithTime value={f.value} time={f.time} /> : f.value}
             </dd>
           </Fragment>
         ))}
@@ -586,5 +591,50 @@ function MatchPanel({
         )}
       </div>
     </div>
+  );
+}
+
+const noSubscribe = () => () => {};
+
+/** False on the server and during hydration, true once the client has taken over. */
+function useHydrated(): boolean {
+  return useSyncExternalStore(
+    noSubscribe,
+    () => true,
+    () => false
+  );
+}
+
+/** A fact value with its time spliced in where TIME_SLOT sits. */
+function FactWithTime({ value, time }: { value: string; time: { iso: string; withDate: boolean } }) {
+  const [before, after = ""] = value.split(TIME_SLOT);
+  return (
+    <>
+      {before}
+      <LocalTime iso={time.iso} withDate={time.withDate} />
+      {after}
+    </>
+  );
+}
+
+/**
+ * A time in the viewer's zone. The server cannot know that zone, so it (and
+ * the hydration pass) renders the UTC day alone with a blank of the clock's
+ * width; the client then fills in its own day and clock. The UTC instant
+ * stays in the title either way.
+ */
+function LocalTime({ iso, withDate }: { iso: string; withDate: boolean }) {
+  const hydrated = useHydrated();
+  return (
+    <time dateTime={iso} title={iso} className="tabular-nums">
+      {hydrated ? (
+        withDate ? dateTime(iso) : clockTime(iso)
+      ) : (
+        <>
+          {withDate ? `${dayPart(iso, "UTC")}, ` : ""}
+          <span className="invisible">00:00</span>
+        </>
+      )}
+    </time>
   );
 }

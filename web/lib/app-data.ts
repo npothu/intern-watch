@@ -5,6 +5,7 @@ import {
   getMatches,
   getTicks,
   getWatchSettings,
+  type MatchFacts,
   type MatchItem,
   type ResumeUrls,
 } from "@/lib/convex";
@@ -14,7 +15,7 @@ import { resolvePreferences } from "@/lib/preferences";
 import { dayFromIso } from "@/lib/terms";
 import { utcDayIso } from "@/lib/headline";
 import { buildTrackerRows } from "@/components/tracker/build-rows";
-import { liveMatchCount } from "@/components/matches/matches-lib";
+import { liveMatchCount, sanitizeFacts } from "@/components/matches/matches-lib";
 import type { TriageRow } from "@/app/(app)/page";
 
 /**
@@ -50,7 +51,12 @@ export const loadCore = cache(async (user: string) => {
 
 type Core = Awaited<ReturnType<typeof loadCore>>;
 
-/** The match items as the surface's rows, with ticks and resume URLs folded in. */
+// Only set the key when facts survived, so older rows stay `facts`-free.
+const withFacts = (facts: MatchFacts | undefined) => (facts ? { facts } : {});
+
+/** The match items as the surface's rows, with ticks and resume URLs folded in.
+ *  The watcher's facts pass through sanitizeFacts: malformed members drop. */
+
 export function toTriageRows(core: Core, resumes: ResumeUrls): TriageRow[] {
   const ticksByShort = new Map(core.ticks.map((t) => [t.short, t]));
   return core.matches.map((m: MatchItem) => {
@@ -81,7 +87,7 @@ export function toTriageRows(core: Core, resumes: ResumeUrls): TriageRow[] {
       hasJobDescription: m.hasJobDescription ?? false,
       // An applied row is the user's call, not a dead link to warn about.
       closed: m.closed === true && !applied,
-      ...(m.facts && typeof m.facts === "object" ? { facts: m.facts } : {}),
+      ...withFacts(sanitizeFacts(m.facts)),
     };
   });
 }

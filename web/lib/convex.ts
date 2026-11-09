@@ -135,25 +135,25 @@ export type MatchItem = {
    *  after its mark keeps the flag - mask it with the applied state. */
   closed?: boolean;
   /** How the watcher decided and delivered this match (written by src/ at
-   *  match time). Absent on rows matched before the producer shipped, and
-   *  every field inside is optional in practice: read defensively. */
-  facts?: MatchFacts;
+   *  match time). Absent on rows matched before the producer shipped. Raw
+   *  from Convex: run it through matches-lib sanitizeFacts before use. */
+  facts?: unknown;
 };
 
 /** The per-match decision facts the watcher records. See MatchItem.facts. */
 export type MatchFacts = {
   /** The source that found it ("jobright-data"). */
-  source: string;
+  source?: string;
   /** Every source that listed it, when more than one did. */
   sources?: string[];
   /** When the posting went up, ISO. */
   postedAt?: string;
   /** How it was sent: emailed on the run that found it, or in a digest. */
-  delivery?: { mode: "immediate" | "digest"; at: string };
+  delivery?: { mode: "immediate" | "digest"; at?: string };
   /** Where the term came from: the title, an LLM read of the description,
    *  or nowhere (accepted because it passes under every wanted term). */
   termSource?: "title" | "llm" | "unresolved";
-  metro?: { name: string; verdict: boolean; source: "rules" | "llm" };
+  metro?: { name: string; verdict: boolean; source?: "rules" | "llm" };
   /** The per-employer top-company verdict; judgedAt is an ISO date. */
   topCompany?: { verdict: boolean; judgedAt: string; source: "list" | "llm" };
   /** The posting needs a clearance the candidate can obtain (kept, not
@@ -790,10 +790,13 @@ export async function getHealth(user: string): Promise<TrackerHealth | null> {
 export type WatcherRun = { at: number; newMatches: number };
 
 /**
- * The watcher's runs over the last day, for the header sparkline. Typed here
- * rather than from convex/_generated: the query ships separately, and until
- * it is deployed (or on any failure) this resolves to [] so the sparkline
- * simply does not draw. Never rejects.
+ * The watcher's runs since `sinceMs` (the query defaults to the last 24h),
+ * for the header sparkline. Like every per-user query it is checked against
+ * the tracker secret, which `post` adds. Typed here rather than from
+ * convex/_generated: the query ships separately, and until it is deployed
+ * (or on any failure) this resolves to [] so the sparkline simply does not
+ * draw. Rows with a non-finite or negative `at` are dropped; a future `at`
+ * is kept (the sparkline clamps it). Never rejects.
  */
 export async function getWatcherRuns(user: string, sinceMs?: number): Promise<WatcherRun[]> {
   try {
@@ -807,6 +810,7 @@ export async function getWatcherRuns(user: string, sinceMs?: number): Promise<Wa
           typeof r === "object" &&
           r !== null &&
           Number.isFinite((r as WatcherRun).at) &&
+          (r as WatcherRun).at >= 0 &&
           Number.isFinite((r as WatcherRun).newMatches)
       )
       .map((r) => ({ at: r.at, newMatches: r.newMatches }))

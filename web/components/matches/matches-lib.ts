@@ -4,7 +4,7 @@
 // all of it is unit tested directly (matches-lib.test.ts).
 
 import type { TriageRow } from "@/app/(app)/page";
-import type { ResumeReport } from "@/lib/convex";
+import type { MatchFacts, ResumeReport } from "@/lib/convex";
 import { compare, dayFromIso, parseTerm, sortTerms, termStart, type Day } from "@/lib/terms";
 import { isKnownTerm } from "@/lib/preferences";
 
@@ -392,12 +392,18 @@ export function clockTime(iso: string | undefined, timeZone?: string): string {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone });
 }
 
+/** "Nov 8" in the viewer's zone (or `timeZone`); "" when it does not parse. */
+export function dayPart(iso: string | undefined, timeZone?: string): string {
+  const d = parseIso(iso);
+  if (!d) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
+}
+
 /** "Nov 8, 06:12" in the viewer's zone (or `timeZone`); "" when it does not parse. */
 export function dateTime(iso: string | undefined, timeZone?: string): string {
   const d = parseIso(iso);
   if (!d) return "";
-  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
-  return `${day}, ${clockTime(iso, timeZone)}`;
+  return `${dayPart(iso, timeZone)}, ${clockTime(iso, timeZone)}`;
 }
 
 /** "Sep 21, 2026" for an ISO date or timestamp, read as UTC; "" when it does not parse. */
@@ -407,53 +413,116 @@ export function isoDate(iso: string | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 }
 
+/* ---------------------------------------------------------- facts shape */
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+const oneOf = <T extends string>(v: unknown, allowed: readonly T[]): v is T =>
+  typeof v === "string" && (allowed as readonly string[]).includes(v);
+
+/**
+ * The watcher's facts as the web can trust them: only well-typed members
+ * survive (strings, string arrays, enum members, booleans; metro needs a
+ * name and a boolean verdict, topCompany a verdict, judgedAt and source,
+ * delivery a known mode), everything else is dropped. Undefined when
+ * nothing survives, so a malformed object reads as an older row.
+ */
+export function sanitizeFacts(raw: unknown): MatchFacts | undefined {
+  if (!isObj(raw)) return undefined;
+  const out: MatchFacts = {};
+  if (isStr(raw.source) && raw.source) out.source = raw.source;
+  if (Array.isArray(raw.sources)) {
+    const sources = raw.sources.filter((s): s is string => isStr(s) && s !== "");
+    if (sources.length) out.sources = sources;
+  }
+  if (isStr(raw.postedAt) && raw.postedAt) out.postedAt = raw.postedAt;
+  const del = raw.delivery;
+  if (isObj(del) && oneOf(del.mode, ["immediate", "digest"] as const)) {
+    out.delivery = isStr(del.at) && del.at ? { mode: del.mode, at: del.at } : { mode: del.mode };
+  }
+  if (oneOf(raw.termSource, ["title", "llm", "unresolved"] as const)) out.termSource = raw.termSource;
+  const metro = raw.metro;
+  if (isObj(metro) && isStr(metro.name) && metro.name && typeof metro.verdict === "boolean") {
+    out.metro = oneOf(metro.source, ["rules", "llm"] as const)
+      ? { name: metro.name, verdict: metro.verdict, source: metro.source }
+      : { name: metro.name, verdict: metro.verdict };
+  }
+  const top = raw.topCompany;
+  if (
+    isObj(top) &&
+    typeof top.verdict === "boolean" &&
+    isStr(top.judgedAt) &&
+    oneOf(top.source, ["list", "llm"] as const)
+  ) {
+    out.topCompany = { verdict: top.verdict, judgedAt: top.judgedAt, source: top.source };
+  }
+  if (typeof raw.clearanceObtainable === "boolean") out.clearanceObtainable = raw.clearanceObtainable;
+  if (oneOf(raw.acceptedBy, ["priority", "rule", "unresolved-all-terms"] as const)) out.acceptedBy = raw.acceptedBy;
+  if (isStr(raw.acceptedRule) && raw.acceptedRule) out.acceptedRule = raw.acceptedRule;
+  return Object.keys(out).length ? out : undefined;
+}
+
 /* ------------------------------------------------------------ panel facts */
+
+/** The token in a PanelFact value where its client-only time goes. */
+export const TIME_SLOT = "{time}";
 
 export type PanelFact = {
   label: string;
+  /** The text; when `time` is set it holds TIME_SLOT where the time goes. */
   value: string;
   /** Mono, smaller: the short key. */
   mono?: boolean;
-  /** Formatted in the viewer's time zone, so the server's render may differ. */
-  local?: boolean;
+  /**
+   * A time to render in the viewer's zone, on the client only (the server
+   * has no idea of the viewer's zone). `iso` is normalized UTC, for the
+   * title; `withDate` adds the day ("Nov 8, 06:14") rather than the clock
+   * alone.
+   */
+  time?: { iso: string; withDate: boolean };
+};
+
+const timeOf = (iso: string | undefined, withDate: boolean): PanelFact["time"] => {
+  const d = parseIso(iso);
+  return d ? { iso: d.toISOString(), withDate } : undefined;
 };
 
 /**
  * The details panel's facts list, in display order, with only the rows that
  * have data: Source, Posted, Metro and Sent come from the watcher's facts
  * (absent on older rows), then Added, Term, Salary, Tag and Key as before.
- * `timeZone` is for tests; the panel formats in the viewer's zone.
+ * `todayIso` is the server's UTC day, the same one the headline counts
+ * "new today" against, so "found Nd ago" agrees with it.
  */
-export function panelFacts(row: TriageRow, today: Day, timeZone?: string): PanelFact[] {
+export function panelFacts(row: TriageRow, todayIso: string): PanelFact[] {
   const out: PanelFact[] = [];
   const f = row.facts;
   if (f?.source) {
-    const others = (f.sources ?? []).filter((s) => s && s !== f.source);
-    const age = foundAge(row.added, today);
+    const others = (Array.isArray(f.sources) ? f.sources : []).filter((s) => isStr(s) && s && s !== f.source);
+    const age = foundAge(row.added, dayFromIso(todayIso));
     const found = age === "—" ? "" : age === "today" ? " · found today" : ` · found ${age} ago`;
     const also = others.length ? ` (also ${others.join(", ")})` : "";
     out.push({ label: "Source", value: `${f.source}${also}${found}` });
   }
-  const posted = dateTime(f?.postedAt, timeZone);
-  if (posted) out.push({ label: "Posted", value: posted, local: true });
+  const posted = timeOf(f?.postedAt, true);
+  if (posted) out.push({ label: "Posted", value: TIME_SLOT, time: posted });
   if (f?.metro?.name) {
     const m = f.metro;
-    out.push({
-      label: "Metro",
-      value: `${m.name} · ${m.verdict ? "in metro" : "outside metro"}${m.source === "llm" ? " · by LLM" : ""}`,
-    });
+    const verdict = typeof m.verdict === "boolean" ? ` · ${m.verdict ? "in metro" : "outside metro"}` : "";
+    out.push({ label: "Metro", value: `${m.name}${verdict}${m.source === "llm" ? " · by LLM" : ""}` });
   }
   const sent = f?.delivery;
-  if (sent && (sent.mode === "immediate" || sent.mode === "digest")) {
-    const value =
-      sent.mode === "immediate"
-        ? clockTime(sent.at, timeZone)
-          ? `Emailed ${clockTime(sent.at, timeZone)}, on the run that found it`
-          : "Emailed on the run that found it"
-        : dateTime(sent.at, timeZone)
-          ? `Digest, ${dateTime(sent.at, timeZone)}`
-          : "Digest";
-    out.push({ label: "Sent", value, local: true });
+  if (sent?.mode === "immediate") {
+    const time = timeOf(sent.at, false);
+    out.push(
+      time
+        ? { label: "Sent", value: `Emailed ${TIME_SLOT}, on the run that found it`, time }
+        : { label: "Sent", value: "Emailed on the run that found it" }
+    );
+  } else if (sent?.mode === "digest") {
+    const time = timeOf(sent.at, true);
+    out.push(time ? { label: "Sent", value: `Digest, ${TIME_SLOT}`, time } : { label: "Sent", value: "Digest" });
   }
   out.push({ label: "Added", value: absoluteDate(row.added) || "—" });
   out.push({ label: "Term", value: row.term || termLabel(UNKNOWN_TERM) });
@@ -487,10 +556,17 @@ export function worthKnowing(
   } else if (row.priority) {
     out.push({ tag: "Note", title: "Priority employer", sub: "On your priority list." });
   }
+  if (f?.acceptedBy === "rule" && f.acceptedRule) {
+    out.push({ tag: "Note", title: "Accepted by rule", sub: f.acceptedRule });
+  }
   if (f?.termSource === "llm") {
     out.push({ tag: "LLM", title: "Term inferred from the description", sub: "No term in the title." });
-  } else if (f?.termSource === "unresolved") {
-    out.push({ tag: "Term", title: "No term stated", sub: "Shown because it passes under every wanted term." });
+  } else if (f?.termSource === "unresolved" || f?.acceptedBy === "unresolved-all-terms") {
+    out.push({
+      tag: "Term",
+      title: row.term ? "Term not resolved" : "No term stated",
+      sub: "Shown because it passes under every wanted term.",
+    });
   } else if (!row.term) {
     out.push({ tag: "Term", title: "No term stated" });
   }
@@ -508,7 +584,7 @@ export function worthKnowing(
   } else if (tagText(row.tag) === "top") {
     out.push({ tag: "Note", title: "Tagged as a top company" });
   }
-  if (f?.metro?.name && f.metro.source === "llm") {
+  if (f?.metro?.name && f.metro.source === "llm" && typeof f.metro.verdict === "boolean") {
     out.push({
       tag: "LLM",
       title: "Metro judged by the LLM",
