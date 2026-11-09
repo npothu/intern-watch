@@ -655,11 +655,12 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         # One row per run for the header sparkline, gated like push_matches:
         # its counts describe the matches table. Best-effort: a lost sparkline
         # point never fails the run (state is saved by the caller either way).
+        run_row = {
+            "at": int(now.timestamp() * 1000),
+            "newMatches": len(accepted), "scanned": len(candidates),
+            "source": os.environ.get("GITHUB_EVENT_NAME") or "local"}
         try:
-            store.put_watch_run(name, {
-                "at": int(now.timestamp() * 1000),
-                "newMatches": len(accepted), "scanned": len(candidates),
-                "source": os.environ.get("GITHUB_EVENT_NAME") or "local"})
+            store.put_watch_run(name, run_row)
         except Exception:  # noqa: BLE001 - display-only history
             log.exception("user %s: watch run record failed", name)
 
