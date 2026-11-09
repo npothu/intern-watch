@@ -179,13 +179,54 @@ _WD_OTHER_REQID_RE = re.compile(r"_((?:[a-z]{1,6}-?)?\d{4,})(?:-\d{1,2})?$", re.
 # ..._2027, ..._Summer-2027, ..._Intern2027 are a calendar year (optionally
 # after a word), not a reqid: two different postings would share the token.
 _WD_YEAR_ONLY_RE = re.compile(r"(?:[a-z]{1,6}-?)?(?:19|20)\d{2}", re.I)
-# jobs.smartrecruiters.com/<Company>/<postingId>[-slug]; the id is numeric
-# or (older postings) a UUID. The UUID branch is tried first: a UUID whose
-# first group is all digits must not be read as an 8-digit id plus a slug.
-_SR_PATH_RE = re.compile(
-    r"^/([^/]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{6,})"
-    r"(?:-[^/]*)?$", re.I)
+# SmartRecruiters: jobs.(or careers.)smartrecruiters.com/<Company>/
+# <postingId>[-slug] and the API's /v1/companies/<Company>/postings/<postingId>
+# name the same posting; the id is numeric or (older postings) a UUID. Token:
+# ats:sr:<company lower>:<id lower>. The UUID alternative goes first: a UUID
+# whose first group is all digits must not be read as an id plus a slug.
+_SR_ID = (r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+          r"|\d{6,})")
+_SR_HOSTS = {"jobs.smartrecruiters.com", "careers.smartrecruiters.com"}
+_SR_PATH_RE = re.compile(r"^/([^/]+)/" + _SR_ID + r"(?:-[^/]*)?$", re.I)
+_SR_API_RE = re.compile(
+    r"^/v1/companies/([^/]+)/postings/" + _SR_ID + r"$", re.I)
 _WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
+# Oracle Recruiting Cloud: requisition ids are per pod and shared by every
+# career site of that pod, so the site segment is not part of the identity.
+# The pod is scoped by its full host (<pod>.fa.<dc>.oraclecloud.com): nothing
+# guarantees a pod label is unique across data centres, and a false join
+# suppresses a delivery. Ids keep their case for the same reason. Some employers front
+# the same pod with their own domain; those are listed explicitly (never
+# guessed) so the two spellings join.
+_ORACLE_PATH_RE = re.compile(
+    r"^/hcmUI/CandidateExperience/[a-z]{2}(?:[-_][a-z]{2})?(?:/sites/[^/]+)?"
+    r"/(?:job|requisitions/preview)/([A-Za-z0-9]+)$", re.I)
+_ORACLE_CUSTOM_PATH_RE = re.compile(
+    r"^/[a-z]{2}(?:[-_][a-z]{2})?/sites/[^/]+/(?:job|requisitions/preview)"
+    r"/([A-Za-z0-9]+)$", re.I)
+_ORACLE_CUSTOM_HOSTS = {
+    "careers.americanexpress.com": "egug.fa.us2.oraclecloud.com"}
+# Eightfold position ids are per tenant (<tenant>.eightfold.ai); employer
+# domains that front a tenant are listed explicitly. Forms: /careers/job/<id>
+# and /careers?pid=<id>.
+_EIGHTFOLD_CUSTOM_HOSTS = {"apply.careers.microsoft.com": "microsoft",
+                           "careers.micron.com": "micron"}
+_EIGHTFOLD_PATH_RE = re.compile(r"^/careers/job/(\d{5,})$")
+# Avature portals: <tenant>.avature.net/<locale>/<portal>/JobDetail/<slug>/<id>
+# or .../JobDetail?jobId=<id>. careers.ibm.com fronts the ibmglobal tenant.
+_AVATURE_CUSTOM_HOSTS = {"careers.ibm.com": "ibmglobal"}
+_AVATURE_PATH_RE = re.compile(r"/JobDetail(?:/[^/]+)?/(\d+)$", re.I)
+# Jibe career sites (iCIMS Attract): <host>/jobs/<req id> or
+# <host>/careers-home/jobs/<req id>. Only hosts known to be Jibe sites: the
+# path shape alone is far too common to trust on an arbitrary domain.
+_JIBE_HOSTS = {"careers.amd.com"}
+# iCIMS portals behind a Jibe site share its req ids (careers.amd.com/jobs/
+# 91238 applies at campus-amd.icims.com/jobs/91238/login), so they get the
+# Jibe token. Listed explicitly, never guessed.
+_ICIMS_JIBE_PORTALS = {"campus-amd": "careers.amd.com"}
+_JIBE_PATH_RE = re.compile(r"^(?:/careers-home)?/jobs/(\d+)(?:/[^/]*)?$")
+# iCIMS portals: <portal>.icims.com/jobs/<id>[/<title-slug>]/job[?in_iframe=1].
+_ICIMS_PATH_RE = re.compile(r"^/jobs/(\d+)(?:/[^/]+)?/(?:job|login)$|^/jobs/(\d+)$")
 # Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
 # so this pattern carries its own optional two-letter locale segment.
 _AMAZON_RE = re.compile(r"^(?:/[a-z]{2})?/jobs/(\d+)(?:/.*)?$", re.I)
@@ -253,14 +294,59 @@ def canonical_url(url: str) -> str | None:
             return f"ats:wd:{tenant}:{m.group(1).upper()}"
         # Workday site paths are case-insensitive (/Search/ == /search/).
         path = path.lower()
-    if host == "jobs.smartrecruiters.com":
-        m = _SR_PATH_RE.match(path)
+    if host in _SR_HOSTS or host == "api.smartrecruiters.com":
+        m = (_SR_PATH_RE if host in _SR_HOSTS else _SR_API_RE).match(path)
         if m:
             return f"ats:sr:{m.group(1).lower()}:{m.group(2).lower()}"
     if host == "apply.workable.com":
         m = _WORKABLE_PATH_RE.match(path)
         if m:
             return f"ats:workable:{m.group(1).lower()}:{m.group(2).upper()}"
+    if host.endswith(".oraclecloud.com"):
+        m = _ORACLE_PATH_RE.match(parts.path.rstrip("/"))
+        if m:
+            return f"ats:oracle:{host}:{m.group(1)}"
+    if host in _ORACLE_CUSTOM_HOSTS:
+        m = _ORACLE_CUSTOM_PATH_RE.match(parts.path.rstrip("/"))
+        if m:
+            return f"ats:oracle:{_ORACLE_CUSTOM_HOSTS[host]}:{m.group(1)}"
+    ef_tenant = (host.split(".", 1)[0] if host.endswith(".eightfold.ai")
+                 else _EIGHTFOLD_CUSTOM_HOSTS.get(host))
+    if host == "app.eightfold.ai":
+        # The shared host names the tenant by ?domain=qualcomm.com; its first
+        # label is the tenant of qualcomm.eightfold.ai. No domain: no token.
+        ef_tenant = next((v.lower().split(".", 1)[0] for k, v in
+                          parse_qsl(parts.query)
+                          if k.lower() == "domain" and "." in v), None)
+    if ef_tenant:
+        m = _EIGHTFOLD_PATH_RE.match(path)
+        if m:
+            return f"ats:eightfold:{ef_tenant}:{m.group(1)}"
+        if path == "/careers":
+            for k, v in parse_qsl(parts.query):
+                if k.lower() == "pid" and v.isascii() and v.isdigit():
+                    return f"ats:eightfold:{ef_tenant}:{v}"
+    av_tenant = (host.split(".", 1)[0] if host.endswith(".avature.net")
+                 else _AVATURE_CUSTOM_HOSTS.get(host))
+    if av_tenant and "/jobdetail" in path.lower():
+        m = _AVATURE_PATH_RE.search(path)
+        if m:
+            return f"ats:avature:{av_tenant}:{m.group(1)}"
+        for k, v in parse_qsl(parts.query):
+            if k.lower() == "jobid" and v.isascii() and v.isdigit():
+                return f"ats:avature:{av_tenant}:{v}"
+    if host in _JIBE_HOSTS:
+        m = _JIBE_PATH_RE.match(path)
+        if m:
+            return f"ats:jibe:{host}:{m.group(1)}"
+    if host.endswith(".icims.com"):
+        m = _ICIMS_PATH_RE.match(path)
+        if m:
+            portal = host.split(".", 1)[0]
+            req = m.group(1) or m.group(2)
+            if portal in _ICIMS_JIBE_PORTALS:
+                return f"ats:jibe:{_ICIMS_JIBE_PORTALS[portal]}:{req}"
+            return f"ats:icims:{portal}:{req}"
     if host == "amazon.jobs":
         m = _AMAZON_RE.match(path)
         if m:

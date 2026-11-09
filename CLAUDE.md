@@ -80,7 +80,9 @@ jobright-ai GitHub README mirrors (SWE / Engineer / PM / **Data-Analysis** —
 Data Scientist roles appear ONLY in Data-Analysis), SimplifyJobs, vanshb03,
 speedyapply, and `ats-boards` (direct Greenhouse/Lever/Ashby JSON APIs for
 ~90 boards in `data/ats_boards.yaml`, refreshed monthly by
-`refresh-boards.yml`).
+`refresh-boards.yml`; plus hand-added `manual: true` / non-probed rows for
+the paged listers -- SmartRecruiters, Oracle CX, Eightfold, IBM, Jibe -- which
+the refresh keeps).
 
 **First sight seeds, it does not deliver** (`src/seeding.py`). The first time
 a source (by `name`) or an ats board (by `<ats>:<slug>`, recorded in
@@ -111,9 +113,16 @@ Known coverage limits:
   supplies the JD, but the employer link is not resolved, so digests keep the
   jobright URL. This is a deliberate operator choice, not a credential leak;
   keep the per-run cap and never use it to list or crawl jobs.
+- SmartRecruiters: `api.smartrecruiters.com/robots.txt` disallows `/` for
+  all bots (it allows `/v1/companies/` only for LinkedInBot). The watcher
+  uses the documented public, unauthenticated Postings API anyway, with an
+  honest bot UA and a few requests per board per run -- an operator choice,
+  at the operator's risk.
 - jobright README rows can be added and removed within ~5 hours (hence the
   2h cron), and repos retain only ~7 days.
-- Employers with proprietary ATSes have no ats-boards backstop.
+- Employers with proprietary ATSes have no ats-boards backstop. Avature
+  portals (bot wall: empty 202), Phenom and bare iCIMS portals have no
+  lister; see the adapters' docstrings for why.
 
 ## Debugging "why did job X (not) show up"
 

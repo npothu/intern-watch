@@ -63,6 +63,9 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    # A run takes ~8-10 min with the paged listers (Oracle/Eightfold read
+    # every page); a hung feed must not hold the concurrency group for 6h.
+    timeout-minutes: 45
     environment: ${{ inputs.environment }}
     concurrency:
       group: watch

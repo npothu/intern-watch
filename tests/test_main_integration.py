@@ -672,3 +672,187 @@ def test_unknown_term_snapshot_does_not_wildcard_content_dedup(monkeypatch, tmp_
     # Run 1 used the 12:00 email slot, so the match waits in the outbox.
     assert key in {it["key"] for it in st.outbox_items(state, "example")} \
         or st.was_notified(state, key, "example")
+
+
+# ------------------------------------------------ JD-fetch cap leaves pending
+
+def test_jd_cap_overflow_stays_pending_unevaluated_then_decides(
+        monkeypatch, tmp_path):
+    import httpx
+    listed = [_job(i) for i in (1, 2, 3)]
+    for j in listed:
+        j.jd_url = f"https://api.example/jd/{j.url.rsplit('/', 1)[1]}"
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [j.model_copy() for j in listed]
+
+    sources = [SourceConfig(name="ok-src", adapter="a")]
+    _wire(monkeypatch, sources, {"ok-src": OkAdapter}, [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setattr(main, "JD_FETCH_CAP", 2)
+    fetched = []
+    real = httpx.Client
+
+    def handler(req):
+        fetched.append(str(req.url))
+        return httpx.Response(200, json={"content": "<p>Paid internship.</p>"})
+
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(handler), **kw))
+
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+
+    assert main.main(["--state-file", str(state_file)]) == 0
+    state = st.load_state(state_file)
+    assert len(fetched) == 2
+    waiting = st.pending_keys(state, "example")
+    assert len(waiting) == 1
+    (late,) = waiting
+    # not evaluated: neither delivered nor queued
+    assert not st.was_notified(state, late, "example")
+    assert late not in {it["key"] for it in st.outbox_items(state, "example")}
+
+    # next run: no new jobs, the pending one gets its JD and is decided
+    assert main.main(["--state-file", str(state_file)]) == 0
+    state = st.load_state(state_file)
+    assert len(fetched) == 3
+    assert st.pending_keys(state, "example") == set()
+    assert (st.was_notified(state, late, "example")
+            or late in {it["key"] for it in st.outbox_items(state, "example")})
+
+
+def test_enrich_jds_cap_takes_oldest_first_and_reports_the_rest(monkeypatch):
+    import httpx
+    jobs = [Job(company="c", title="Intern", url=f"https://x/{k}",
+                jd_url=f"https://api.example/{k}", source="s") for k in "abc"]
+    for j, k in zip(jobs, ("url:a", "url:b", "url:c"), strict=True):
+        j.dedup_key = k
+    state = st.empty_state()
+    st.touch(state, "url:a", ["s"], TODAY)                         # newest
+    st.touch(state, "url:b", ["s"], TODAY - dt.timedelta(days=5))  # oldest
+    st.touch(state, "url:c", ["s"], TODAY - dt.timedelta(days=2))
+    monkeypatch.setattr(main, "JD_FETCH_CAP", 2)
+    real = httpx.Client
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"content": "jd"})), **kw))
+    deferred: list[str] = []
+    assert main.enrich_jds(jobs, state, deferred) == 2
+    assert deferred == ["url:a"]
+    assert jobs[0].description is None and jobs[1].description == "jd"
+
+
+def _jd_cap_run(monkeypatch, tmp_path, feeds, cap=0,
+                jd="<p>Paid internship.</p>"):
+    """Run main once per entry of `feeds` (a list of job lists the stub
+    source returns that run) with JD_FETCH_CAP=cap; returns the state."""
+    import httpx
+    run = {"i": 0}
+
+    class Feed:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today):
+            return [j.model_copy() for j in feeds[run["i"]]]
+
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": Feed}, [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    real = httpx.Client
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, json={"content": jd})), **kw))
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    states = []
+    for i, _ in enumerate(feeds):
+        run["i"] = i
+        monkeypatch.setattr(main, "JD_FETCH_CAP", cap if i == 0 else 80)
+        assert main.main(["--state-file", str(state_file)]) == 0
+        states.append(st.load_state(state_file))
+    return states
+
+
+def _delivered(state, key):
+    return (st.was_notified(state, key, "example")
+            or key in {it["key"] for it in st.outbox_items(state, "example")})
+
+
+def test_jd_deferred_rows_twin_is_held_until_both_are_decided(
+        monkeypatch, tmp_path):
+    ats = _job(1, url="https://boards.greenhouse.io/acme/jobs/777")
+    ats.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/777"
+    twin = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/777")
+    twin.company = ats.company
+    s1, s2 = _jd_cap_run(monkeypatch, tmp_path, [[ats, twin], [ats, twin]])
+    ka, kt = dedup_key(ats), dedup_key(twin)
+    assert ka != kt
+    # run 1: the ATS row waits on its JD and its twin waits with it
+    assert st.pending_keys(s1, "example") == {ka, kt}
+    assert not _delivered(s1, ka) and not _delivered(s1, kt)
+    # run 2: decided together, delivered once
+    assert st.pending_keys(s2, "example") == set()
+    # delivered once: one spelling survives, the other is its dup
+    dups = {k: s2["jobs"][k].get("dup_of") for k in (ka, kt)}
+    assert sorted(v is None for v in dups.values()) == [False, True]
+    survivor = next(k for k, v in dups.items() if v is None)
+    assert set(dups.values()) == {None, survivor}
+    assert _delivered(s2, survivor)
+
+
+def test_jd_deferred_row_that_vanishes_is_still_evaluated_on_relist(
+        monkeypatch, tmp_path):
+    job = _job(1, url="https://boards.greenhouse.io/acme/jobs/888")
+    job.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/888"
+    other = _job(2)
+    s1, s2, s3 = _jd_cap_run(monkeypatch, tmp_path,
+                             [[job], [other], [job]])
+    key = dedup_key(job)
+    assert key in st.pending_keys(s1, "example")
+    assert key in st.pending_keys(s2, "example")      # gone, but not dropped
+    assert key not in st.pending_keys(s3, "example")  # relisted: decided
+    assert _delivered(s3, key)
+    assert "jd_deferred" not in s3["jobs"][key]
+
+
+def test_held_twin_is_decided_with_the_ats_jd_eliminations(
+        monkeypatch, tmp_path):
+    ats = _job(1, url="https://boards.greenhouse.io/acme/jobs/999")
+    ats.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/999"
+    twin = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/999")
+    twin.company = ats.company
+    jd = ("<p>Candidates must hold an active TS/SCI security clearance at "
+          "the time of application.</p>")
+    s1, s2 = _jd_cap_run(monkeypatch, tmp_path, [[ats, twin], [ats, twin]],
+                         jd=jd)
+    ka, kt = dedup_key(ats), dedup_key(twin)
+    assert st.pending_keys(s1, "example") == {ka, kt}
+    # run 2: the ATS row is rejected by its JD, and the twin with it
+    assert st.pending_keys(s2, "example") == set()
+    assert not _delivered(s2, ka) and not _delivered(s2, kt)
+    # the twin's reject is fingerprinted like any reject, so a config change
+    # can recheck it (not seen-and-forgotten)
+    assert s2["jobs"][kt]["rj"]["example"].startswith("elim:")
+    assert s2["jobs"][ka]["rj"]["example"].startswith("elim:")
+
+
+def test_twin_takes_the_longest_jd_of_its_same_canon_rows():
+    from src.filters import UserFilter
+    from src.paths import ROOT
+    url = "https://boards.greenhouse.io/acme/jobs/4242"
+    blurb = _job(1, url=url)
+    blurb.description = "Great internship."
+    full = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/4242")
+    full.description = ("Great internship. Applicants must hold an active "
+                        "TS/SCI security clearance.")
+    twin = _job(3, url="https://boards.greenhouse.io/acme/jobs/4242?gh_src=x")
+    uf = UserFilter(_user_cfg(), ROOT, today=TODAY)
+    kept = main._apply_twin_jds(uf, [blurb, full, twin], [(twin, ["ok"])],
+                                "example", TODAY)
+    assert kept == []
+    assert "TS/SCI" in (twin.description or "")

@@ -111,7 +111,9 @@ def test_boards_yaml_is_loadable_and_clean():
         (Path(__file__).parent.parent / "data" / "ats_boards.yaml")
         .read_text(encoding="utf-8"))["boards"]
     assert len(boards) > 50
-    assert all(b["ats"] in ("greenhouse", "lever", "ashby") for b in boards)
+    from src.adapters.ats_boards import _API, _LISTERS
+    # every row names an ATS the adapter can dispatch
+    assert all(b["ats"] in _API or b["ats"] in _LISTERS for b in boards)
     assert all(b["company"] and b["slug"] for b in boards)
     # the known wrong-company boards stay out
     assert not any(b["slug"] == "linkedin" for b in boards)

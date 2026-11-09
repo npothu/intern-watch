@@ -14,6 +14,7 @@ import datetime as dt
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -70,14 +71,18 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date,
     with httpx.Client(headers=headers,
                       auth=GitHubTokenAuth(token) if token else None) as client:
         for cfg in sources:
+            started = time.monotonic()
             try:
                 adapter = make_adapter(cfg)
                 jobs = adapter.fetch(client, today)
             except Exception as exc:  # noqa: BLE001 - one source never kills the run
                 fails = st.record_source_failure(state, cfg.name, str(exc), today)
-                log.warning("source %s failed (%s) -- skipping, run continues "
-                            "(%d consecutive)", cfg.name, exc, fails)
+                log.warning("source %s failed after %.1fs (%s) -- skipping, run "
+                            "continues (%d consecutive)", cfg.name,
+                            time.monotonic() - started, exc, fails)
                 continue
+            log.info("source %s: %d row(s) in %.1fs", cfg.name, len(jobs),
+                     time.monotonic() - started)
             if not jobs and prev_counts.get(cfg.name, 0) > 0:
                 fails = st.record_source_failure(
                     state, cfg.name,
@@ -103,11 +108,20 @@ JD_FETCH_CAP = 80  # per run; a --backfill burst must not hammer Greenhouse
 RECHECK_JD_MAX_FAILURES = 3  # consecutive failed recheck JD fetches, then stop
 
 
-def enrich_jds(jobs: list[Job]) -> int:
-    """Fetch the JD for jobs carrying a per-job content URL (Greenhouse --
-    Lever/Ashby descriptions arrive inline with the board listing). One small
-    GET per job, new/pending jobs only by construction of the caller's list.
-    Failures leave description None; the filters just see less."""
+def enrich_jds(jobs: list[Job], state: dict | None = None,
+               deferred: list[str] | None = None) -> int:
+    """Fetch the JD for jobs carrying a per-job content URL (Greenhouse,
+    SmartRecruiters, Oracle CX, Eightfold -- Lever/Ashby/Jibe descriptions
+    arrive inline with the board listing). One small GET per job, new/pending
+    jobs only by construction of the caller's list. A fetch that fails leaves
+    description None; the filters just see less.
+
+    At most JD_FETCH_CAP per run, oldest first (state first_seen, then key) so
+    a burst drains in arrival order. The keys over the cap are appended to
+    `deferred`: the caller must leave them pending, NOT evaluate them now --
+    decisions are final, and the clearance / grad-only lines live in the JD."""
+    from .adapters import eightfold
+    from .adapters import oracle_cx as oracle
     from .adapters import smartrecruiters_api as sr
     from .adapters.ats_boards import JD_MAX_CHARS
     from .normalize import strip_html
@@ -115,9 +129,16 @@ def enrich_jds(jobs: list[Job]) -> int:
     targets = [j for j in jobs if j.jd_url and not j.description]
     if not targets:
         return 0
+    jobs_state = (state or {}).get("jobs", {})
+    targets.sort(key=lambda j: (
+        jobs_state.get(j.dedup_key, {}).get("first_seen") or "9999",
+        j.dedup_key))
     if len(targets) > JD_FETCH_CAP:
-        log.info("jd enrichment capped at %d of %d jobs (rest next run)",
-                 JD_FETCH_CAP, len(targets))
+        over = targets[JD_FETCH_CAP:]
+        log.info("jd enrichment capped at %d of %d jobs; %d left pending "
+                 "for next run", JD_FETCH_CAP, len(targets), len(over))
+        if deferred is not None:
+            deferred.extend(j.dedup_key for j in over)
         targets = targets[:JD_FETCH_CAP]
     fetched = 0
     headers = {"User-Agent": "intern-baddie (job alert bot)"}
@@ -130,9 +151,15 @@ def enrich_jds(jobs: list[Job]) -> int:
                 resp.raise_for_status()
                 payload = resp.json()
                 # Greenhouse returns {content: "<html>"}; SmartRecruiters
-                # detail nests the body under jobAd.sections.
+                # detail nests the body under jobAd.sections; the Oracle CX
+                # detail feed under items[0].External*Str; Eightfold under
+                # data.jobDescription.
                 if "jobAd" in payload:
                     body = sr.jd_text(payload)
+                elif oracle.is_detail_payload(payload):
+                    body = oracle.jd_text(payload)
+                elif eightfold.is_detail_payload(payload):
+                    body = eightfold.jd_text(payload)
                 else:
                     body = strip_html(payload.get("content") or "") or None
                 job.description = (body or "")[:JD_MAX_CHARS] or None
@@ -397,6 +424,43 @@ def _drop_url_dupes(state: dict, name: str,
         kept.append((job, reasons))
     # Restore arrival order for stable downstream behavior.
     kept.sort(key=lambda jr: accepted.index(jr))
+    return kept
+
+
+def _apply_twin_jds(uf: UserFilter, candidates: list[Job],
+                    accepted: list[tuple[Job, list[str]]], name: str,
+                    today: dt.date, state: dict | None = None,
+                    ) -> list[tuple[Job, list[str]]]:
+    """An accepted job with no JD whose canonical URL matches a candidate of
+    this run that has one (its ATS twin) takes that JD and is evaluated
+    again, so the clearance / grad-only / unpaid lines that live only in the
+    ATS JD reach it too. A reject here is final, like any reject; any other
+    verdict keeps the earlier accept. Runs after _resolve_employer_urls so a
+    jobright twin carries its employer URL."""
+    jds: dict[str, str] = {}
+    for job in candidates:
+        canon = canonical_url(job.url) if job.description else None
+        # The longest body wins: a short aggregator blurb must not shadow the
+        # full ATS JD that carries the eliminating lines.
+        if canon and len(job.description or "") > len(jds.get(canon, "")):
+            jds[canon] = job.description or ""
+    if not jds:
+        return accepted
+    kept = []
+    for job, reasons in accepted:
+        canon = canonical_url(job.url)
+        if not job.description and canon in jds:
+            job.description = jds[canon]
+            verdict = uf.evaluate(job, today=today)
+            if verdict.status == "reject":
+                log.info("user %s: %s rejected with its twin's JD (%s)", name,
+                         job.dedup_key, "; ".join(verdict.reasons))
+                if state is not None:
+                    # Like any reject: fingerprint it so a config change
+                    # can recheck it (src/recheck.py).
+                    recheck.record(state, uf, job, recheck.stage_of(verdict))
+                continue
+        kept.append((job, reasons))
     return kept
 
 
@@ -727,9 +791,14 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
                  enricher: _JobrightEnricher | None = None,
                  resolver=None, store: TrackerStore | None = None,
-                 listed: dict[str, Job] | None = None) -> None:
+                 listed: dict[str, Job] | None = None,
+                 held_canons: set[str] | None = None) -> None:
     """`listed` (this run's deduped jobs by key) enables the recheck of
-    still-listed rejected jobs; without it only `candidates` are judged."""
+    still-listed rejected jobs; without it only `candidates` are judged.
+    held_canons: canonical URLs of rows deferred over the JD cap this run.
+    An accepted twin of one (e.g. the same posting via an aggregator, with no
+    JD) is held pending too, so both spellings are decided together on the
+    run that has the JD instead of the twin racing ahead."""
     today = now.date()
     # Settings > Watch (hosted store) overlays the yaml: terms window,
     # per-season presets, priority companies, remote, digest time/recipients.
@@ -884,6 +953,24 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # fuzzy content signature for jobs whose url couldn't be canonicalized.
     terms_order = uf.terms_order
     _resolve_employer_urls(accepted, state, resolver)
+    if held_canons:
+        kept = []
+        for job, reasons in accepted:
+            if canonical_url(job.url) in held_canons:
+                if RECHECK_REASON in reasons:
+                    # A recheck stays a recheck: restore a fingerprint that
+                    # never matches (what _accept cleared) instead of making
+                    # it pending, so it is retried under the recheck
+                    # selection and delivery budgets, not as a plain job.
+                    recheck.mark_stale(state, job.dedup_key, name)
+                else:
+                    st.set_pending(state, job.dedup_key, name)
+                log.info("user %s: %s held with its JD-deferred twin", name,
+                         job.dedup_key)
+            else:
+                kept.append((job, reasons))
+        accepted = kept
+    accepted = _apply_twin_jds(uf, candidates, accepted, name, today, state)
     accepted = _drop_url_dupes(state, name, accepted, terms_order, today)
     accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
 
@@ -1498,8 +1585,10 @@ def main(argv: list[str] | None = None) -> int:
     for user_cfg in users:
         relevant |= st.pending_keys(state, user_cfg["name"])
     relevant_jobs = [merged_by_key[k] for k in relevant if k in merged_by_key]
-    enrich_jds(relevant_jobs)
+    jd_deferred: list[str] = []
+    enrich_jds(relevant_jobs, state, jd_deferred)
     infer_terms_from_jds(relevant_jobs, today)
+    jd_wait = set(jd_deferred)
 
     from .adapters.jobright_auth import JobrightSession
     resolver = JobrightSession.from_env()
@@ -1512,14 +1601,35 @@ def main(argv: list[str] | None = None) -> int:
             if key in candidate_keys:
                 continue
             pending_job = merged_by_key.get(key)
+            if (pending_job is None and not st.was_notified(state, key, name)
+                    and state["jobs"].get(key, {}).get("jd_deferred")):
+                # Deferred over the JD cap and never decided: it left the feed
+                # before its slot. Keep it pending so a relist (no longer
+                # "new") is still evaluated; prune drops it in time.
+                continue
             if pending_job is None or st.was_notified(state, key, name):
                 st.clear_pending(state, key, name)  # vanished or already done
             else:
                 candidates.append(pending_job)
+        # Over the JD cap: not evaluated this run, kept pending (and flagged
+        # jd_deferred) so the next run fetches its JD, oldest first, and
+        # decides it then. A candidate decided this run loses the flag.
+        held: set[str] = set()
+        for job in candidates:
+            if job.dedup_key in jd_wait:
+                st.set_pending(state, job.dedup_key, name)
+                state["jobs"].setdefault(job.dedup_key, {})["jd_deferred"] = True
+                canon = canonical_url(job.url)
+                if canon:
+                    held.add(canon)
+            else:
+                state["jobs"].get(job.dedup_key, {}).pop("jd_deferred", None)
+        candidates = [j for j in candidates if j.dedup_key not in jd_wait]
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,
-                         resolver=resolver, listed=merged_by_key)
+                         resolver=resolver, listed=merged_by_key,
+                         held_canons=held)
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()

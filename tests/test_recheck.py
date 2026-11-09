@@ -786,3 +786,29 @@ def test_enricher_counts_attempts_and_stops_rechecks_after_failures(monkeypatch)
     for j in [_job(i + 100, jobright_id=f"{i + 100:024x}") for i in range(3)]:
         enricher.keeps(j)
     assert enricher.fetched == 3 and session.calls == 6
+
+
+def test_recheck_held_with_a_jd_deferred_twin_stays_a_recheck(_no_email):
+    from src.normalize import canonical_url
+    agg = _job(7, "Software Engineer Intern (Masters)")
+    state = _state(agg)
+    _run(_cfg(), state, [], candidates=[agg])            # rejected, recorded
+    assert recheck.get(state, agg.dedup_key, "example")[0] == "elim"
+
+    loosened = _cfg(eliminate={"grad_only": "phd",
+                               "countries_allowed": ["United States"]})
+    # Recheck-eligible, but its ATS twin is deferred by the JD cap this run.
+    main.process_user(loosened, [], state, dry_run=False, now=NOW,
+                      listed={agg.dedup_key: agg},
+                      held_canons={canonical_url(agg.url)})
+    assert st.outbox_items(state, "example") == []
+    # Still a recheck (stale fingerprint), never an ordinary pending job.
+    assert agg.dedup_key not in st.pending_keys(state, "example")
+    assert recheck.get(state, agg.dedup_key, "example") is not None
+
+    # Next run, no hold: it is selected as a recheck again and delivered as one.
+    _run(loosened, state, [agg])
+    box = st.outbox_items(state, "example")
+    assert [i["key"] for i in box] == [agg.dedup_key]
+    assert box[0]["recheck"]
+    assert agg.dedup_key not in st.pending_keys(state, "example")
