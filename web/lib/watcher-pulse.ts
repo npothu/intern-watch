@@ -24,20 +24,28 @@ export type PulseGeometry = {
 
 const round = (n: number) => Math.round(n * 10) / 10;
 
+/** The runs inside the 24h ending at `now`, ascending, future `at` clamped to `now`. */
+function windowRuns(runs: readonly PulseRun[], now: number): PulseRun[] {
+  const start = now - WINDOW_MS;
+  return runs
+    .map((r) => ({ at: Math.min(r.at, now), newMatches: r.newMatches }))
+    .filter((r) => Number.isFinite(r.at) && r.at >= start)
+    .sort((a, b) => a.at - b.at);
+}
+
 /**
- * Maps runs (ascending by `at`) onto the 100x20 box. The window is the 24h
- * ending at the newest run, so the line is a pure function of the data (no
- * clock, so server and client agree) and the dot always sits at the right
- * edge. Height is new matches per run against the day's peak: a run with
- * nothing new sits on the baseline. Null with fewer than two runs in the
- * window - a single point is not a line.
+ * Maps runs onto the 100x20 box. The window is the 24h ending at `now` (the
+ * server's render time, passed in so server and client draw the same line),
+ * and the dot sits at the last run's x, so a watcher that has gone quiet
+ * shows as empty space on the right. A future `at` (clock skew) is clamped
+ * to `now`; input order does not matter. Height is new matches per run
+ * against the window's peak: a run with nothing new sits on the baseline.
+ * Null with fewer than two runs in the window - a single point is not a line.
  */
-export function pulseGeometry(runs: readonly PulseRun[]): PulseGeometry | null {
-  if (runs.length < 2) return null;
-  const last = runs[runs.length - 1].at;
-  const start = last - WINDOW_MS;
-  const inWindow = runs.filter((r) => r.at >= start && r.at <= last);
+export function pulseGeometry(runs: readonly PulseRun[], now: number): PulseGeometry | null {
+  const inWindow = windowRuns(runs, now);
   if (inWindow.length < 2) return null;
+  const start = now - WINDOW_MS;
   const peak = Math.max(1, ...inWindow.map((r) => Math.max(0, r.newMatches)));
   const pts = inWindow.map((r) => ({
     at: r.at,
@@ -45,11 +53,20 @@ export function pulseGeometry(runs: readonly PulseRun[]): PulseGeometry | null {
     y: round(Y_BOTTOM - (Math.max(0, r.newMatches) / peak) * (Y_BOTTOM - Y_TOP)),
   }));
   const fmt = (ps: typeof pts) => ps.map((p) => `${p.x},${p.y}`).join(" ");
-  // The tail starts at the last point before the cutoff, so it joins the line.
-  const firstInTail = pts.findIndex((p) => p.at >= last - TAIL_MS);
-  const tailFrom = Math.min(Math.max(0, firstInTail - 1), pts.length - 2);
+  // The tail is the window's last 6h, from the last point before the cutoff
+  // so it joins the line; at least the final segment.
+  const firstInTail = pts.findIndex((p) => p.at >= now - TAIL_MS);
+  const tailFrom =
+    firstInTail === -1 ? pts.length - 2 : Math.min(Math.max(0, firstInTail - 1), pts.length - 2);
   const end = pts[pts.length - 1];
   return { all: fmt(pts), tail: fmt(pts.slice(tailFrom)), end: { x: end.x, y: end.y } };
+}
+
+/** The newest run's `at` (clamped to `now`), or null without runs. */
+export function lastRunAt(runs: readonly PulseRun[], now: number): number | null {
+  let last: number | null = null;
+  for (const r of runs) if (Number.isFinite(r.at) && (last === null || r.at > last)) last = r.at;
+  return last === null ? null : Math.min(last, now);
 }
 
 /** "0m" / "47m" / "3h" / "2d" since `at`; a future `at` (clock skew) reads "0m". */
@@ -61,10 +78,16 @@ export function sinceLabel(at: number, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-/** The sparkline's accessible name: what the line shows, in words. */
-export function pulseLabel(runs: readonly PulseRun[]): string {
-  const last = runs.length ? runs[runs.length - 1].at : 0;
-  const day = runs.filter((r) => r.at >= last - WINDOW_MS);
+/**
+ * The sparkline's accessible name, in words: the runs and new matches in
+ * the drawn window (the 24h ending at `now`; negative counts read as 0) and
+ * how long before `clock` (default `now`; the client's minute tick) the last
+ * run was.
+ */
+export function pulseLabel(runs: readonly PulseRun[], now: number, clock: number = now): string {
+  const day = windowRuns(runs, now);
   const found = day.reduce((n, r) => n + Math.max(0, r.newMatches), 0);
-  return `Watcher runs, last 24 hours: ${day.length} run${day.length === 1 ? "" : "s"}, ${found} new match${found === 1 ? "" : "es"}`;
+  const last = lastRunAt(runs, now);
+  const ago = last === null ? "" : `, last run ${sinceLabel(last, clock)} ago`;
+  return `Watcher runs, last 24 hours: ${day.length} run${day.length === 1 ? "" : "s"}, ${found} new match${found === 1 ? "" : "es"}${ago}`;
 }

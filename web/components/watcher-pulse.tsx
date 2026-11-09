@@ -2,28 +2,46 @@
 
 import { Suspense, use, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
-import { PULSE_H, PULSE_W, pulseGeometry, pulseLabel, sinceLabel, type PulseRun } from "@/lib/watcher-pulse";
+import {
+  PULSE_H,
+  PULSE_W,
+  lastRunAt,
+  pulseGeometry,
+  pulseLabel,
+  sinceLabel,
+  type PulseRun,
+} from "@/lib/watcher-pulse";
 
 /**
- * The header's watcher sparkline: new matches per run over the last day,
- * the last quarter in accent with a dot at the newest run, then the mono
- * time since that run. The runs arrive as a promise the layout started
- * (lib/convex.ts getWatcherRuns, which never rejects), read inside its own
- * Suspense boundary so the header never waits on it. Fewer than two runs -
- * including the query not being deployed yet - draws nothing. Hidden below
- * 1200px, like the freshness text beside it.
+ * The header's watcher sparkline: new matches per run over the 24h ending
+ * at `now` (the layout's server render time), the last 6h in accent with a
+ * dot at the newest run - so a quiet watcher leaves empty space on the
+ * right - then the mono time since that run. The runs arrive as a promise
+ * the layout started (lib/convex.ts getWatcherRuns, which never rejects),
+ * read inside its own Suspense boundary so the header never waits on it.
+ * Fewer than two runs in the window - including the query not being
+ * deployed yet - draws nothing. Hidden below 1200px, like the freshness text
+ * beside it.
  */
-export function WatcherPulse({ runs, className }: { runs: Promise<PulseRun[]>; className?: string }) {
+export function WatcherPulse({
+  runs,
+  now,
+  className,
+}: {
+  runs: Promise<PulseRun[]>;
+  now: number;
+  className?: string;
+}) {
   return (
     <Suspense fallback={null}>
-      <Pulse runs={runs} className={className} />
+      <Pulse runs={runs} now={now} className={className} />
     </Suspense>
   );
 }
 
 const TICK_MS = 60e3;
 
-/** Minute clock; null on the server so the "since" text never mismatches. */
+/** Minute clock; null on the server and during hydration. */
 function useMinute(): number | null {
   return useSyncExternalStore(
     (onChange) => {
@@ -35,17 +53,21 @@ function useMinute(): number | null {
   );
 }
 
-function Pulse({ runs: promise, className }: { runs: Promise<PulseRun[]>; className?: string }) {
+function Pulse({ runs: promise, now, className }: { runs: Promise<PulseRun[]>; now: number; className?: string }) {
   const runs = use(promise);
   const minute = useMinute();
-  const geo = pulseGeometry(runs);
-  if (!geo) return null;
-  const lastAt = runs[runs.length - 1].at;
-  const since = minute !== null ? sinceLabel(lastAt, minute * TICK_MS) : null;
+  const geo = pulseGeometry(runs, now);
+  const lastAt = lastRunAt(runs, now);
+  if (!geo || lastAt === null) return null;
+  // First paint (server and hydration) measures from the server's render
+  // time, so both agree; the minute tick takes over after that. Never
+  // earlier than `now`, so a slow client clock cannot run the caption back.
+  const clock = minute !== null ? Math.max(now, minute * TICK_MS) : now;
+  const since = sinceLabel(lastAt, clock);
   const absolute =
     minute !== null
       ? new Date(lastAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-      : undefined;
+      : new Date(lastAt).toISOString();
   return (
     <span
       className={cn(
@@ -55,7 +77,7 @@ function Pulse({ runs: promise, className }: { runs: Promise<PulseRun[]>; classN
     >
       <svg
         role="img"
-        aria-label={since ? `${pulseLabel(runs)}; last run ${since} ago` : pulseLabel(runs)}
+        aria-label={pulseLabel(runs, now, clock)}
         viewBox={`0 0 ${PULSE_W} ${PULSE_H}`}
         width={PULSE_W}
         height={PULSE_H}
@@ -72,7 +94,10 @@ function Pulse({ runs: promise, className }: { runs: Promise<PulseRun[]>; classN
         />
         <circle cx={geo.end.x} cy={geo.end.y} r={2.5} fill="var(--color-accent)" />
       </svg>
-      {since && <span title={absolute ? `Last watcher run ${absolute}` : undefined}>{since}</span>}
+      {/* Three characters covers every label ("59m", "47h", "6d"). */}
+      <span className="inline-block w-[3ch]" title={`Last watcher run ${absolute}`}>
+        {since}
+      </span>
     </span>
   );
 }
