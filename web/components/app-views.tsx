@@ -4,6 +4,9 @@ import { Triage } from "@/components/matches/triage";
 import { Tracker } from "@/components/tracker/tracker";
 import { useSearchParams } from "next/navigation";
 import { useAppView } from "@/lib/view";
+import { PAGE_CONTAINER } from "@/lib/layout";
+import { cn } from "@/lib/utils";
+import { usePublishViewCount } from "@/components/nav/view-counts";
 import { parseUrlState } from "@/components/matches/matches-lib";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
@@ -33,13 +36,13 @@ export function AppViews({
 }) {
   const { view, job } = useAppView();
   const params = useSearchParams();
+  // The header nav's Tracker count; Matches publishes its own live count
+  // from Triage, since hides change it.
+  usePublishViewCount("tracker", applications.length);
 
   if (view === "tracker") {
-    // No heading here - Tracker's own first row now opens with the view
-    // switch, which makes a standalone "Tracker" label redundant with the
-    // active cell it sits beside.
     return (
-      <div className="mx-auto w-full max-w-[1060px] px-5 py-5">
+      <div className={cn(PAGE_CONTAINER, "pt-5 pb-5 min-[700px]:pt-7")}>
         <Tracker key={job ?? "tracker"} rows={applications} initialSelected={job} />
       </div>
     );

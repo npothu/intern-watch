@@ -23,7 +23,6 @@ import {
   type PaletteAction,
 } from "@/components/command-palette";
 import { FilterPills, type PillOption } from "@/components/filter-pills";
-import { RefreshControl } from "@/components/refresh-control";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,7 +47,6 @@ import {
 import { CreateApplicationDialog } from "@/components/applications/create-application-dialog";
 import { ApplicationDrawer } from "@/components/tracker/drawer";
 import { useAppView } from "@/lib/view";
-import { ViewSwitch } from "@/components/nav/view-switch";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import {
   GHOST_DAYS,
@@ -892,16 +890,6 @@ export function Tracker({ rows: initialRows, initialSelected }: { rows: TrackerR
 
   return (
     <div>
-      {/* The switch has to lead the first row on every surface or it moves
-          vertically as you switch views. NeedsAttention and Funnel are both
-          data-driven and can be absent, so neither can host it - it gets its
-          own always-present row, pairing with RefreshControl the same way the
-          matches statline does. */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <ViewSwitch active="tracker" count={rows.length} />
-        <RefreshControl className="ml-auto" />
-      </div>
-
       {/* Keep the section available in code, but omit it from the tracker UI. */}
       {SHOW_NEEDS_ATTENTION && (
         <NeedsAttention

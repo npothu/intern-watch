@@ -30,9 +30,10 @@ import { LayoutList, ListChecks, Mail, Users, type LucideIcon } from "lucide-rea
  * alive as an entry point by a redirect in next.config.ts.
  *
  * Inbox and Referrals use separate routes and fetch their own data.
- * `ViewId` is the union of everything that earns a cell in the view
- * switch (components/nav/view-switch.tsx); `AppView` stays the narrower
- * matches/tracker pair that `/` itself switches between.
+ * `ViewId` is the union of the views the `t` shortcut cycles through
+ * (components/nav/view-cycle.tsx); the header's pill nav
+ * (components/nav/app-nav.tsx) adds Profile on top. `AppView` stays the
+ * narrower matches/tracker pair that `/` itself switches between.
  */
 
 export type AppView = "matches" | "tracker";

@@ -1,10 +1,9 @@
-import { ViewSwitch } from "@/components/nav/view-switch";
+import { PAGE_CONTAINER } from "@/lib/layout";
 
 export default function LoadingReferrals() {
   return (
-    <div className="mx-auto max-w-[1060px] px-5 pt-5 pb-24">
-      <ViewSwitch active="referrals" />
-      <p role="status" className="mt-6 text-sm text-ink-2">
+    <div className={`${PAGE_CONTAINER} pt-5 pb-24 min-[700px]:pt-7`}>
+      <p role="status" className="text-sm text-ink-2">
         Loading referrals...
       </p>
     </div>

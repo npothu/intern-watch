@@ -43,7 +43,6 @@ import {
   LayoutList,
   ListChecks,
   Eraser,
-  Search,
   Mail,
   AlertTriangle,
   Users,
@@ -69,20 +68,20 @@ import {
 } from "@/app/(app)/matches-actions";
 import {
   CommandPalette,
-  openCommandPalette,
   type PaletteAction,
 } from "@/components/command-palette";
-import { FilterPills, type PillOption } from "@/components/filter-pills";
-import { RefreshControl } from "@/components/refresh-control";
+import { SegmentedPills, type PillOption } from "@/components/filter-pills";
+import { usePublishViewCount } from "@/components/nav/view-counts";
+import { composeMatchesHeading, isAddedOn } from "@/lib/headline";
+import { PAGE_CONTAINER } from "@/lib/layout";
 import {
   ResumeReportDialog,
   type RebuildOpts,
 } from "@/components/matches/resume-report";
-import { AddUrlDialog } from "./add-url-dialog";
+import { AddUrlButton } from "./add-url-dialog";
 import { ResumeJdPrompt } from "./resume-jd-prompt";
 import { useRouter } from "next/navigation";
 import { useAppView } from "@/lib/view";
-import { ViewSwitch } from "@/components/nav/view-switch";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import type { TriageRow } from "@/app/(app)/page";
 import { sortTerms, todayLocal } from "@/lib/terms";
@@ -269,27 +268,6 @@ function Tags({
     >
       {raw}
     </span>
-  );
-}
-
-/**
- * Pointer affordance for the command palette, which was otherwise reachable
- * only by knowing Ctrl/Cmd+K. Shows the shortcut so the keystroke gets learned
- * rather than replaced.
- */
-function PaletteButton() {
-  return (
-    <button
-      type="button"
-      onClick={openCommandPalette}
-      title="Command palette"
-      aria-label="Open command palette"
-      aria-keyshortcuts="Control+K Meta+K"
-      className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-line-2 bg-surface px-3 text-[13px] font-medium text-ink-2 transition-colors hover:border-ink-2 hover:text-ink focus-visible:border-accent focus-visible:outline-none"
-    >
-      <Search className="size-3.5" />
-      <span className="hidden font-mono text-[10.5px] sm:inline">⌘K</span>
-    </button>
   );
 }
 
@@ -572,7 +550,9 @@ export function Triage({
     () =>
       STATUS_FILTERS.map((f) => ({
         key: f.key,
-        label: f.label,
+        // Sentence case for the segmented group ("To apply"); the keys and
+        // the lib's labels stay as they are.
+        label: f.label.charAt(0).toUpperCase() + f.label.slice(1),
         count: filtered.statusCounts[f.key],
       })),
     [filtered]
@@ -604,6 +584,9 @@ export function Triage({
   if (openShort !== activeOpen) setOpenShort(null);
 
   const liveCount = useMemo(() => scoped.filter((r) => !r.dismissed).length, [scoped]);
+  // The header nav's Matches count (it used to ride this surface's own
+  // view switch): live matches in watched terms, whatever the filters.
+  usePublishViewCount("matches", liveCount);
 
   /* View state in the URL: ?filter= ?term= ?sort= ?open=, replacing the
      history entry so filtering never piles up Back presses. Other params
@@ -1239,6 +1222,20 @@ export function Triage({
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && visible.length === 0;
   const today = todayLocal();
+  const todayIso = `${today.y}-${String(today.m).padStart(2, "0")}-${String(today.d).padStart(2, "0")}`;
+
+  /* The page header's label and headline, from the rows the table shows. */
+  const heading = (() => {
+    if (!hasAnyRows) return { label: "Matches · 0 shown", headline: "No matches yet." };
+    const fresh = visible.filter((r) => isAddedOn(r.added, todayIso));
+    return composeMatchesHeading({
+      shown: visible.length,
+      priority: visible.filter((r) => r.priority).length,
+      newToday: fresh.length,
+      newTodayPriority: fresh.filter((r) => r.priority).length,
+      hidden: filter === "hidden",
+    });
+  })();
 
   const tableHandlers: MatchHandlers = {
     onActivate: toggleDetails,
@@ -1269,53 +1266,65 @@ export function Triage({
   return (
     <div
       ref={rootRef}
-      className="mx-auto w-full max-w-[1060px] px-5 py-5 pb-32"
+      className={cn(PAGE_CONTAINER, "pt-5 pb-32 min-[700px]:pt-7")}
     >
-      {/* The view switch leads the first row - same slot on every surface (see
-          Tracker's own first row, and the /inbox and /profile pages) - with
-          the freshness readout riding its right edge. */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-ink-2 tabular-nums">
-        <ViewSwitch active="matches" count={liveCount} />
-        <RefreshControl className="ml-auto" />
-      </div>
-
-      {/* toolbar - the search spans the row, with the palette trigger and Add
-          URL at its right end. The status pills and term pills share the line
-          underneath, status on the left and terms on the right. */}
-      <div className="mb-2 flex items-center gap-2">
-        <input
-          ref={searchRef}
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search company, title, location…"
-          autoComplete="off"
-          aria-label="Search matches"
-          className="h-[34px] min-w-0 flex-1 rounded-[5px] border border-line-2 bg-surface px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none"
-        />
-        <PaletteButton />
-        <AddUrlDialog />
-      </div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <FilterPills
-          label="Filter by status"
-          options={statusPills}
-          value={filter}
-          onChange={(key) => setFilter(key as StatusFilter)}
-        />
-        <FilterPills
-          label="Filter by term"
-          options={termPills}
-          value={activeTerm}
-          onChange={setTermFilter}
-        />
+      {/* Page header: a mono label and a headline composed from the rows on
+          screen (lib/headline.ts), with the status and term groups on the
+          right. The header's search box opens the palette (jumps, Add URL, a
+          pasted link); the compact input here is the live table filter it
+          cannot be, and `/` still focuses it. On phones each group scrolls
+          in its own row. */}
+      <div className="mb-[18px] flex flex-wrap items-end justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-2">
+          <div
+            suppressHydrationWarning
+            className="font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase"
+          >
+            {heading.label}
+          </div>
+          <h1
+            suppressHydrationWarning
+            className="m-0 text-[28px] leading-[1.05] font-semibold tracking-[-0.03em] text-ink min-[700px]:text-[40px]"
+          >
+            {heading.headline}
+          </h1>
+        </div>
+        <div className="flex max-w-full min-w-0 flex-col items-stretch gap-2 min-[700px]:flex-row min-[700px]:flex-wrap min-[700px]:items-center">
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter matches…"
+            autoComplete="off"
+            aria-label="Filter matches"
+            aria-keyshortcuts="/"
+            className="h-[38px] min-w-0 rounded-full border border-line bg-surface px-3.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none min-[700px]:w-[200px]"
+          />
+          <SegmentedPills
+            label="Filter by status"
+            tone="ink"
+            options={statusPills}
+            value={filter}
+            onChange={(key) => setFilter(key as StatusFilter)}
+            className="self-start"
+          />
+          <SegmentedPills
+            label="Filter by term"
+            tone="accent"
+            options={termPills}
+            value={activeTerm}
+            onChange={setTermFilter}
+            className="self-start"
+          />
+        </div>
       </div>
 
       {!hasAnyRows ? (
         <EmptyState
           title="No matches yet."
           hint="Matches will land here as the watcher finds them - or add a job URL manually."
-          action={<AddUrlDialog />}
+          action={<AddUrlButton />}
         />
       ) : (
         <>
@@ -1437,7 +1446,7 @@ export function Triage({
           switched off) keep their rows out of the way, behind one link, so
           the list and its counts describe only what is being watched. */}
       {unwatchedLive.length > 0 && (
-        <p className="mt-4 text-[12px] text-ink-2">
+        <p className="mt-4 font-mono text-[11px] leading-relaxed tracking-[0.06em] text-ink-2 uppercase">
           {showUnwatched ? (
             <>
               Showing matches from terms you are not watching.{" "}
@@ -1470,6 +1479,7 @@ export function Triage({
         jumps={paletteJumps}
         onJump={paletteJump}
         actions={paletteActions}
+        onFilter={setQuery}
       />
 
       {(() => {
@@ -2090,8 +2100,8 @@ function Dock({
       >
         <span className={kbd}>t</span>
       </DockButton>
-      {/* Below 360px the view-switch key gives way (the switch also heads
-          the page, and `t` still works) so the other eight fit a 320px
+      {/* Below 360px the view-switch key gives way (the header nav also
+          switches views, and `t` still works) so the other eight fit a 320px
           screen. */}
       <Divider className="max-[359px]:hidden" />
       <DockButton

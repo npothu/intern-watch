@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { addJobUrl, getIngestStatusAction } from "@/app/(app)/ingest-actions";
 import { useSyncRefresh } from "@/lib/sync-pulse";
@@ -46,12 +45,55 @@ async function trackIngest(ingestId: string, onLanded: () => void) {
   toast.info("Still fetching — it will appear in your matches when ready.", { id: toastId });
 }
 
+/** Fired on `window` to open the Add URL dialog (see openAddUrl). */
+export const OPEN_ADD_URL_EVENT = "intern-baddie:open-add-url";
+
+/**
+ * Opens the one Add URL dialog the app shell mounts, optionally prefilled -
+ * the command palette calls this with a pasted URL, the empty-state button
+ * with none. An event rather than lifted state, same as the palette's own
+ * opener, so a trigger can live on any page without threading props.
+ */
+export function openAddUrl(url?: string) {
+  window.dispatchEvent(new CustomEvent<string | undefined>(OPEN_ADD_URL_EVENT, { detail: url }));
+}
+
+/** A pill button that opens the shell's Add URL dialog. */
+export function AddUrlButton() {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => openAddUrl()}
+      className="h-8 gap-1.5 rounded-full border-line-2 bg-surface px-3 text-[13px] font-medium"
+    >
+      <Plus className="h-3.5 w-3.5" />
+      Add URL
+    </Button>
+  );
+}
+
+/**
+ * The Add URL dialog itself, with no trigger of its own: mounted once in the
+ * app shell (site-header.tsx) and opened through `openAddUrl`.
+ */
 export function AddUrlDialog() {
   const syncRefresh = useSyncRefresh();
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<string | undefined>).detail;
+      if (typeof detail === "string") setUrl(detail.trim());
+      setError(null);
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_ADD_URL_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ADD_URL_EVENT, onOpen);
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -93,16 +135,6 @@ export function AddUrlDialog() {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 rounded-full border-line-2 bg-surface px-3 text-[13px] font-medium"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add URL
-        </Button>
-      </DialogTrigger>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle className="text-[16px] font-semibold">Add a job URL</DialogTitle>

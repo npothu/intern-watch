@@ -9,8 +9,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Search } from "lucide-react";
+import { Filter, Link2, Plus, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { looksLikeUrl } from "@/lib/url";
+import { openAddUrl } from "@/components/matches/add-url-dialog";
 
 /**
  * Cmd/Ctrl+K command palette, shared by the matches and tracker surfaces.
@@ -25,6 +27,16 @@ import { cn } from "@/lib/utils";
  *
  * The host owns nothing but the data: it hands over the jump targets and the
  * actions, and the palette owns its open state and every key it needs.
+ *
+ * It is also the header's "Search or paste a URL" box: a pasted http(s) URL
+ * collapses the list to one "Add this job URL" entry that opens the shell's
+ * Add URL dialog prefilled, and "Add a job URL" is always on offer as an
+ * action. A host that has a list to narrow (Matches) passes `onFilter`, which
+ * adds a "Filter matches for ..." entry under the jumps.
+ *
+ * Exactly one palette answers Cmd+K: each surface (Matches, Tracker) mounts
+ * its own, and the shell mounts a `fallback` one with navigation only, which
+ * stands down while any surface palette is mounted.
  */
 
 /** One jumpable record (a match row, a tracked application). */
@@ -46,6 +58,9 @@ export type PaletteAction = {
 
 const MAX_JUMPS = 6;
 
+/** Surface palettes currently mounted; the shell's fallback defers to them. */
+let surfacePalettes = 0;
+
 type Entry =
   | { kind: "jump"; id: string; item: PaletteJump }
   | { kind: "action"; id: string; item: PaletteAction };
@@ -66,11 +81,19 @@ export function CommandPalette({
   jumps,
   onJump,
   actions,
+  onFilter,
+  filterLabel = "Filter matches for",
+  fallback = false,
 }: {
   jumps: PaletteJump[];
   /** Called with the chosen jump id; the host moves its own cursor. */
   onJump: (id: string) => void;
   actions: PaletteAction[];
+  /** Apply the typed text as the host's list filter. */
+  onFilter?: (query: string) => void;
+  filterLabel?: string;
+  /** The shell's page-agnostic palette: inert while a surface palette is mounted. */
+  fallback?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -86,40 +109,84 @@ export function CommandPalette({
   // sole owner of its open flag, so a trigger can sit anywhere on the page
   // without threading props to it.
   useEffect(() => {
+    if (fallback) return;
+    surfacePalettes += 1;
+    return () => {
+      surfacePalettes -= 1;
+    };
+  }, [fallback]);
+
+  useEffect(() => {
     const reset = (next: boolean | ((v: boolean) => boolean)) => {
       setOpen(next);
       setQuery("");
       setActive(0);
     };
     const onKey = (e: KeyboardEvent) => {
+      if (fallback && surfacePalettes > 0) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         reset((v) => !v);
       }
     };
-    const onOpen = () => reset(true);
+    const onOpen = () => {
+      if (fallback && surfacePalettes > 0) return;
+      reset(true);
+    };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener(OPEN_PALETTE_EVENT, onOpen);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener(OPEN_PALETTE_EVENT, onOpen);
     };
-  }, []);
+  }, [fallback]);
 
-  const q = query.trim().toLowerCase();
+  const raw = query.trim();
+  const q = raw.toLowerCase();
 
   const entries = useMemo<Entry[]>(() => {
+    const action = (item: PaletteAction): Entry => ({ kind: "action", id: `a:${item.id}`, item });
+    // A pasted job link: the only sensible thing to do with it is ingest it.
+    if (looksLikeUrl(raw)) {
+      return [
+        action({
+          id: "add-url-paste",
+          label: `Add this job URL: ${raw}`,
+          icon: <Link2 className="size-4" />,
+          run: () => openAddUrl(raw),
+        }),
+      ];
+    }
     const jumpHits = (
       q ? jumps.filter((j) => matches(`${j.title} ${j.subtitle}`, q)) : jumps
     ).slice(0, MAX_JUMPS);
-    const actionHits = q
-      ? actions.filter((a) => matches(a.label, q))
-      : actions;
+    const all: PaletteAction[] = [
+      ...actions,
+      {
+        id: "add-url",
+        label: "Add a job URL",
+        icon: <Plus className="size-4" />,
+        run: () => openAddUrl(),
+      },
+    ];
+    const actionHits = q ? all.filter((a) => matches(a.label, q)) : all;
+    const filterHit: PaletteAction[] =
+      q && onFilter
+        ? [
+            {
+              id: "filter",
+              label: `${filterLabel} “${raw}”`,
+              icon: <Filter className="size-4" />,
+              run: () => onFilter(raw),
+            },
+          ]
+        : [];
     return [
       ...jumpHits.map((item): Entry => ({ kind: "jump", id: `j:${item.id}`, item })),
-      ...actionHits.map((item): Entry => ({ kind: "action", id: `a:${item.id}`, item })),
+      ...filterHit.map(action),
+      ...actionHits.map(action),
     ];
-  }, [jumps, actions, q]);
+  }, [jumps, actions, q, raw, onFilter, filterLabel]);
 
   const jumpCount = entries.filter((e) => e.kind === "jump").length;
 
@@ -192,7 +259,7 @@ export function CommandPalette({
               setActive(0);
             }}
             aria-label="Search commands"
-            placeholder="Type a company, term, or page…"
+            placeholder="Search or paste a URL…"
             className="w-full bg-transparent py-1.5 text-sm text-ink outline-none placeholder:text-ink-2/60"
           />
           <button
@@ -249,7 +316,7 @@ export function CommandPalette({
                   ) : (
                     <>
                       <span className="shrink-0 text-ink-2">{entry.item.icon}</span>
-                      <span className="text-ink">{entry.item.label}</span>
+                      <span className="min-w-0 truncate text-ink">{entry.item.label}</span>
                     </>
                   )}
                 </button>
