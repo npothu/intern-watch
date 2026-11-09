@@ -86,6 +86,11 @@ Review these before your first run:
 The example uses Atlanta-specific rules outside summer.
 Adapt those rules and the [company lists](data/) to your search.
 
+Employer boards specific to your own search, such as companies you applied to, go in `data/ats_boards.local.yaml` in your data directory, not in the shared [ats_boards.yaml](data/ats_boards.yaml).
+The file has the same schema, is merged after the shared list, and is gitignored here so it stays out of the public template.
+`python scripts/discover_ats_boards.py --workday` writes the Workday career sites it finds from your applications there.
+In a single-repository setup, remove that line from `.gitignore` if you want the file committed to your private copy.
+
 ### 4. Validate locally
 
 From the repository root:
@@ -188,7 +193,7 @@ Repository years below are the configured names, not a restriction on the terms 
 | Jobright | Public 2026 Software Engineer, Engineer, Product Management, and Data Analysis README mirrors |
 | vanshb03 | `Summer2027-Internships`, including the offseason README |
 | speedyapply | `2026-SWE-College-Jobs` internship tables |
-| Employer boards | Public Greenhouse, Lever, and Ashby APIs listed in [ats_boards.yaml](data/ats_boards.yaml) |
+| Employer boards | Public Greenhouse, Lever, and Ashby APIs and Workday career sites listed in [ats_boards.yaml](data/ats_boards.yaml), plus an optional instance-only `data/ats_boards.local.yaml` |
 
 Adding a feed supported by an existing adapter is a configuration change.
 New formats need an adapter under [`src/adapters/`](src/adapters/).

@@ -28,3 +28,7 @@ web/.env*.local
 
 .vercel
 .env*
+
+# Instance-only ATS boards (merged after data/ats_boards.yaml); keep them in
+# the private data repo, never in the public template.
+data/ats_boards.local.yaml

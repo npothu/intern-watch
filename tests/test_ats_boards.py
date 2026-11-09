@@ -112,9 +112,15 @@ def test_boards_yaml_is_loadable_and_clean():
         .read_text(encoding="utf-8"))["boards"]
     assert len(boards) > 50
     from src.adapters.ats_boards import _API, _LISTERS
-    # every row names an ATS the adapter can dispatch
-    assert all(b["ats"] in _API or b["ats"] in _LISTERS for b in boards)
+    # every row names an ATS the adapter can dispatch (workday is prefetched)
+    assert all(b["ats"] in _API or b["ats"] in _LISTERS or b["ats"] == "workday"
+               for b in boards)
     assert all(b["company"] and b["slug"] for b in boards)
     # the known wrong-company boards stay out
     assert not any(b["slug"] == "linkedin" for b in boards)
     assert not any(b["ats"] == "lever" and b["slug"] == "neon" for b in boards)
+    # workday slugs carry tenant, host and site: tenant.wdN/site
+    from src.adapters.workday_api import split_slug
+    for b in boards:
+        if b["ats"] == "workday":
+            split_slug(b["slug"])
