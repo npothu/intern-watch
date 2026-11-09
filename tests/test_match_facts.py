@@ -268,3 +268,298 @@ def test_llm_supplied_term_and_cached_employer_verdict(monkeypatch, tmp_path):
     assert facts["topCompany"] == {"verdict": True, "judgedAt": "2026-08-26",
                                    "source": "llm"}
     assert facts["acceptedRule"] == "company:top_companies (LLM)"
+
+
+# ---------------------------------------------- review fixes: provenance
+
+def test_judged_date_is_per_user_and_never_another_users():
+    state = st.empty_state()
+    st.company_top_put(state, "SomeCo", "a", True, dt.date(2026, 7, 1))
+    st.company_top_put(state, "SomeCo", "b", False, dt.date(2026, 7, 5))
+    # the employer-wide date moved to B's write; A's own date did not
+    assert state["companies"]["someco"]["judged"] == "2026-07-05"
+    assert state["companies"]["someco"]["judged_by"] == {
+        "a": "2026-07-01", "b": "2026-07-05"}
+    assert st.company_judged_get(state, "SomeCo", "a") == "2026-07-01"
+    assert st.company_judged_get(state, "SomeCo", "b") == "2026-07-05"
+    assert st.company_judged_get(state, "SomeCo", "c") is None
+    reasons = ["company:top_companies (LLM)"]
+    fa = match_facts.build(_j(), reasons, user="a", state=state, today=TODAY)
+    fb = match_facts.build(_j(), reasons, user="b", state=state, today=TODAY)
+    assert fa["topCompany"] == {"verdict": True, "judgedAt": "2026-07-01",
+                                "source": "llm"}
+    assert fb["topCompany"] == {"verdict": False, "judgedAt": "2026-07-05",
+                                "source": "llm"}
+
+
+def test_legacy_entry_without_per_user_date_omits_llm_top_company():
+    state = st.empty_state()
+    state["companies"]["someco"] = {"top": {"example": True},
+                                    "judged": "2026-06-12"}
+    assert st.company_judged_get(state, "SomeCo", "example") is None
+    f = _build(_j(), ["company:top_companies (LLM)"], state=state,
+               llm_facts={"is_top_company": True})
+    assert "topCompany" not in f
+    # list matches are unaffected: they carry the accept date
+    assert _build(_j(), ["company:top_companies"], state=state)[
+        "topCompany"]["source"] == "list"
+
+
+def test_legacy_job_level_llm_top_is_ignored():
+    state = st.empty_state()
+    st.touch(state, "url:https://x.com/1", ["ats-boards"], TODAY)
+    state["jobs"]["url:https://x.com/1"]["llm_top"] = {"example": True}
+    f = _build(_j(), ["always"], state=state,
+               llm_facts={"is_top_company": True})
+    assert "topCompany" not in f
+
+
+# ------------------------------------------------- review fixes: builder
+
+def test_priority_beats_term_unknown():
+    f = _build(_j(terms=[]), ["term-unknown", "company:priority"])
+    assert f["acceptedBy"] == "priority"
+    assert f["acceptedRule"] == "company:priority"
+    assert f["termSource"] == "unresolved"
+
+
+def test_null_metro_verdict_omits_metro():
+    f = _build(_j(), ["always"], llm_facts={"in_atlanta_metro": None})
+    assert "metro" not in f
+
+
+def test_absent_posted_at_and_multi_reason_rule():
+    f = _build(_j(), ["location:remote", "company:top_companies"])
+    assert "postedAt" not in f
+    assert f["acceptedBy"] == "rule"
+    assert f["acceptedRule"] == "location:remote, company:top_companies"
+
+
+def test_for_push_legacy_source_only_when_unambiguous():
+    state = st.empty_state()
+    state["jobs"]["multi"] = {"sources": ["simplify", "ats-boards"]}  # unsorted
+    st.touch(state, "sorted", ["simplify", "ats-boards"], TODAY)
+    st.touch(state, "one", ["vanshb03"], TODAY)
+    for k in ("multi", "sorted", "one"):
+        st.matches_add(state, "example", _item(k))
+    pushed = {i["key"]: i["facts"] for i in match_facts.for_push(
+        state, st.matches_items(state, "example"))}
+    assert pushed["multi"] == {"sources": ["simplify", "ats-boards"]}
+    assert pushed["sorted"] == {"sources": ["ats-boards", "simplify"]}
+    assert pushed["one"] == {"source": "vanshb03", "sources": ["vanshb03"]}
+
+
+# ------------------------------------- review fixes: delivery + watch runs
+
+def _two_jobs():
+    return [_j(company="PriCo", url="https://x.com/p"),
+            _j(company="Plain", url="https://x.com/q", source="simplify")]
+
+
+def _priority_cfg():
+    cfg = _user_cfg()
+    cfg["dashboard"] = True
+    cfg["priority"] = {"companies": ["PriCo"], "email_immediately": True}
+    return cfg
+
+
+def _touched(jobs):
+    state = st.empty_state()
+    for j in jobs:
+        st.touch(state, j.dedup_key, j.sources, TODAY)
+    return state
+
+
+def _delivery(state, user="example"):
+    return {i["key"]: (i.get("facts") or {}).get("delivery")
+            for i in st.matches_items(state, user)}
+
+
+def test_failed_priority_alert_then_digest_ends_as_digest(monkeypatch,
+                                                          tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    calls: list[str] = []
+
+    def send(u, p, to, subject, *a, **k):
+        calls.append(subject)
+        return len(calls) > 1          # the priority alert (first) fails
+    monkeypatch.setattr(main, "send_email", send)
+    jobs = _two_jobs()
+    state = _touched(jobs)
+    main.process_user(_priority_cfg(), jobs, state, dry_run=False, now=NOW,
+                      store=FakeStore())
+    assert len(calls) == 2
+    stamped = "2026-08-26T12:05:00Z"
+    assert _delivery(state) == {
+        "url:https://x.com/p": {"mode": "digest", "at": stamped},
+        "url:https://x.com/q": {"mode": "digest", "at": stamped}}
+
+
+def test_failed_digest_leaves_delivery_unstamped(monkeypatch, tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "send_email", lambda *a, **k: False)
+    jobs = _two_jobs()
+    state = _touched(jobs)
+    store = FakeStore()
+    main.process_user(_priority_cfg(), jobs, state, dry_run=False, now=NOW,
+                      store=store)
+    assert _delivery(state) == dict.fromkeys(
+        ["url:https://x.com/p", "url:https://x.com/q"])
+    assert all("delivery" not in i["facts"] for i in store.matches["example"])
+
+
+def test_dry_run_stamps_nothing_and_records_no_run(monkeypatch, tmp_path):
+    sent = _wire_push(monkeypatch, tmp_path)
+    jobs = _two_jobs()
+    state = _touched(jobs)
+    store = FakeStore()
+    main.process_user(_priority_cfg(), jobs, state, dry_run=True, now=NOW,
+                      store=store)
+    assert sent == []
+    assert all(v is None for v in _delivery(state).values())
+    assert store.watch_runs == []
+    assert "example" not in store.matches
+
+
+def test_dashboard_off_records_no_run(monkeypatch, tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    cfg = _priority_cfg()
+    cfg["dashboard"] = False
+    jobs = _two_jobs()
+    store = FakeStore()
+    main.process_user(cfg, jobs, _touched(jobs), dry_run=False, now=NOW,
+                      store=store)
+    assert store.watch_runs == []
+    assert store.watch_reports           # the report is not gated on it
+
+
+class _RunFails(FakeStore):
+    def put_watch_run(self, user, run):
+        raise RuntimeError("convex down")
+
+
+def test_watch_run_failure_does_not_fail_the_run(monkeypatch, tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    jobs = _two_jobs()
+    state = _touched(jobs)
+    store = _RunFails()
+    main.process_user(_priority_cfg(), jobs, state, dry_run=False, now=NOW,
+                      store=store)
+    # everything before and after still happened; state is intact to save
+    assert len(store.matches["example"]) == 2
+    assert all(v is not None for v in _delivery(state).values())
+    path = tmp_path / "seen.json"
+    st.save_state(state, path)
+    assert len(st.matches_items(st.load_state(path), "example")) == 2
+
+
+def test_convex_put_watch_run_swallows_api_errors(monkeypatch):
+    from src import store as store_mod
+
+    def boom(self, *a, **k):
+        raise store_mod.ApiError("down")
+    monkeypatch.setattr(store_mod.ConvexStore, "_post", boom)
+    s = store_mod.ConvexStore.__new__(store_mod.ConvexStore)
+    s.secret = "x"
+    s.put_watch_run("example", {"at": 1, "newMatches": 0})   # no raise
+
+
+def test_discord_only_delivery_stays_absent(monkeypatch, tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    monkeypatch.setenv("HOOK", "https://discord.invalid/x")
+    monkeypatch.setattr(main, "send_discord", lambda *a, **k: True)
+    cfg = _user_cfg()
+    cfg["dashboard"] = True
+    cfg["notify"] = {"discord_webhook_env": "HOOK"}
+    jobs = _two_jobs()
+    state = _touched(jobs)
+    store = FakeStore()
+    main.process_user(cfg, jobs, state, dry_run=False, now=NOW, store=store)
+    assert all(user_notified == ["example"] for user_notified in
+               (state["jobs"][j.dedup_key]["notified_for"] for j in jobs))
+    assert all("delivery" not in i["facts"] for i in store.matches["example"])
+
+
+# ------------------------------------------ review fixes: across users
+
+def _llm_cfg(name, monkeypatch):
+    cfg = _user_cfg(name=name)
+    cfg["dashboard"] = True
+    cfg["unknown_term_policy"] = "llm"
+    cfg["rules"] = [{"when": {"term": ["Summer 2027"]},
+                     "accept_if_any": [{"company_in_file":
+                                        "data/top_companies.txt"}]}]
+    cfg["llm"] = {"enabled": True,
+                  "tasks": ["term_inference", "top_company_judgment"]}
+    monkeypatch.setenv(api_key_env_for(cfg["llm"]), "k")
+    return cfg
+
+
+def test_cross_user_top_company_dates_and_fact_isolation(monkeypatch,
+                                                         tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "classify", lambda batch, *a, **k: {
+        j.dedup_key: {"term": "Summer 2027", "is_top_company": True,
+                      "in_atlanta_metro": None} for j in batch})
+    a_cfg, b_cfg = (_llm_cfg("a", monkeypatch), _llm_cfg("b", monkeypatch))
+    b_cfg["priority"] = {"companies": ["Obscure Startup"]}
+    day1, day2 = NOW, NOW + dt.timedelta(days=4)
+    state = st.empty_state()
+    termed: set[str] = set()
+    j1 = _j(company="Obscure Startup", terms=[], term_confidence="unknown",
+            url="https://x.com/one")
+    st.touch(state, j1.dedup_key, j1.sources, TODAY)
+    a_store, b_store = FakeStore(), FakeStore()
+    main.process_user(a_cfg, [j1], state, dry_run=False, now=day1,
+                      store=a_store, llm_termed=termed)
+    # B sees the same Job object later in the same run (term already written
+    # onto it by A's LLM step): same termSource, own acceptance, own facts
+    main.process_user(b_cfg, [j1], state, dry_run=False, now=day1,
+                      store=b_store, llm_termed=termed)
+    fa = a_store.matches["a"][0]["facts"]
+    fb = b_store.matches["b"][0]["facts"]
+    assert fa["termSource"] == fb["termSource"] == "llm"
+    assert fa["acceptedBy"] == "rule" and fb["acceptedBy"] == "priority"
+    assert fb["topCompany"]["source"] == "list"
+    assert st.matches_items(state, "a")[0]["facts"] is not \
+        st.matches_items(state, "b")[0]["facts"]
+    # B's own LLM verdict on the employer comes days later...
+    b_cfg.pop("priority")
+    j2 = _j(company="Obscure Startup", terms=[], term_confidence="unknown",
+            url="https://x.com/two",
+            title="Platform Software Engineer Intern")   # not a content dup
+    st.touch(state, j2.dedup_key, j2.sources, day2.date())
+    main.process_user(b_cfg, [j2], state, dry_run=False, now=day2,
+                      store=b_store, llm_termed=set())
+    assert state["companies"]["obscure startup"]["judged"] == "2026-08-30"
+    # ...and A's next match from that employer still reports A's date
+    j3 = _j(company="Obscure Startup", url="https://x.com/three",
+            title="Backend Software Engineer Intern")   # not a content dup
+    st.touch(state, j3.dedup_key, j3.sources, day2.date())
+    main.process_user(a_cfg, [j3], state, dry_run=False, now=day2,
+                      store=a_store, llm_termed=set())
+    a_items = {i["key"]: i["facts"] for i in a_store.matches["a"]}
+    assert a_items[j3.dedup_key]["topCompany"] == {
+        "verdict": True, "judgedAt": "2026-08-26", "source": "llm"}
+    b_items = {i["key"]: i["facts"] for i in b_store.matches["b"]}
+    assert b_items[j2.dedup_key]["topCompany"]["judgedAt"] == "2026-08-30"
+
+
+def test_clearance_obtainable_through_process_user(monkeypatch, tmp_path):
+    _wire_push(monkeypatch, tmp_path)
+    jd = "Applicants must be able to obtain a Secret clearance."
+    job = _j(url="https://x.com/clr", description=jd)
+    state = _touched([job])
+    on = _user_cfg(name="on")              # eliminate.active_clearance: True
+    off = _user_cfg(name="off")
+    off["eliminate"] = {**off["eliminate"], "active_clearance": False}
+    for cfg in (on, off):
+        cfg["dashboard"] = True
+    stores = {"on": FakeStore(), "off": FakeStore()}
+    for cfg in (on, off):
+        main.process_user(cfg, [job], state, dry_run=False, now=NOW,
+                          store=stores[cfg["name"]])
+    assert stores["on"].matches["on"][0]["facts"]["clearanceObtainable"] \
+        is True
+    assert "clearanceObtainable" not in \
+        stores["off"].matches["off"][0]["facts"]

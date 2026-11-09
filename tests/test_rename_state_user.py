@@ -24,7 +24,8 @@ def _seen(*users):
                   "crossdedup_done": list(users)},
         "matches": {u: {} for u in users}, "content": {u: {} for u in users},
         "outbox": {u: [] for u in users}, "last_email": dict.fromkeys(users, "t"),
-        "companies": {"acme": {"top": dict.fromkeys(users, True)}},
+        "companies": {"acme": {"top": dict.fromkeys(users, True),
+                               "judged_by": dict.fromkeys(users, "2026-06-12")}},
         "jobs": {"k1": {"notified_for": list(users), "llm_top": dict.fromkeys(users, 1)}},
     }
 
@@ -38,6 +39,7 @@ def test_renames_every_user_keyed_place(tmp_path):
     assert seen["_meta"]["dashboard_issue"] == {"nathan": 1}
     assert seen["jobs"]["k1"]["notified_for"] == ["nathan"]
     assert seen["companies"]["acme"]["top"] == {"nathan": True}
+    assert seen["companies"]["acme"]["judged_by"] == {"nathan": "2026-06-12"}
 
 
 def test_dry_run_writes_nothing(tmp_path):

@@ -13,7 +13,8 @@ Shape:
     }
   },
   "companies": {
-    "<norm_company>": {"top": {"example": true}, "judged": "2026-06-12"}
+    "<norm_company>": {"top": {"example": true}, "judged": "2026-06-12",
+                       "judged_by": {"example": "2026-06-12"}}
   },
   "url_index": {"<canonical_url>": "<dedup_key>"}   # cross-source identity join
 }
@@ -29,6 +30,11 @@ per-job judgments let the same employer flip verdicts between postings
 (Universal Creative true / Universal Orlando Resort false on the same day).
 Job entries from before this change may still carry a legacy "llm_top" key;
 it is no longer read or written.
+
+"judged" is employer-wide (the last write by ANY user) and drives pruning;
+"judged_by" holds the date each user's own verdict was written (display-only
+match facts read it via company_judged_get). Entries written before
+"judged_by" existed have no per-user date.
 """
 
 from __future__ import annotations
@@ -298,13 +304,16 @@ def company_top_put(state: dict, company: str, user: str, verdict: bool,
     e = state.setdefault("companies", {}).setdefault(norm, {"top": {}})
     e.setdefault("top", {})[user] = bool(verdict)
     e["judged"] = today.isoformat()
+    e.setdefault("judged_by", {})[user] = today.isoformat()
 
 
-def company_judged_get(state: dict, company: str) -> str | None:
-    """ISO date the employer's cached verdicts were last written, or None.
-    Shared by every user's verdict on that employer (company_top_put)."""
-    judged = state.get("companies", {}).get(norm_company(company), {}) \
-        .get("judged")
+def company_judged_get(state: dict, company: str, user: str) -> str | None:
+    """ISO date THIS user's verdict on the employer was written, or None.
+    Never falls back to the employer-wide "judged" date, which another
+    user's verdict may have set (entries from before "judged_by" -> None)."""
+    by = state.get("companies", {}).get(norm_company(company), {}) \
+        .get("judged_by")
+    judged = by.get(user) if isinstance(by, dict) else None
     return judged if isinstance(judged, str) else None
 
 

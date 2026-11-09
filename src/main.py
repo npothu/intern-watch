@@ -651,12 +651,17 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         store.put_watch_report(name, prefs_mod.watch_report(
             user_cfg, today, now, tracker, uf.legacy_rules,
             resolved=uf.priority_names))
-        # One row per run for the header sparkline. Best-effort, like the
-        # report.
-        store.put_watch_run(name, {
-            "at": int(now.timestamp() * 1000), "newMatches": len(accepted),
-            "scanned": len(candidates),
-            "source": os.environ.get("GITHUB_EVENT_NAME") or "local"})
+    if store is not None and not dry_run and user_cfg.get("dashboard"):
+        # One row per run for the header sparkline, gated like push_matches:
+        # its counts describe the matches table. Best-effort: a lost sparkline
+        # point never fails the run (state is saved by the caller either way).
+        try:
+            store.put_watch_run(name, {
+                "at": int(now.timestamp() * 1000),
+                "newMatches": len(accepted), "scanned": len(candidates),
+                "source": os.environ.get("GITHUB_EVENT_NAME") or "local"})
+        except Exception:  # noqa: BLE001 - display-only history
+            log.exception("user %s: watch run record failed", name)
 
 
 MATCH_JD_CAP = 12    # watch-time JD acquisitions per run; backlog drains on cron
