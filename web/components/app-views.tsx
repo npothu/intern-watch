@@ -7,7 +7,8 @@ import { useAppView } from "@/lib/view";
 import { PAGE_CONTAINER } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { usePublishViewCount } from "@/components/nav/view-counts";
-import { parseUrlState } from "@/components/matches/matches-lib";
+import { parseUrlState, splitUnwatched } from "@/components/matches/matches-lib";
+import { useMemo } from "react";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
 
@@ -36,9 +37,17 @@ export function AppViews({
 }) {
   const { view, job } = useAppView();
   const params = useSearchParams();
-  // The header nav's Tracker count; Matches publishes its own live count
-  // from Triage, since hides change it.
+  // The header nav's counts. Matches starts from the server rows (live, in
+  // watched terms - Triage's own definition) so a cold load on the tracker
+  // view still shows it; Triage then republishes as hides change it.
   usePublishViewCount("tracker", applications.length);
+  usePublishViewCount(
+    "matches",
+    useMemo(
+      () => splitUnwatched(matches, wantedTerms).watched.filter((r) => !r.dismissed).length,
+      [matches, wantedTerms]
+    )
+  );
 
   if (view === "tracker") {
     return (

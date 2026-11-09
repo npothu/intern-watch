@@ -1293,6 +1293,7 @@ export function Triage({
           <input
             ref={searchRef}
             type="search"
+            name="filter-matches"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter matches…"
