@@ -81,6 +81,7 @@ export function toTriageRows(core: Core, resumes: ResumeUrls): TriageRow[] {
       hasJobDescription: m.hasJobDescription ?? false,
       // An applied row is the user's call, not a dead link to warn about.
       closed: m.closed === true && !applied,
+      ...(m.facts && typeof m.facts === "object" ? { facts: m.facts } : {}),
     };
   });
 }

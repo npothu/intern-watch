@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import { Fragment, type CSSProperties, type ReactNode } from "react";
 import { AlertTriangle, Download, FileSearch, Loader2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useReplay, TICK_POP, TICK_POP_OPTS, CHECK_DRAW, CHECK_DRAW_OPTS } from "@/lib/motion";
@@ -11,15 +11,13 @@ import { ReferralLink } from "@/components/referrals/referral-link";
 import { DenseTable, type DenseColumn, type DenseSlot } from "./dense-table";
 import { ClosedBadge, CollapseShell, FOCUS_RING, blurOnPointerActivate } from "./row-primitives";
 import {
-  UNKNOWN_TERM,
   absoluteDate,
   foundAge,
   isClosed,
   isPrimaryTerm,
+  panelFacts,
   reportSummary,
   rowStatus,
-  tagIsInformative,
-  tagLabel,
   termLabel,
   termOf,
   termShort,
@@ -173,7 +171,13 @@ export function MatchesTable({
           <span
             className={cn(
               MONO_CAPS,
-              s === "applied" ? "text-accent" : s === "saved" ? "text-amber" : "text-ink-2"
+              s === "applied"
+                ? "text-accent"
+                : s === "saved"
+                  ? "text-amber"
+                  : s === "emailed"
+                    ? "text-ink"
+                    : "text-ink-2"
             )}
           >
             {s}
@@ -238,7 +242,7 @@ export function MatchesTable({
         </CollapseShell>
       )}
       renderPanel={(r) => (
-        <MatchPanel row={r} state={buildStateFor(r)} meta={metaFor(r)} handlers={handlers} />
+        <MatchPanel row={r} today={today} state={buildStateFor(r)} meta={metaFor(r)} handlers={handlers} />
       )}
       empty={empty}
     />
@@ -425,48 +429,46 @@ function ResumeCell({
 /** The open row: facts, worth knowing, actions. */
 function MatchPanel({
   row,
+  today,
   state,
   meta,
   handlers,
 }: {
   row: TriageRow;
+  today: Day;
   state: BuildState;
   meta: ResumeMeta | null;
   handlers: MatchHandlers;
 }) {
   const report = state === "built" ? meta?.report ?? null : null;
   const notes = worthKnowing(row, report);
+  const facts = panelFacts(row, today);
   const resumeUrl = state === "built" ? row.resumeUrl : null;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_232px] gap-6 text-[13px] text-ink">
       <dl className="m-0 grid grid-cols-[auto_1fr] content-start gap-x-3.5 gap-y-2">
-        <dt className={DT}>Added</dt>
-        <dd className="m-0">{absoluteDate(row.added) || "—"}</dd>
-        <dt className={DT}>Term</dt>
-        <dd className="m-0">{row.term || termLabel(UNKNOWN_TERM)}</dd>
-        {row.salary && (
-          <>
-            <dt className={DT}>Salary</dt>
-            <dd className="m-0">{row.salary}</dd>
-          </>
-        )}
-        {tagIsInformative(row.tag) && (
-          <>
-            <dt className={DT}>Tag</dt>
-            <dd className="m-0">{tagLabel(row.tag)}</dd>
-          </>
-        )}
-        <dt className={DT}>Key</dt>
-        <dd className="m-0 font-mono text-[12px]">{row.short}</dd>
+        {facts.map((f) => (
+          <Fragment key={f.label}>
+            <dt className={DT}>{f.label}</dt>
+            {/* Times are in the viewer's zone; the server's render may differ. */}
+            <dd className={cn("m-0", f.mono && "font-mono text-[12px]")} suppressHydrationWarning={f.local}>
+              {f.value}
+            </dd>
+          </Fragment>
+        ))}
       </dl>
 
       <div className="flex flex-col gap-2.5">
         <div className={DT}>{notes.length ? "Worth knowing" : "Nothing to flag"}</div>
         {notes.length > 0 && (
-          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+          <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
             {notes.map((n) => (
-              <li key={n} className="leading-[1.4]">
-                {n}
+              <li key={n.title} className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-2.5 leading-[1.4]">
+                <span className="pt-0.5 font-mono text-[10px] tracking-[0.08em] text-ink-2 uppercase">{n.tag}</span>
+                <span className="min-w-0">
+                  <span className="block">{n.title}</span>
+                  {n.sub && <span className="block text-[12px] text-ink-2">{n.sub}</span>}
+                </span>
               </li>
             ))}
           </ul>

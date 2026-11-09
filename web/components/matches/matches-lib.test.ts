@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { TriageRow } from "@/app/(app)/page";
 import type { ResumeReport } from "@/lib/convex";
-import { day } from "@/lib/terms";
+import { day, dayFromIso } from "@/lib/terms";
 import {
   ALL_TERMS,
   UNKNOWN_TERM,
@@ -30,6 +30,10 @@ import {
   termShort,
   termSlug,
   worthKnowing,
+  clockTime,
+  dateTime,
+  isoDate,
+  panelFacts,
   type MatchesUrlState,
 } from "./matches-lib";
 
@@ -53,6 +57,7 @@ const row = (short: string, extra: Partial<TriageRow> = {}): TriageRow => ({
 });
 
 const shorts = (rows: TriageRow[]) => rows.map((r) => r.short);
+const titles = (notes: { title: string }[]) => notes.map((n) => n.title);
 
 describe("termShort", () => {
   test("season initials and a two-digit year", () => {
@@ -245,6 +250,18 @@ describe("row facts", () => {
     expect(rowStatus({ applied: false, saved: true })).toBe("saved");
     expect(rowStatus({ applied: false, saved: false })).toBe("new");
   });
+  test("status: delivery facts say how an unmarked row was sent", () => {
+    const immediate = { source: "s", delivery: { mode: "immediate" as const, at: "2026-11-08T06:14:00Z" } };
+    const digest = { source: "s", delivery: { mode: "digest" as const, at: "2026-11-08T20:00:00Z" } };
+    expect(rowStatus({ applied: false, saved: false, facts: immediate })).toBe("emailed");
+    expect(rowStatus({ applied: false, saved: false, facts: digest })).toBe("digest");
+    // The user's marks win over delivery.
+    expect(rowStatus({ applied: true, saved: false, facts: immediate })).toBe("applied");
+    expect(rowStatus({ applied: false, saved: true, facts: digest })).toBe("saved");
+    // Facts without a delivery (or no facts at all) read "new".
+    expect(rowStatus({ applied: false, saved: false, facts: { source: "s" } })).toBe("new");
+    expect(rowStatus({ applied: false, saved: false, facts: undefined })).toBe("new");
+  });
   test("tags", () => {
     expect(tagText("[TOP*]")).toBe("top");
     expect(tagText(" [PRIORITY] ")).toBe("priority");
@@ -256,22 +273,20 @@ describe("row facts", () => {
     expect(tagIsInformative("")).toBe(false);
     expect(tagIsInformative("[TOP*]")).toBe(true);
   });
-  test("worth knowing states plain facts only", () => {
+  test("worth knowing without facts states plain facts only", () => {
     expect(worthKnowing(row("a"))).toEqual([]);
     expect(
-      worthKnowing(row("b", { priority: true, tag: "[TOP*]", term: "", hasJobDescription: false }))
-    ).toEqual([
-      "Priority employer on your list.",
-      "Term not stated in the posting.",
-      "Tagged as a top company.",
-      "No job description found.",
-    ]);
+      titles(worthKnowing(row("b", { priority: true, tag: "[TOP*]", term: "", hasJobDescription: false })))
+    ).toEqual(["Priority employer", "No term stated", "Tagged as a top company", "No job description found"]);
+    // Without the fact, nothing claims why a no-term row was shown.
+    expect(worthKnowing(row("b2", { term: "" }))).toEqual([{ tag: "Term", title: "No term stated" }]);
+    expect(worthKnowing(row("b3", { priority: true }))[0].sub).toBe("On your priority list.");
     expect(worthKnowing(row("c", { tag: "[atl]" }))).toEqual([]);
   });
   test("worth knowing: a stub-built resume is a separate fact", () => {
-    expect(worthKnowing(row("d", { hasJobDescription: false }), { jdSource: "stub" })).toEqual([
-      "No job description found.",
-      "This resume was built from the title, company and location only.",
+    expect(titles(worthKnowing(row("d", { hasJobDescription: false }), { jdSource: "stub" }))).toEqual([
+      "No job description found",
+      "Resume built without a job description",
     ]);
     expect(worthKnowing(row("e"), { jdSource: "fetched" })).toEqual([]);
     expect(worthKnowing(row("f"), null)).toEqual([]);
@@ -475,7 +490,134 @@ describe("closed postings", () => {
   });
   test("worth knowing states the closed fact", () => {
     expect(worthKnowing(row("c", { closed: true }))).toEqual([
-      "The job board no longer lists this posting.",
+      { tag: "Note", title: "Posting no longer listed", sub: "The job board no longer lists this posting." },
+    ]);
+  });
+});
+
+describe("match facts", () => {
+  const today = dayFromIso("2026-11-08");
+  const tz = "UTC";
+  const labels = (r: TriageRow) => panelFacts(r, today, tz).map((f) => f.label);
+  const value = (r: TriageRow, label: string) => panelFacts(r, today, tz).find((f) => f.label === label)?.value;
+  const full: TriageRow["facts"] = {
+    source: "jobright-data",
+    sources: ["jobright-data", "simplify"],
+    postedAt: "2026-11-08T04:30:00Z",
+    delivery: { mode: "immediate", at: "2026-11-08T06:14:00Z" },
+    termSource: "llm",
+    metro: { name: "SF Bay Area", verdict: true, source: "llm" },
+    topCompany: { verdict: true, judgedAt: "2026-09-21", source: "llm" },
+    clearanceObtainable: true,
+    acceptedBy: "priority",
+  };
+
+  test("formatters", () => {
+    expect(clockTime("2026-11-08T06:14:00Z", tz)).toBe("06:14");
+    expect(dateTime("2026-11-08T06:14:00Z", tz)).toBe("Nov 8, 06:14");
+    expect(isoDate("2026-09-21")).toBe("Sep 21, 2026");
+    expect(isoDate("2026-09-21T23:00:00Z")).toBe("Sep 21, 2026");
+    for (const bad of [undefined, "", "nope"]) {
+      expect(clockTime(bad, tz)).toBe("");
+      expect(dateTime(bad, tz)).toBe("");
+      expect(isoDate(bad)).toBe("");
+    }
+  });
+
+  test("panel facts without facts: today's list", () => {
+    expect(labels(row("a"))).toEqual(["Added", "Term", "Key"]);
+    expect(labels(row("b", { salary: "$50/hr", tag: "[ATL]" }))).toEqual(["Added", "Term", "Salary", "Tag", "Key"]);
+    expect(value(row("c", { term: "" }), "Term")).toBe("Unknown");
+    expect(panelFacts(row("d"), today, tz).find((f) => f.label === "Key")).toEqual({ label: "Key", value: "d", mono: true });
+  });
+
+  test("panel facts with full facts", () => {
+    const r = row("a", { added: "2026-11-05", facts: full });
+    expect(labels(r)).toEqual(["Source", "Posted", "Metro", "Sent", "Added", "Term", "Key"]);
+    expect(value(r, "Source")).toBe("jobright-data (also simplify) · found 3d ago");
+    expect(value(r, "Posted")).toBe("Nov 8, 04:30");
+    expect(value(r, "Metro")).toBe("SF Bay Area · in metro · by LLM");
+    expect(value(r, "Sent")).toBe("Emailed 06:14, on the run that found it");
+    expect(panelFacts(r, today, tz).filter((f) => f.local).map((f) => f.label)).toEqual(["Posted", "Sent"]);
+  });
+
+  test("panel facts with partial facts", () => {
+    const only = row("b", { added: "2026-11-08", facts: { source: "simplify" } });
+    expect(labels(only)).toEqual(["Source", "Added", "Term", "Key"]);
+    expect(value(only, "Source")).toBe("simplify · found today");
+    // An unparseable added date drops the age, not the source.
+    expect(value(row("b2", { added: "", facts: { source: "simplify" } }), "Source")).toBe("simplify");
+    const digest = row("c", {
+      facts: {
+        source: "s",
+        sources: ["s"],
+        metro: { name: "Atlanta", verdict: false, source: "rules" },
+        delivery: { mode: "digest", at: "2026-11-07T20:05:00Z" },
+        postedAt: "garbage",
+      },
+    });
+    expect(labels(digest)).toEqual(["Source", "Metro", "Sent", "Added", "Term", "Key"]);
+    expect(value(digest, "Source")).toBe("s · found 7d ago");
+    expect(value(digest, "Metro")).toBe("Atlanta · outside metro");
+    expect(value(digest, "Sent")).toBe("Digest, Nov 7, 20:05");
+    // A bad delivery time keeps the mode.
+    const badAt = (mode: "immediate" | "digest") =>
+      value(row("d", { facts: { source: "s", delivery: { mode, at: "x" } } }), "Sent");
+    expect(badAt("immediate")).toBe("Emailed on the run that found it");
+    expect(badAt("digest")).toBe("Digest");
+    // A metro with no name is not shown.
+    expect(labels(row("e", { facts: { source: "s", metro: { name: "", verdict: true, source: "llm" } } }))).not.toContain("Metro");
+  });
+
+  test("worth knowing with full facts, in order", () => {
+    expect(worthKnowing(row("a", { priority: true, tag: "[TOP*]", facts: full }))).toEqual([
+      { tag: "Note", title: "Priority employer", sub: "Accepted for any wanted term before the rules ran." },
+      { tag: "LLM", title: "Term inferred from the description", sub: "No term in the title." },
+      {
+        tag: "LLM",
+        title: "Counted as a top company by verdict",
+        sub: "Judged Sep 21, 2026; verdicts stick for about 120 days.",
+      },
+      { tag: "LLM", title: "Metro judged by the LLM", sub: "SF Bay Area: in." },
+      {
+        tag: "Note",
+        title: "Needs a clearance you can obtain",
+        sub: "Kept because the posting says it is obtainable, not required.",
+      },
+    ]);
+  });
+
+  test("worth knowing: each fact branch on its own", () => {
+    const f = (facts: NonNullable<TriageRow["facts"]>, extra: Partial<TriageRow> = {}) =>
+      worthKnowing(row("x", { ...extra, facts }));
+    expect(f({ source: "s" })).toEqual([]);
+    expect(f({ source: "s", termSource: "title" })).toEqual([]);
+    expect(f({ source: "s", termSource: "unresolved" }, { term: "" })).toEqual([
+      { tag: "Term", title: "No term stated", sub: "Shown because it passes under every wanted term." },
+    ]);
+    // A list-sourced or negative verdict is not news, and it replaces the tag fallback.
+    expect(f({ source: "s", topCompany: { verdict: true, judgedAt: "2026-09-21", source: "list" } }, { tag: "[TOP]" })).toEqual([]);
+    expect(f({ source: "s", topCompany: { verdict: false, judgedAt: "2026-09-21", source: "llm" } })).toEqual([]);
+    expect(f({ source: "s", topCompany: { verdict: true, judgedAt: "bad", source: "llm" } })[0].sub).toBe(
+      "Verdicts stick for about 120 days."
+    );
+    expect(f({ source: "s", metro: { name: "Austin", verdict: false, source: "llm" } })).toEqual([
+      { tag: "LLM", title: "Metro judged by the LLM", sub: "Austin: outside." },
+    ]);
+    expect(f({ source: "s", metro: { name: "Austin", verdict: true, source: "rules" } })).toEqual([]);
+    expect(f({ source: "s", clearanceObtainable: false })).toEqual([]);
+    expect(titles(f({ source: "s", clearanceObtainable: true }))).toEqual(["Needs a clearance you can obtain"]);
+    // Accepted by a rule but on the priority list now: the plain line, no claim about the rules.
+    expect(titles(f({ source: "s", acceptedBy: "rule", acceptedRule: "metro" }, { priority: true }))).toEqual([
+      "Priority employer",
+    ]);
+    expect(f({ source: "s", acceptedBy: "rule" })).toEqual([]);
+    expect(f({ source: "s", acceptedBy: "priority" })[0].sub).toBe("Accepted for any wanted term before the rules ran.");
+    // The closed and no-JD facts stay alongside the new ones.
+    expect(titles(f({ source: "s", termSource: "llm" }, { closed: true, hasJobDescription: false }))).toEqual([
+      "Posting no longer listed",
+      "Term inferred from the description",
+      "No job description found",
     ]);
   });
 });

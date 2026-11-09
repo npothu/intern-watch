@@ -345,10 +345,20 @@ export function absoluteDate(added: string): string {
 
 /* ------------------------------------------------------------- row facts */
 
-export type RowStatus = "applied" | "saved" | "new";
+/**
+ * The Status column. Applied and saved are the user's own marks and win;
+ * otherwise a row the watcher has delivered says how ("emailed" on the run
+ * that found it, or "digest"), and a row without delivery facts reads "new".
+ */
+export type RowStatus = "applied" | "saved" | "emailed" | "digest" | "new";
 
-export function rowStatus(row: Pick<TriageRow, "applied" | "saved">): RowStatus {
-  return row.applied ? "applied" : row.saved ? "saved" : "new";
+export function rowStatus(row: Pick<TriageRow, "applied" | "saved" | "facts">): RowStatus {
+  if (row.applied) return "applied";
+  if (row.saved) return "saved";
+  const mode = row.facts?.delivery?.mode;
+  if (mode === "immediate") return "emailed";
+  if (mode === "digest") return "digest";
+  return "new";
 }
 
 /** The tag without brackets or the LLM star, case kept for display: "[TOP*]" -> "TOP". */
@@ -367,23 +377,158 @@ export function tagIsInformative(tag: string): boolean {
   return t !== "" && t !== "priority";
 }
 
+/* ------------------------------------------------------- date formatting */
+
+const parseIso = (iso: string | undefined): Date | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+/** "06:14" in the viewer's zone (or `timeZone`); "" when it does not parse. */
+export function clockTime(iso: string | undefined, timeZone?: string): string {
+  const d = parseIso(iso);
+  if (!d) return "";
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone });
+}
+
+/** "Nov 8, 06:12" in the viewer's zone (or `timeZone`); "" when it does not parse. */
+export function dateTime(iso: string | undefined, timeZone?: string): string {
+  const d = parseIso(iso);
+  if (!d) return "";
+  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
+  return `${day}, ${clockTime(iso, timeZone)}`;
+}
+
+/** "Sep 21, 2026" for an ISO date or timestamp, read as UTC; "" when it does not parse. */
+export function isoDate(iso: string | undefined): string {
+  const d = parseIso(iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00Z` : iso);
+  if (!d) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
+/* ------------------------------------------------------------ panel facts */
+
+export type PanelFact = {
+  label: string;
+  value: string;
+  /** Mono, smaller: the short key. */
+  mono?: boolean;
+  /** Formatted in the viewer's time zone, so the server's render may differ. */
+  local?: boolean;
+};
+
 /**
- * The "Worth knowing" lines: plain facts the row carries that its cells do
- * not already say. Only what the row (and, once built, its resume report)
- * states; no reasons are inferred and nothing is predicted.
+ * The details panel's facts list, in display order, with only the rows that
+ * have data: Source, Posted, Metro and Sent come from the watcher's facts
+ * (absent on older rows), then Added, Term, Salary, Tag and Key as before.
+ * `timeZone` is for tests; the panel formats in the viewer's zone.
+ */
+export function panelFacts(row: TriageRow, today: Day, timeZone?: string): PanelFact[] {
+  const out: PanelFact[] = [];
+  const f = row.facts;
+  if (f?.source) {
+    const others = (f.sources ?? []).filter((s) => s && s !== f.source);
+    const age = foundAge(row.added, today);
+    const found = age === "—" ? "" : age === "today" ? " · found today" : ` · found ${age} ago`;
+    const also = others.length ? ` (also ${others.join(", ")})` : "";
+    out.push({ label: "Source", value: `${f.source}${also}${found}` });
+  }
+  const posted = dateTime(f?.postedAt, timeZone);
+  if (posted) out.push({ label: "Posted", value: posted, local: true });
+  if (f?.metro?.name) {
+    const m = f.metro;
+    out.push({
+      label: "Metro",
+      value: `${m.name} · ${m.verdict ? "in metro" : "outside metro"}${m.source === "llm" ? " · by LLM" : ""}`,
+    });
+  }
+  const sent = f?.delivery;
+  if (sent && (sent.mode === "immediate" || sent.mode === "digest")) {
+    const value =
+      sent.mode === "immediate"
+        ? clockTime(sent.at, timeZone)
+          ? `Emailed ${clockTime(sent.at, timeZone)}, on the run that found it`
+          : "Emailed on the run that found it"
+        : dateTime(sent.at, timeZone)
+          ? `Digest, ${dateTime(sent.at, timeZone)}`
+          : "Digest";
+    out.push({ label: "Sent", value, local: true });
+  }
+  out.push({ label: "Added", value: absoluteDate(row.added) || "—" });
+  out.push({ label: "Term", value: row.term || termLabel(UNKNOWN_TERM) });
+  if (row.salary) out.push({ label: "Salary", value: row.salary });
+  if (tagIsInformative(row.tag)) out.push({ label: "Tag", value: tagLabel(row.tag) });
+  out.push({ label: "Key", value: row.short, mono: true });
+  return out;
+}
+
+/** One "Worth knowing" entry: a mono caps tag, a title and a muted sub-line. */
+export type WorthNote = { tag: "LLM" | "Term" | "Note"; title: string; sub?: string };
+
+/**
+ * The "Worth knowing" entries: the non-obvious things about a row that its
+ * cells do not already say. Only what the row (its watcher facts and, once
+ * built, its resume report) states; nothing is inferred or predicted. Rows
+ * from before the watcher recorded facts fall back to the plainer lines the
+ * row alone supports.
  */
 export function worthKnowing(
   row: TriageRow,
   report?: Pick<ResumeReport, "jdSource"> | null
-): string[] {
-  const out: string[] = [];
-  if (isClosed(row)) out.push("The job board no longer lists this posting.");
-  if (row.priority) out.push("Priority employer on your list.");
-  if (!row.term) out.push("Term not stated in the posting.");
-  if (tagText(row.tag) === "top") out.push("Tagged as a top company.");
-  if (!row.hasJobDescription) out.push("No job description found.");
+): WorthNote[] {
+  const out: WorthNote[] = [];
+  const f = row.facts;
+  if (isClosed(row)) {
+    out.push({ tag: "Note", title: "Posting no longer listed", sub: "The job board no longer lists this posting." });
+  }
+  if (f?.acceptedBy === "priority") {
+    out.push({ tag: "Note", title: "Priority employer", sub: "Accepted for any wanted term before the rules ran." });
+  } else if (row.priority) {
+    out.push({ tag: "Note", title: "Priority employer", sub: "On your priority list." });
+  }
+  if (f?.termSource === "llm") {
+    out.push({ tag: "LLM", title: "Term inferred from the description", sub: "No term in the title." });
+  } else if (f?.termSource === "unresolved") {
+    out.push({ tag: "Term", title: "No term stated", sub: "Shown because it passes under every wanted term." });
+  } else if (!row.term) {
+    out.push({ tag: "Term", title: "No term stated" });
+  }
+  if (f?.topCompany) {
+    if (f.topCompany.source === "llm" && f.topCompany.verdict) {
+      const judged = isoDate(f.topCompany.judgedAt);
+      out.push({
+        tag: "LLM",
+        title: "Counted as a top company by verdict",
+        sub: judged
+          ? `Judged ${judged}; verdicts stick for about 120 days.`
+          : "Verdicts stick for about 120 days.",
+      });
+    }
+  } else if (tagText(row.tag) === "top") {
+    out.push({ tag: "Note", title: "Tagged as a top company" });
+  }
+  if (f?.metro?.name && f.metro.source === "llm") {
+    out.push({
+      tag: "LLM",
+      title: "Metro judged by the LLM",
+      sub: `${f.metro.name}: ${f.metro.verdict ? "in" : "outside"}.`,
+    });
+  }
+  if (f?.clearanceObtainable) {
+    out.push({
+      tag: "Note",
+      title: "Needs a clearance you can obtain",
+      sub: "Kept because the posting says it is obtainable, not required.",
+    });
+  }
+  if (!row.hasJobDescription) out.push({ tag: "Note", title: "No job description found" });
   if (report?.jdSource === "stub") {
-    out.push("This resume was built from the title, company and location only.");
+    out.push({
+      tag: "Note",
+      title: "Resume built without a job description",
+      sub: "It used the title, company and location only.",
+    });
   }
   return out;
 }
