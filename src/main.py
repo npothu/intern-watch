@@ -957,9 +957,16 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         kept = []
         for job, reasons in accepted:
             if canonical_url(job.url) in held_canons:
-                st.set_pending(state, job.dedup_key, name)
-                log.info("user %s: %s held pending with its JD-deferred twin",
-                         name, job.dedup_key)
+                if RECHECK_REASON in reasons:
+                    # A recheck stays a recheck: restore a fingerprint that
+                    # never matches (what _accept cleared) instead of making
+                    # it pending, so it is retried under the recheck
+                    # selection and delivery budgets, not as a plain job.
+                    recheck.mark_stale(state, job.dedup_key, name)
+                else:
+                    st.set_pending(state, job.dedup_key, name)
+                log.info("user %s: %s held with its JD-deferred twin", name,
+                         job.dedup_key)
             else:
                 kept.append((job, reasons))
         accepted = kept
