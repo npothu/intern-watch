@@ -131,6 +131,37 @@ def enrich_jds(jobs: list[Job]) -> int:
     return fetched
 
 
+def infer_terms_from_jds(jobs: list[Job], today: dt.date) -> int:
+    """Fill the term of unknown-term jobs from a JD body already in hand
+    (ATS boards: Lever/Ashby inline, Greenhouse/SmartRecruiters via
+    enrich_jds). Fetches nothing. Runs before any user's filter, so the term
+    step sees the result and the LLM is only asked about jobs this could not
+    resolve; the filter order itself is unchanged. Only new and pending jobs
+    pass through here: a job an earlier run rejected (e.g. term-unresolved)
+    stays rejected. Returns jobs resolved."""
+    from .normalize import infer_term
+
+    resolved = 0
+    for job in jobs:
+        if job.terms or not job.description:
+            continue
+        # Anchor yearless rules on the run date, not date_posted: the job is
+        # live today, so "summer internship" means the next summer from now
+        # (evergreen postings keep a date_posted from a past cycle).
+        got = infer_term(job.title, job.url, job.description, today)
+        if got.terms:
+            job.terms, job.term_confidence = got.terms, got.confidence
+            # Only a term read from the JD body is accept-only; one found
+            # in the URL slug is source data, like a title term.
+            job.terms_from_jd = got.source == "jd"
+            resolved += 1
+            log.info("term from %s for %s: %s (%s)", got.source,
+                     job.dedup_key, ", ".join(got.terms), got.confidence)
+    if resolved:
+        log.info("inferred the term of %d job(s) from their JD", resolved)
+    return resolved
+
+
 class _JobrightEnricher:
     """Run-scoped lazy JD fetcher for jobright jobs that survive to an accept.
 
@@ -376,12 +407,44 @@ def _backfill_apply_urls(state: dict, resolver,
     return resolved
 
 
-def _finalize(uf: UserFilter, job: Job, facts: dict) -> Verdict:
-    """Re-run the rule engine with LLM facts. Writes an LLM-supplied term onto
-    the job first (term is objective and shared across users)."""
-    if not job.terms and facts.get("term"):
+def _jd_term_unwanted(uf: UserFilter, job: Job) -> bool:
+    """A JD-derived term this user does not want: the job was treated as
+    unknown-term for them (see UserFilter.evaluate)."""
+    return job.terms_from_jd and not set(job.terms) & uf.terms_wanted
+
+
+def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
+    """Re-run the rule engine with LLM facts; returns the verdict and the Job
+    it judged (what the caller should deliver).
+
+    An LLM-supplied term for a job with NO term is written onto the shared
+    job (term is objective and shared across users). A JD-derived term is
+    replaced by the LLM's only when this user did not want it - the only
+    case in which the term question reached the LLM for them - and then on
+    a deep per-user copy, so another user who does want the JD term still
+    accepts on it, whatever order users run in. A wanted JD term stands:
+    the facts were asked for the company or metro, and a term cached from
+    another user's question must not move the job to a different season."""
+    if facts.get("term") and _jd_term_unwanted(uf, job):
+        job = job.model_copy(deep=True, update={"terms": [facts["term"]],
+                                                "term_confidence": "inferred",
+                                                "terms_from_jd": False})
+    elif facts.get("term") and not job.terms:
         job.terms, job.term_confidence = [facts["term"]], "inferred"
-    return uf.evaluate(job, llm_facts=facts)
+    return uf.evaluate(job, llm_facts=facts), job
+
+
+def _delivered(uf: UserFilter, job: Job) -> Job:
+    """The Job an accept delivers. One accepted while its JD term was not
+    wanted (the term-unknown fallback, or unknown_term_policy keep) goes
+    out as a deep copy whose snapshot says "Unknown term" instead of a
+    season this user does not want. Its `terms` keep the JD guess: the
+    content-dedup signature must stay specific, since an "Unknown term"
+    signature is a wildcard that would suppress a later Summer posting of
+    the same company/title for the whole suppress window."""
+    if _jd_term_unwanted(uf, job):
+        return job.model_copy(deep=True, update={"term_display_unknown": True})
+    return job
 
 
 def _cache_covers(needs: list[str], cached: dict) -> bool:
@@ -521,16 +584,16 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     for job in candidates:
         verdict = uf.evaluate(job, today=today)
         if verdict.status == "accept":
-            accepted.append((job, verdict.reasons))
+            accepted.append((_delivered(uf, job), verdict.reasons))
             st.clear_pending(state, job.dedup_key, name)
         elif verdict.status == "reject":
             st.clear_pending(state, job.dedup_key, name)
         else:  # ambiguous
             cached = _cached_facts(state, job, name)
             if _cache_covers(verdict.needs, cached):
-                final = _finalize(uf, job, cached)
+                final, judged = _finalize(uf, job, cached)
                 if final.status == "accept":
-                    accepted.append((job, final.reasons))
+                    accepted.append((_delivered(uf, judged), final.reasons))
                 st.clear_pending(state, job.dedup_key, name)
             else:
                 llm_queue.append(job)
@@ -577,9 +640,9 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                 continue
             st.llm_cache_put(state, job.dedup_key, facts)
             merged_facts = _cached_facts(state, job, name)
-            final = _finalize(uf, job, merged_facts)
+            final, judged = _finalize(uf, job, merged_facts)
             if final.status == "accept":
-                accepted.append((job, final.reasons))
+                accepted.append((_delivered(uf, judged), final.reasons))
             st.clear_pending(state, job.dedup_key, name)
         for job in deferred:
             st.set_pending(state, job.dedup_key, name)
@@ -996,6 +1059,8 @@ def _explain_user(uf: UserFilter, job: Job, state: dict) -> list[str]:
     cached = _cached_facts(state, job, name)
     term_src = ("explicit" if job.terms and job.term_confidence == "explicit"
                 else "inferred" if job.terms else "unknown")
+    if job.terms_from_jd:
+        term_src += ", from the JD: accept-only"
     lines.append(f"term: {job.terms or '[]'} ({term_src})")
     if "term" in cached:
         lines.append(f"  cached LLM term: {cached['term']}")
@@ -1013,7 +1078,7 @@ def _explain_user(uf: UserFilter, job: Job, state: dict) -> list[str]:
     final = verdict
     if verdict.status == "ambiguous":
         if _cache_covers(verdict.needs, cached):
-            final = _finalize(uf, job, cached)
+            final, _ = _finalize(uf, job, cached)
             lines.append(f"final (with cached facts): {final.status} "
                          f"({', '.join(final.reasons) or '-'})")
         else:
@@ -1065,6 +1130,7 @@ def explain(key: str, state: dict, today: dt.date, users: list[dict],
     # Enrich the JD so the elimination trace sees the same body a live run
     # would (jobright accepts fetch lazily; here we enrich up front, read-only).
     enrich_jds([job])
+    infer_terms_from_jds([job], today)
     entry = state["jobs"].get(key, {})
     out.append(f"job: {job.company} -- {job.title}")
     out.append(f"locations: {job.locations or '[]'}  sources: {job.sources}")
@@ -1179,7 +1245,9 @@ def main(argv: list[str] | None = None) -> int:
     relevant = {job.dedup_key for job in new_jobs}
     for user_cfg in users:
         relevant |= st.pending_keys(state, user_cfg["name"])
-    enrich_jds([merged_by_key[k] for k in relevant if k in merged_by_key])
+    relevant_jobs = [merged_by_key[k] for k in relevant if k in merged_by_key]
+    enrich_jds(relevant_jobs)
+    infer_terms_from_jds(relevant_jobs, today)
 
     from .adapters.jobright_auth import JobrightSession
     resolver = JobrightSession.from_env()

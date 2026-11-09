@@ -258,6 +258,58 @@ test("resume preconditions, saved job descriptions and build polling preserve ba
   expect((await request(`/resumes/${short}`, "DELETE")).status).toBe(404);
 });
 
+test("PATCH /matches/{short} corrects a term, survives the next watcher push, and clears with null", async () => {
+  const patched = await request(`/matches/${short}`, "PATCH", { term: "  summer 2027 " });
+  expect(patched.status).toBe(200);
+  expect((await patched.json()).data.item).toMatchObject({ short, term: "Summer 2027", termConfidence: "manual" });
+  // The watcher replaces the item wholesale; the correction lives beside it.
+  await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
+    key: "job:1", short, company: "Example", title: "Intern", term: "Fall 2027", url: "https://example.com/jobs/1",
+  }] });
+  let match = (await (await request("/matches")).json()).data[0];
+  expect(match.term).toBe("Summer 2027");
+  expect((await (await request("/matches", "GET", undefined, otherKey)).json()).data).toEqual([]);
+  expect((await request(`/matches/${short}`, "PATCH", { term: null })).status).toBe(200);
+  match = (await (await request("/matches")).json()).data[0];
+  expect(match.term).toBe("Fall 2027");
+  expect((await request("/matches/ba9876543210", "PATCH", { term: "Fall 2027" })).status).toBe(404);
+  expect((await request(`/matches/${short}`, "PATCH", { term: "Summer 2027" }, otherKey)).status).toBe(404);
+});
+
+test.each([
+  [{ term: "Summer" }], [{ term: "Q3 2027" }], [{ term: 2027 }], [{}], [{ url: "https://example.com/jobs/9" }],
+])("PATCH /matches/{short} rejects %j without writing", async (body) => {
+  expect((await request(`/matches/${short}`, "PATCH", body)).status).toBe(400);
+  expect(upstream).not.toHaveBeenCalled();
+});
+
+test("an application recorded after a term correction snapshots the corrected term", async () => {
+  expect((await request(`/matches/${short}`, "PATCH", { term: "Fall 2027" })).status).toBe(200);
+  expect((await request("/ticks", "PUT", { writes: [{ short, field: "applied", value: true }] })).status).toBe(200);
+  const { data: rows } = await (await request("/applications")).json();
+  expect(rows[0].snapshot).toMatchObject({ term: "Fall 2027", termConfidence: "manual" });
+});
+
+test("a watcher push with a blank term keeps a term already on the row", async () => {
+  await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
+    key: "job:1", short, company: "Example", title: "Intern", term: "Summer 2027", termConfidence: "inferred",
+    url: "https://example.com/jobs/1",
+  }] });
+  await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
+    key: "job:1", short, company: "Example", title: "Intern", term: "", url: "https://example.com/jobs/1",
+  }] });
+  expect((await (await request("/matches")).json()).data[0]).toMatchObject({ term: "Summer 2027", termConfidence: "inferred" });
+  await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
+    key: "job:1", short, company: "Example", title: "Intern", term: "   ", url: "https://example.com/jobs/1",
+  }] });
+  expect((await (await request("/matches")).json()).data[0].term).toBe("Summer 2027");
+  // The watcher's display sentinel for an unresolved term, sent on every push.
+  await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
+    key: "job:1", short, company: "Example", title: "Intern", term: "Unknown term", url: "https://example.com/jobs/1",
+  }] });
+  expect((await (await request("/matches")).json()).data[0]).toMatchObject({ term: "Summer 2027", termConfidence: "inferred" });
+});
+
 test("authentication rejects missing, revoked and malformed keys without contacting Convex", async () => {
   for (const token of ["", "wrong", `iw_${"x".repeat(43)}`]) {
     const response = await request("/me", "GET", undefined, token);
