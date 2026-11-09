@@ -643,4 +643,31 @@ def test_per_user_copies_are_deep():
     _merge_pair(judged, _job(2, term="Summer 2027"))   # a later URL merge
     assert job.locations == ["Austin, TX"]
     delivered = main._delivered(uf, job)
-    assert delivered.terms == [] and delivered.locations is not job.locations
+    assert delivered.term_display_unknown and delivered.terms == job.terms
+    assert delivered.locations is not job.locations and not job.term_display_unknown
+
+
+def test_unknown_term_snapshot_does_not_wildcard_content_dedup(monkeypatch, tmp_path):
+    """Run 1 delivers the Fall-JD job to a summer-only user as "Unknown
+    term" (LLM null -> fallback). Run 2 brings an explicit Summer 2027
+    posting of the same company and title: it must still be delivered. An
+    "Unknown term" content signature would wildcard-suppress it."""
+    items: list[dict] = []
+    state, _ = _jd_llm_run(monkeypatch, tmp_path, None, snapshots=items)
+    assert [it["term"] for it in items] == ["Unknown term"]
+    summer = Job(company="Company1", title="Software Engineer Intern",
+                 url="https://x.com/summer-posting", source="ok-src",
+                 terms=["Summer 2027"], term_confidence="explicit",
+                 locations=["Atlanta, GA"])
+
+    class Run2:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [summer]
+
+    monkeypatch.setattr(main, "make_adapter", lambda cfg: Run2(cfg))
+    assert main.main(["--state-file", str(tmp_path / "seen.json")]) == 0
+    state = st.load_state(tmp_path / "seen.json")
+    key = dedup_key(summer)
+    # Run 1 used the 12:00 email slot, so the match waits in the outbox.
+    assert key in {it["key"] for it in st.outbox_items(state, "example")} \
+        or st.was_notified(state, key, "example")

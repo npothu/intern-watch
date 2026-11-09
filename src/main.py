@@ -437,12 +437,13 @@ def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
 def _delivered(uf: UserFilter, job: Job) -> Job:
     """The Job an accept delivers. One accepted while its JD term was not
     wanted (the term-unknown fallback, or unknown_term_policy keep) goes
-    out as a deep copy with no term, so the email/dashboard snapshot says
-    "unknown" instead of showing a season this user does not want."""
+    out as a deep copy whose snapshot says "Unknown term" instead of a
+    season this user does not want. Its `terms` keep the JD guess: the
+    content-dedup signature must stay specific, since an "Unknown term"
+    signature is a wildcard that would suppress a later Summer posting of
+    the same company/title for the whole suppress window."""
     if _jd_term_unwanted(uf, job):
-        return job.model_copy(deep=True, update={"terms": [],
-                                                 "term_confidence": "unknown",
-                                                 "terms_from_jd": False})
+        return job.model_copy(deep=True, update={"term_display_unknown": True})
     return job
 
 

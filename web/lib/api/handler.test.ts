@@ -303,6 +303,11 @@ test("a watcher push with a blank term keeps a term already on the row", async (
     key: "job:1", short, company: "Example", title: "Intern", term: "   ", url: "https://example.com/jobs/1",
   }] });
   expect((await (await request("/matches")).json()).data[0].term).toBe("Summer 2027");
+  // The watcher's display sentinel for an unresolved term, sent on every push.
+  await backend.mutation(api.tracker.pushMatches, { user: "alice", secret, items: [{
+    key: "job:1", short, company: "Example", title: "Intern", term: "Unknown term", url: "https://example.com/jobs/1",
+  }] });
+  expect((await (await request("/matches")).json()).data[0]).toMatchObject({ term: "Summer 2027", termConfidence: "inferred" });
 });
 
 test("authentication rejects missing, revoked and malformed keys without contacting Convex", async () => {

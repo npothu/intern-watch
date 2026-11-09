@@ -440,22 +440,35 @@ _JD_LONG_DURATION_RE = re.compile(
     r"fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|"
     r"(?:two|2|multi)[\s-]*(?:semesters?|terms)|"
     r"(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|"
-    r"\d+[\s-]*years?|lasts?\s+(?:a|one)\s+(?:full\s+)?year|"
+    r"\d+[\s-]*years?|(?:lasts?|lasting|runs?|running|spans?|spanning)\s+"
+    r"(?:(?:for|about|roughly|around|approximately|nearly|almost|over|"
+    r"a\s+little\s+over)\s+)?(?:a|one)\s+(?:full\s+)?year|"
     r"over\s+a\s+year|(?:a|one)\s+full\s+year|(?:1[5-9]\d|[2-9]\d\d)[\s-]*days?)\b",
     _RX)
 # A duration phrase about the applicant's history, not this posting - judged
 # on the words right around the phrase, not the whole clause ("a previous
 # 6-month internship", "6 months of sales experience"; but "this 12-month
 # internship is preferred for conversion" is still long).
+# Only the applicant's own history counts: "previous/prior/past/completed"
+# right before the phrase ("completing a 12-month internship" is this
+# program), or "N months of (sales) experience" right after it - with no
+# internship noun in between ("12-month internship experience" describes
+# the program).
 _JD_DURATION_HISTORY_BEFORE_RE = re.compile(
-    r"\b(?:previous|prior|past|completed|completing)\W+(?:\w+\W+)?$", _RX)
+    r"\b(?:previous|prior|past|completed)\W+(?:\w+\W+)?$", _RX)
 _JD_DURATION_HISTORY_AFTER_RE = re.compile(
-    r"\W*(?:of\s+)?(?:\w+\s+){0,2}?experience\b", _RX)
+    r"\W*(?:of\s+)?(?:(?!intern|co-?op|program|placement|fellowship)\w+\s+){0,2}?"
+    r"experience\b", _RX)
 # "This is not a Summer 2027 internship": a negated season - the JD says
 # nothing usable about the term.
+# Auxiliaries may sit between the negation and the season ("will not be a",
+# "won't be a", "isn't a", "is not our"), and a yearless season counts too
+# ("This is not a summer internship"); "do not fall under" is the verb.
 _JD_NEGATED_SEASON_RE = re.compile(
-    rf"(?:\bnot|n['’]t|\bnever)\s+(?:(?:a|an|the|for|in|during)\s+)?"
-    rf"(?:{_SEASON_LIST})[\s_-]*(?:of\s+)?(?:20|[‘’']\s*)(?:{_YY})(?!\d)", _RX)
+    rf"(?:\bnot|n['’]t|\bnever)\s+(?:(?:be|a|an|the|for|in|during|our|this|"
+    rf"part\s+of)\s+){{0,3}}(?:{_SEASON_LIST})\b"
+    r"(?!\s+(?:under|within|into|behind|short|through|off|apart|outside|"
+    r"in love)\b)", _RX)
 # Placement evidence that keeps a hard-skipped clause in the gate: an
 # explicit season tied to an internship noun within four words, on either
 # side ("our Summer 2027 incoming software engineering internship", "the

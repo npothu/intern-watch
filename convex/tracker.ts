@@ -7,7 +7,7 @@ import { applyStatus, removeIfUnprogressed } from "./ledger";
 import { postingIdentity, preferredApplyUrl } from "./ingest_extract";
 import { isClosed } from "./liveness";
 import { canonicalTerm } from "./watch_types";
-import { effectiveItem } from "./match_overrides";
+import { effectiveItem, isBlankTerm } from "./match_overrides";
 import {
   createManualApplicationInLedger,
   manualApplicationDraftValidator,
@@ -248,11 +248,11 @@ export const pushMatches = mutation({
           && postingIdentity(existing.item.url) === postingIdentity(item.url)) {
         item.url = preferredApplyUrl(existing.item.url, item.url);
       }
-      // A blank incoming term never erases a known one: the stored term may
-      // come from the JD backfill (term_backfill.ts), which the watcher's
-      // title-only view of the job cannot see.
-      const blank = (t: unknown) => typeof t !== "string" || !t.trim();
-      if (existing && blank(item.term) && !blank(existing.item?.term)) {
+      // A blank incoming term - including the watcher's "Unknown term"
+      // display sentinel, sent on every push - never erases a known one:
+      // the stored term may come from the JD backfill (term_backfill.ts),
+      // which the watcher's title-only view of the job cannot see.
+      if (existing && isBlankTerm(item.term) && !isBlankTerm(existing.item?.term)) {
         item.term = existing.item.term;
         if (existing.item.termConfidence) item.termConfidence = existing.item.termConfidence;
       }

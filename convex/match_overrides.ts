@@ -13,6 +13,15 @@ import type { Doc } from "./_generated/dataModel";
 //   3. tracker.ts MATCH_PATCH_FIELDS + patchMatch - validation and write;
 //   4. web/lib/api/schemas.ts matchPatch - the HTTP body.
 
+/**
+ * A term that says nothing: missing, blank, or a display sentinel such as
+ * the watcher's "Unknown term" (src/notify.py). pushMatches never lets one
+ * replace a stored real term, and the backfill treats it as missing.
+ */
+export function isBlankTerm(term: unknown): boolean {
+  return typeof term !== "string" || !term.trim() || /^unknown/i.test(term.trim());
+}
+
 /** termConfidence of a hand-corrected term (beside explicit / inferred / unknown). */
 export const MANUAL_TERM_CONFIDENCE = "manual";
 

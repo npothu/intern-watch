@@ -24,6 +24,11 @@ class Job(BaseModel):
     # stage: one outside the wanted set is treated as unknown (LLM decides),
     # never as a term-not-wanted rejection. Transient, like `description`.
     terms_from_jd: bool = False
+    # Set on the copy main._delivered hands out when a job was accepted
+    # while its JD term was not wanted: the snapshot shows "Unknown term",
+    # but `terms` keeps the JD guess so the content-dedup signature stays
+    # specific (an "Unknown term" signature wildcards in content_dedup).
+    term_display_unknown: bool = False
     url: str                          # apply/info link, tracking params stripped
     jobright_id: str | None = None    # 24-hex id when extractable
     work_model: str | None = None     # "On Site" | "Hybrid" | "Remote" | None

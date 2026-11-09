@@ -442,8 +442,10 @@ function companyFromAtPhrase(text: string): string {
 //      else one yearless season next to an internship noun (year from the
 //      anchor date).
 //   3. unknown.
-// When in doubt the JD rules return unknown: in the watcher a wrong JD term
-// is a permanent rejection, unknown only defers to the LLM.
+// When in doubt the JD rules return unknown. The hosted ingest stores this
+// term as-is, and in the watcher a JD term may only ACCEPT (src/filters.py:
+// one outside the wanted set goes to the LLM), so the costly mistake is a
+// wrong term that IS wanted - a job delivered for the wrong season.
 // Only clauses about the placement (internship noun or a start-date / dates /
 // duration label) produce a JD term, and the consistency gate (jdConsistent)
 // rejects any answer another temporal mention in the JD disagrees with. A JD
@@ -508,13 +510,16 @@ const JD_SEASON_WORD_RE = new RegExp(
   `\\b(${SEASON_ALT})\\b(?!\\s+(?:under|within|into|behind|short|through|off|apart|outside|in love)\\b)`, "gi");
 // A placement longer than one term: a single-term answer needs a stated span.
 const JD_LONG_DURATION_RE =
-  /\b(?:(?:[5-9]|[1-9]\d|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-9]\d|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*|fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms)|(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|\d+[\s-]*years?|lasts?\s+(?:a|one)\s+(?:full\s+)?year|over\s+a\s+year|(?:a|one)\s+full\s+year|(?:1[5-9]\d|[2-9]\d\d)[\s-]*days?)\b/gi;
+  /\b(?:(?:[5-9]|[1-9]\d|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-9]\d|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*|fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms)|(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|\d+[\s-]*years?|(?:lasts?|lasting|runs?|running|spans?|spanning)\s+(?:(?:for|about|roughly|around|approximately|nearly|almost|over|a\s+little\s+over)\s+)?(?:a|one)\s+(?:full\s+)?year|over\s+a\s+year|(?:a|one)\s+full\s+year|(?:1[5-9]\d|[2-9]\d\d)[\s-]*days?)\b/gi;
 // A duration phrase about the applicant's history, judged on the words around the phrase (see normalize.py).
-const JD_DURATION_HISTORY_BEFORE_RE = /\b(?:previous|prior|past|completed|completing)\W+(?:\w+\W+)?$/i;
-const JD_DURATION_HISTORY_AFTER_RE = /^\W*(?:of\s+)?(?:\w+\s+){0,2}?experience\b/i;
-// "This is not a Summer 2027 internship": a negated season - the JD is no help.
+// Only the applicant's own history: "previous/prior/past/completed" right before, or
+// "N months of (sales) experience" right after with no internship noun in between.
+const JD_DURATION_HISTORY_BEFORE_RE = /\b(?:previous|prior|past|completed)\W+(?:\w+\W+)?$/i;
+const JD_DURATION_HISTORY_AFTER_RE = /^\W*(?:of\s+)?(?:(?!intern|co-?op|program|placement|fellowship)\w+\s+){0,2}?experience\b/i;
+// A negated season ("is not a Summer 2027", "won't be a", "not a summer internship"): the JD
+// is no help. "do not fall under" is the verb.
 const JD_NEGATED_SEASON_RE = new RegExp(
-  `(?:\\bnot|n['’]t|\\bnever)\\s+(?:(?:a|an|the|for|in|during)\\s+)?(?:${SEASON_LIST})[\\s_-]*(?:of\\s+)?(?:20|[‘’']\\s*)(?:${YY})(?!\\d)`,
+  `(?:\\bnot|n['’]t|\\bnever)\\s+(?:(?:be|a|an|the|for|in|during|our|this|part\\s+of)\\s+){0,3}(?:${SEASON_LIST})\\b(?!\\s+(?:under|within|into|behind|short|through|off|apart|outside|in love)\\b)`,
   "i",
 );
 // Placement evidence that keeps a hard-skipped clause in the gate (see normalize.py).

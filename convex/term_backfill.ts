@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation } from "./_generated/server";
 import { inferTermDetailed } from "./ingest_extract";
+import { isBlankTerm } from "./match_overrides";
 
 // One-off repair for match rows stored with no term: re-run inferTermDetailed
 // over the title, URL and stored JD text. DRY RUN BY DEFAULT - it reports what
@@ -38,10 +39,6 @@ const zero = (): Counts => ({
   scanned: 0, blank: 0, blankWithJd: 0, corrected: 0, resolved: 0, resolvedFromJd: 0,
   explicit: 0, inferred: 0, unresolved: 0, written: 0,
 });
-
-function isBlankTerm(term: unknown): boolean {
-  return typeof term !== "string" || !term.trim() || /^unknown/i.test(term.trim());
-}
 
 export const backfillPage = internalMutation({
   args: {
