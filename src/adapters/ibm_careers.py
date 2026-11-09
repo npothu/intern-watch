@@ -60,9 +60,10 @@ def query_body(offset: int) -> dict:
             "filter": [{"term": {"field_keyword_18": "Internship"}}]}},
         "size": PAGE_SIZE,
         "from": offset,
-        # _id breaks score ties: on _score alone equal-score hits reorder
-        # between pages (178 rows, 175 distinct), so page_through fails it.
-        "sort": [{"_score": "desc"}, {"_id": "asc"}],
+        # No _score in the sort: scores differ between requests (replicas),
+        # so score order reshuffles between pages (178 rows, 175 distinct)
+        # and page_through fails the board. Date then _id is deterministic.
+        "sort": [{"dcdate": "desc"}, {"_id": "asc"}],
         "lang": "zz",
         "_source": _SOURCE_FIELDS,
     }
