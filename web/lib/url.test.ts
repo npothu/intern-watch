@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeUrl } from "./url";
+import { addUrlFieldOnOpen, looksLikeUrl } from "./url";
+
+describe("addUrlFieldOnOpen", () => {
+  it("uses a passed prefill, trimmed", () => {
+    expect(addUrlFieldOnOpen("  https://example.invalid/job/1 ")).toBe("https://example.invalid/job/1");
+  });
+  it("starts empty when opened without one", () => {
+    expect(addUrlFieldOnOpen(undefined)).toBe("");
+    expect(addUrlFieldOnOpen(null)).toBe("");
+    expect(addUrlFieldOnOpen(42)).toBe("");
+  });
+});
 
 describe("looksLikeUrl", () => {
   it("accepts absolute http(s) URLs, trimmed", () => {

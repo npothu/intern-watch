@@ -140,6 +140,20 @@ export function splitUnwatched(
   return { watched, unwatched };
 }
 
+/**
+ * The Matches count the header nav shows: live (not hidden) rows, in watched
+ * terms unless the unwatched ones are being shown too. One definition for the
+ * server seed (lib/app-data.ts) and the surface's live republish (triage.tsx).
+ */
+export function liveMatchCount(
+  rows: readonly TriageRow[],
+  wantedTerms: readonly string[] | null,
+  showUnwatched: boolean
+): number {
+  const scoped = showUnwatched ? rows : splitUnwatched(rows, wantedTerms).watched;
+  return scoped.reduce((n, r) => (r.dismissed ? n : n + 1), 0);
+}
+
 /** The open row, if it is still on screen; otherwise nothing is open. */
 export function resolveOpen(open: string | null, visible: readonly Pick<TriageRow, "short">[]): string | null {
   return open !== null && visible.some((r) => r.short === open) ? open : null;

@@ -14,6 +14,7 @@ import {
   formatUrlState,
   isClosed,
   isPrimaryTerm,
+  liveMatchCount,
   orderTerms,
   parseUrlState,
   reportSummary,
@@ -425,6 +426,25 @@ describe("open row and unwatched terms", () => {
     expect(shorts(split.watched)).toEqual(["want", "none", "odd"]);
     expect(shorts(split.unwatched)).toEqual(["past"]);
     expect(splitUnwatched(rows, null).unwatched).toEqual([]);
+  });
+});
+
+describe("liveMatchCount", () => {
+  const rows = [
+    row("want", { term: "Summer 2027" }),
+    row("want-hidden", { term: "Summer 2027", dismissed: true }),
+    row("past", { term: "Fall 2026" }),
+    row("past-hidden", { term: "Fall 2026", dismissed: true }),
+    row("none", { term: "" }),
+  ];
+  test("counts live rows in watched terms only", () => {
+    expect(liveMatchCount(rows, ["Summer 2027"], false)).toBe(2);
+  });
+  test("counts unwatched live rows too while they are shown", () => {
+    expect(liveMatchCount(rows, ["Summer 2027"], true)).toBe(3);
+  });
+  test("no preferences known means every term is watched", () => {
+    expect(liveMatchCount(rows, null, false)).toBe(3);
   });
 });
 

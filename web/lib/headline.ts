@@ -34,6 +34,17 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * Today as the watcher writes `added`: the UTC calendar day ("YYYY-MM-DD").
+ * The watcher stamps `datetime.now(UTC).date()` and a manual add stamps
+ * `toISOString().slice(0, 10)`, so "new today" must compare against the UTC
+ * day too - not the server's or the visitor's local one. Computed once on the
+ * server and passed down, so SSR and hydration render the same text.
+ */
+export function utcDayIso(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
 /** True when an `added` day ("YYYY-MM-DD", possibly with a time) is `todayIso`. */
 export function isAddedOn(added: string, todayIso: string): boolean {
   return /^\d{4}-\d{2}-\d{2}/.test(added) && added.slice(0, 10) === todayIso;
@@ -56,15 +67,18 @@ export function composeMatchesHeading(c: HeadingCounts): {
   label: string;
   headline: string;
 } {
-  if (c.shown === 0) {
-    return { label: "Matches · 0 shown", headline: "No matches for these filters." };
-  }
+  // The hidden list first: with nothing hidden it is still the hidden list,
+  // not "0 shown" of the main one.
   if (c.hidden) {
+    if (c.shown === 0) return { label: "Matches · 0 hidden", headline: "No hidden matches." };
     const noun = c.shown === 1 ? "hidden match" : "hidden matches";
     return {
       label: `Matches · ${c.shown} hidden`,
       headline: `${capitalize(numberWord(c.shown))} ${noun}.`,
     };
+  }
+  if (c.shown === 0) {
+    return { label: "Matches · 0 shown", headline: "No matches for these filters." };
   }
   const fresh = c.newToday > 0;
   const count = fresh ? c.newToday : c.shown;

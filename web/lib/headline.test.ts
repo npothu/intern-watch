@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeMatchesHeading, isAddedOn, numberWord } from "./headline";
+import { composeMatchesHeading, isAddedOn, numberWord, utcDayIso } from "./headline";
 
 describe("numberWord", () => {
   it("spells out zero through twelve", () => {
@@ -25,6 +25,17 @@ describe("isAddedOn", () => {
   it("rejects unparseable values", () => {
     expect(isAddedOn("", "2026-11-09")).toBe(false);
     expect(isAddedOn("yesterday", "2026-11-09")).toBe(false);
+  });
+  it("compares against the UTC day, which a local date can disagree with", () => {
+    // 02:00 UTC on Nov 9 is still Nov 8 on the US west coast. The watcher
+    // stamped the row with the UTC day, so it is new today in UTC terms.
+    const now = new Date("2026-11-09T02:00:00Z");
+    const added = "2026-11-09";
+    expect(utcDayIso(now)).toBe("2026-11-09");
+    expect(isAddedOn(added, utcDayIso(now))).toBe(true);
+    const pacificLocal = now.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    expect(pacificLocal).toBe("2026-11-08");
+    expect(isAddedOn(added, pacificLocal)).toBe(false);
   });
 });
 
@@ -83,5 +94,12 @@ describe("composeMatchesHeading", () => {
     expect(
       composeMatchesHeading({ shown: 2, priority: 1, newToday: 2, newTodayPriority: 1, hidden: true })
     ).toEqual({ label: "Matches · 2 hidden", headline: "Two hidden matches." });
+  });
+
+  it("labels an empty hidden list as hidden, not as 0 shown", () => {
+    expect(composeMatchesHeading({ ...base, hidden: true })).toEqual({
+      label: "Matches · 0 hidden",
+      headline: "No hidden matches.",
+    });
   });
 });
