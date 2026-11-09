@@ -100,6 +100,7 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date,
 
 
 JD_FETCH_CAP = 80  # per run; a --backfill burst must not hammer Greenhouse
+RECHECK_JD_MAX_FAILURES = 3  # consecutive failed recheck JD fetches, then stop
 
 
 def enrich_jds(jobs: list[Job]) -> int:
@@ -194,6 +195,7 @@ class _JobrightEnricher:
         # recheck backlog for one user never starves a later user's
         # screening of brand-new jobs.
         self.recheck_fetched = 0
+        self.recheck_failures = 0   # consecutive; see RECHECK_JD_MAX_FAILURES
         self.attempted: set[str] = set()
 
     def _ensure_client(self) -> httpx.Client:
@@ -216,7 +218,16 @@ class _JobrightEnricher:
                      "keeping %s unchecked", JD_FETCH_CAP,
                      " (rechecks)" if recheck else "", job.dedup_key)
             return True
+        if recheck and self.recheck_failures >= RECHECK_JD_MAX_FAILURES:
+            return True   # jobright looks down: the recheck waits (stale)
         self.attempted.add(job.dedup_key)
+        # Attempts, not successes, count toward the cap: with jobright down
+        # every try is a timeout, and a large recheck batch must not turn
+        # into hundreds of them.
+        if recheck:
+            self.recheck_fetched += 1
+        else:
+            self.fetched += 1
         try:
             # The authed fetch carries the JD and the employer link in one
             # request (the later resolve step hits the session memo), but a
@@ -229,13 +240,16 @@ class _JobrightEnricher:
             if not job.description:
                 job.description = fetch_description(self._ensure_client(),
                                                     job.jobright_id)
-            if recheck:
-                self.recheck_fetched += 1
-            else:
-                self.fetched += 1
         except Exception as exc:  # noqa: BLE001 - a jobright change must never
             log.warning("jobright JD fetch failed for %s (%s) -- keeping job",
                         job.dedup_key, exc)  # suppress real matches
+        if recheck:
+            self.recheck_failures = 0 if job.description else (
+                self.recheck_failures + 1)
+            if self.recheck_failures == RECHECK_JD_MAX_FAILURES:
+                log.warning("jobright JD fetch failed %d times in a row -- "
+                            "no more recheck fetches this run",
+                            RECHECK_JD_MAX_FAILURES)
         return True
 
     def close(self) -> None:

@@ -318,20 +318,28 @@ def _has_history(state: dict, user: str) -> bool:
     return any(user in e.get("notified_for", []) for e in state["jobs"].values())
 
 
-def _quiet_days(state: dict) -> list[str]:
-    """first_seen days on which nothing was delivered to anyone and nothing
-    reached the LLM: a first-run seed or a `--seed` run (no evaluation),
-    not an evaluated day. On the reference instance this is only the first
-    run's seed day."""
+QUIET_DAY_MIN_KEYS = 25   # a seed is a bulk day; a small quiet day is real
+
+
+def _quiet_days(state: dict, today: dt.date) -> list[str]:
+    """Bulk first_seen days (QUIET_DAY_MIN_KEYS+ new keys) before today on
+    which nothing was delivered to anyone and nothing reached the LLM: a
+    first-run seed or a `--seed` run (no evaluation), not an evaluated day.
+    Today is left out (this run judges before it delivers, so today always
+    looks quiet), and so is a small day whose few jobs all failed the role
+    filter: it was evaluated and its rejections should still recover. On
+    the reference instance this is only the first run's seed day."""
     active: set[str] = set()
-    days: set[str] = set()
+    counts: dict[str, int] = {}
     for e in state["jobs"].values():
         if not (day := e.get("first_seen")):
             continue
-        days.add(day)
+        counts[day] = counts.get(day, 0) + 1
         if "llm" in e or e.get("notified_for"):
             active.add(day)
-    return sorted(days - active)
+    return sorted(day for day, n in counts.items()
+                  if day not in active and n >= QUIET_DAY_MIN_KEYS
+                  and day < today.isoformat())
 
 
 def bootstrap(state: dict, user: str, listed: dict[str, Job],
@@ -351,7 +359,7 @@ def bootstrap(state: dict, user: str, listed: dict[str, Job],
             "since": (rec if isinstance(rec, str) else today.isoformat())
             if history else "",
             "seed_day": min(dates, default=""),
-            "skip_days": _quiet_days(state)}
+            "skip_days": _quiet_days(state, today)}
     since, seed_day = rec["since"], rec["seed_day"]
     # Days the operator knows were seeded (a `--seed` run before seeded
     # tags existed, mixed into an otherwise evaluated day).

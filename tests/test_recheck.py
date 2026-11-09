@@ -553,7 +553,8 @@ def test_bootstrap_skips_quiet_seed_days_and_operator_skip_days():
     evaluated = _job(1, "Software Engineer Intern (Masters)")
     state = _state(evaluated)                       # day D1, delivered sibling
     seed_day = TODAY - dt.timedelta(days=3)
-    seeded = [_job(i, "Software Engineer Intern (Masters)") for i in (10, 11)]
+    seeded = [_job(i, "Software Engineer Intern (Masters)")
+              for i in range(100, 100 + recheck.QUIET_DAY_MIN_KEYS)]   # bulk
     for j in seeded:
         st.touch(state, j.dedup_key, ["s"], seed_day)
     mixed_day = TODAY - dt.timedelta(days=2)
@@ -743,3 +744,45 @@ def test_discord_never_gets_rechecks(monkeypatch):
     _run(cfg, state, [job])
     assert sent == []
     assert [i["key"] for i in st.outbox_items(state, "example")] == [job.dedup_key]
+
+
+# ---------------------------------------------------------- final nits
+
+def test_quiet_days_skip_today_and_small_days():
+    state = st.empty_state()
+    bulk = TODAY - dt.timedelta(days=9)
+    small = TODAY - dt.timedelta(days=5)
+    for i in range(recheck.QUIET_DAY_MIN_KEYS):
+        st.touch(state, f"url:https://b.example/{i}", ["s"], bulk)
+    for i in range(3):                       # a small all-rejected day
+        st.touch(state, f"url:https://s.example/{i}", ["s"], small)
+    for i in range(30):                      # today: judged, not yet sent
+        st.touch(state, f"url:https://t.example/{i}", ["s"], TODAY)
+    assert recheck._quiet_days(state, TODAY) == [bulk.isoformat()]
+
+
+class _FailingSession:
+    def __init__(self):
+        self.calls = 0
+
+    def fetch_job_result(self, jid):
+        self.calls += 1
+        raise TimeoutError("jobright down")
+
+
+def test_enricher_counts_attempts_and_stops_rechecks_after_failures(monkeypatch):
+    from src.adapters import jobright_page
+    monkeypatch.setattr(jobright_page, "fetch_description",
+                        lambda client, jid: (_ for _ in ()).throw(
+                            TimeoutError("down")))
+    session = _FailingSession()
+    enricher = main._JobrightEnricher(session=session)
+    jobs = [_job(i, jobright_id=f"{i:024x}") for i in range(10)]
+    for j in jobs:
+        enricher.keeps(j, recheck=True)
+    assert session.calls == main.RECHECK_JD_MAX_FAILURES   # then it stops
+    assert enricher.recheck_fetched == main.RECHECK_JD_MAX_FAILURES
+    # new-job screening keeps its own budget, and failures count there too
+    for j in [_job(i + 100, jobright_id=f"{i + 100:024x}") for i in range(3)]:
+        enricher.keeps(j)
+    assert enricher.fetched == 3 and session.calls == 6
