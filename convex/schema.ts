@@ -410,6 +410,14 @@ export default defineSchema({
     // "fetch_failed" (HTTP error, closed posting, network).
     errorCode: v.optional(v.string()),
     dedupKey: v.optional(v.string()),
+    // Coverage-gap facts (convex/ats_detect.ts): the ATS + board the URL
+    // lives on, whether the watcher polls that board (absent = unknown), and
+    // where the user found the link.
+    ats: v.optional(v.string()),
+    atsBoard: v.optional(v.string()),
+    boardWatched: v.optional(v.boolean()),
+    atsSupported: v.optional(v.boolean()),
+    foundVia: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

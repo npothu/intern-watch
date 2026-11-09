@@ -203,6 +203,21 @@ Coverage depends on those sources.
 Public mirrors can omit postings, and a short-lived listing can disappear between polls.
 Repeated source failures trigger health warnings in email rather than clearing existing state.
 
+### Closing coverage gaps
+
+A posting you add by hand (web app **Add URL**) is one the watcher missed.
+The add records which ATS and board the link lives on. When the watcher doesn't poll that board, the result says so and offers the `ats_boards.yaml` row to copy.
+Add URL takes several links at once, one per line or pasted straight from a post. The optional **Found via** label (for example `instagram`) lets the report count where the misses come from.
+The watcher only reads public sources. It doesn't scrape social media; you paste the links yourself.
+
+The weekly [gap-report workflow](.github/workflows/gap-report.yml) runs [`scripts/gap_report.py`](scripts/gap_report.py) over your manual adds and keeps one issue titled **coverage gaps** current.
+The issue has three parts: rows ready to paste into `data/ats_boards.yaml`, employers whose ATS has no adapter yet (with miss counts), and a hand-check watchlist.
+To run it locally, use `python scripts/gap_report.py` (add `--format yaml` for only the rows).
+
+Some employers have no public API the watcher can use, either because the ATS is proprietary or the search needs a login. Keep a hand-check list for those.
+Copy [`data/manual_watchlist.example.yaml`](data/manual_watchlist.example.yaml) to `manual_watchlist.yaml` at the root of your data directory.
+The issue shows each employer with its `last_checked` date, turning red when a check is overdue, plus the last time you added one of its postings by hand.
+
 ## Hosted web app (optional)
 
 The app in [`web/`](web/) uses Next.js 16, React 19, TypeScript, Tailwind CSS, Clerk sign-in, and Convex.

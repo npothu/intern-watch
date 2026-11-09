@@ -605,6 +605,14 @@ class ConvexStore:
         # an empty snapshot rather than handing callers the wrong shape.
         return items if isinstance(items, list) else []
 
+    def get_failed_ingests(self, user: str) -> list[dict]:
+        """Manual adds whose fetch failed ({url, ats, atsBoard, foundVia,
+        added}): misses that never became a match, for src/coverage.py.
+        Raises ApiError like the other reads it has no fallback for."""
+        rows = self._post("query", "getFailedIngests",
+                          {"user": user, "secret": self.secret}, module="coverage")
+        return rows if isinstance(rows, list) else []
+
     # -- mail sync ----------------------------------------------------------
 
     def get_actions(self, user: str) -> dict | None:
