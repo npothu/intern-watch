@@ -746,7 +746,8 @@ def test_enrich_jds_cap_takes_oldest_first_and_reports_the_rest(monkeypatch):
     assert jobs[0].description is None and jobs[1].description == "jd"
 
 
-def _jd_cap_run(monkeypatch, tmp_path, feeds, cap=0):
+def _jd_cap_run(monkeypatch, tmp_path, feeds, cap=0,
+                jd="<p>Paid internship.</p>"):
     """Run main once per entry of `feeds` (a list of job lists the stub
     source returns that run) with JD_FETCH_CAP=cap; returns the state."""
     import httpx
@@ -763,7 +764,7 @@ def _jd_cap_run(monkeypatch, tmp_path, feeds, cap=0):
     real = httpx.Client
     monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
         transport=httpx.MockTransport(lambda r: httpx.Response(
-            200, json={"content": "<p>Paid internship.</p>"})), **kw))
+            200, json={"content": jd})), **kw))
     state_file = tmp_path / "seen.json"
     pre = st.empty_state()
     st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
@@ -817,3 +818,20 @@ def test_jd_deferred_row_that_vanishes_is_still_evaluated_on_relist(
     assert key not in st.pending_keys(s3, "example")  # relisted: decided
     assert _delivered(s3, key)
     assert "jd_deferred" not in s3["jobs"][key]
+
+
+def test_held_twin_is_decided_with_the_ats_jd_eliminations(
+        monkeypatch, tmp_path):
+    ats = _job(1, url="https://boards.greenhouse.io/acme/jobs/999")
+    ats.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/999"
+    twin = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/999")
+    twin.company = ats.company
+    jd = ("<p>Candidates must hold an active TS/SCI security clearance at "
+          "the time of application.</p>")
+    s1, s2 = _jd_cap_run(monkeypatch, tmp_path, [[ats, twin], [ats, twin]],
+                         jd=jd)
+    ka, kt = dedup_key(ats), dedup_key(twin)
+    assert st.pending_keys(s1, "example") == {ka, kt}
+    # run 2: the ATS row is rejected by its JD, and the twin with it
+    assert st.pending_keys(s2, "example") == set()
+    assert not _delivered(s2, ka) and not _delivered(s2, kt)

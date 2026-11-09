@@ -422,6 +422,36 @@ def _drop_url_dupes(state: dict, name: str,
     return kept
 
 
+def _apply_twin_jds(uf: UserFilter, candidates: list[Job],
+                    accepted: list[tuple[Job, list[str]]], name: str,
+                    today: dt.date) -> list[tuple[Job, list[str]]]:
+    """An accepted job with no JD whose canonical URL matches a candidate of
+    this run that has one (its ATS twin) takes that JD and is evaluated
+    again, so the clearance / grad-only / unpaid lines that live only in the
+    ATS JD reach it too. A reject here is final, like any reject; any other
+    verdict keeps the earlier accept. Runs after _resolve_employer_urls so a
+    jobright twin carries its employer URL."""
+    jds: dict[str, str] = {}
+    for job in candidates:
+        canon = canonical_url(job.url) if job.description else None
+        if canon:
+            jds.setdefault(canon, job.description or "")
+    if not jds:
+        return accepted
+    kept = []
+    for job, reasons in accepted:
+        canon = canonical_url(job.url)
+        if not job.description and canon in jds:
+            job.description = jds[canon]
+            verdict = uf.evaluate(job, today=today)
+            if verdict.status == "reject":
+                log.info("user %s: %s rejected with its twin's JD (%s)", name,
+                         job.dedup_key, "; ".join(verdict.reasons))
+                continue
+        kept.append((job, reasons))
+    return kept
+
+
 def _resolve_employer_urls(accepted: list[tuple[Job, list[str]]], state: dict,
                            resolver) -> None:
     """Resolve accepted jobright jobs to their employer apply url, so email,
@@ -921,6 +951,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             else:
                 kept.append((job, reasons))
         accepted = kept
+    accepted = _apply_twin_jds(uf, candidates, accepted, name, today)
     accepted = _drop_url_dupes(state, name, accepted, terms_order, today)
     accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
 
