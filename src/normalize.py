@@ -308,11 +308,13 @@ def extract_jobright_id(url: str) -> str | None:
 #      year taken from the anchor date.
 #   3. unknown.
 # Governing rule for the JD body: when in doubt, unknown. In the watcher a
-# wrong JD term is a permanent term-not-wanted rejection, while unknown
-# just sends the job to the LLM. So conflicting dates, season lists,
-# year-round programs, application windows, perks, past cohorts and a
-# yearless season read inside its own window (Summer in Apr-Aug) all give
-# unknown.
+# JD term may only ACCEPT (filters.UserFilter.evaluate: one outside the
+# wanted set is treated as unknown and goes to the LLM), so a wrong JD term
+# that IS wanted is the costly mistake - it delivers a job for the wrong
+# season with no LLM check - and the hosted ingest stores whatever this
+# returns. So conflicting dates, season lists, year-round programs,
+# application windows, perks, past cohorts, negated seasons and a yearless
+# season read inside its own window (Summer in Apr-Sep) all give unknown.
 # Only a clause whose subject is the placement (internship, co-op,
 # placement, cohort, program, or a "Start date:" / "Dates:" / "Duration:"
 # label) can produce a JD term; graduation, deadline, eligibility,
@@ -438,11 +440,22 @@ _JD_LONG_DURATION_RE = re.compile(
     r"fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|"
     r"(?:two|2|multi)[\s-]*(?:semesters?|terms)|"
     r"(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|"
-    r"\d+[\s-]*years?)\b", _RX)
-# A duration that describes the applicant's history, not this posting:
-# "applicants with a previous 6-month internship are preferred".
-_JD_OTHER_DURATION_RE = re.compile(
-    r"\b(?:previous|prior|past|experience|completed|preferred)\b", _RX)
+    r"\d+[\s-]*years?|lasts?\s+(?:a|one)\s+(?:full\s+)?year|"
+    r"over\s+a\s+year|(?:a|one)\s+full\s+year|(?:1[5-9]\d|[2-9]\d\d)[\s-]*days?)\b",
+    _RX)
+# A duration phrase about the applicant's history, not this posting - judged
+# on the words right around the phrase, not the whole clause ("a previous
+# 6-month internship", "6 months of sales experience"; but "this 12-month
+# internship is preferred for conversion" is still long).
+_JD_DURATION_HISTORY_BEFORE_RE = re.compile(
+    r"\b(?:previous|prior|past|completed|completing)\W+(?:\w+\W+)?$", _RX)
+_JD_DURATION_HISTORY_AFTER_RE = re.compile(
+    r"\W*(?:of\s+)?(?:\w+\s+){0,2}?experience\b", _RX)
+# "This is not a Summer 2027 internship": a negated season - the JD says
+# nothing usable about the term.
+_JD_NEGATED_SEASON_RE = re.compile(
+    rf"(?:\bnot|n['’]t|\bnever)\s+(?:(?:a|an|the|for|in|during)\s+)?"
+    rf"(?:{_SEASON_LIST})[\s_-]*(?:of\s+)?(?:20|[‘’']\s*)(?:{_YY})(?!\d)", _RX)
 # Placement evidence that keeps a hard-skipped clause in the gate: an
 # explicit season tied to an internship noun within four words, on either
 # side ("our Summer 2027 incoming software engineering internship", "the
@@ -674,6 +687,18 @@ def _jd_season_only(clauses: list[str], anchor: dt.date) -> list[str]:
     return [f"{season} {_next_occurrence(season, anchor)}"]
 
 
+def _placement_duration_is_long(clause: str) -> bool:
+    """Whether a placement clause gives THIS posting a long duration: any
+    long-duration phrase not framed as the applicant's history."""
+    for m in _JD_LONG_DURATION_RE.finditer(clause):
+        if _JD_DURATION_HISTORY_BEFORE_RE.search(clause[:m.start()]):
+            continue
+        if _JD_DURATION_HISTORY_AFTER_RE.match(clause[m.end():]):
+            continue
+        return True
+    return False
+
+
 def _jd_consistent(terms: list[str], gate: list[str], placement: list[str],
                    from_span: bool) -> bool:
     """The consistency gate. A JD answer stands only if every other temporal
@@ -692,8 +717,7 @@ def _jd_consistent(terms: list[str], gate: list[str], placement: list[str],
     # A long duration in any placement clause is doubt, even beside a
     # one-term span ("this co-op is 12 months" + "May 18 - Aug 7"); only a
     # stated span covering several terms can account for it.
-    if any(_JD_LONG_DURATION_RE.search(c) and not _JD_OTHER_DURATION_RE.search(c)
-           for c in placement) and not (
+    if any(_placement_duration_is_long(c) for c in placement) and not (
             from_span and len(terms) > 1):
         return False
     for c in gate:
@@ -728,6 +752,8 @@ def infer_term(title: str, url: str | None = None, jd: str | None = None,
     gate = [c for c in all_clauses if not _JD_HARD_SKIP_RE.search(c)
             or _JD_PLACEMENT_EVIDENCE_RE.search(c)]
     clauses = _jd_clauses(all_clauses)
+    if any(_JD_NEGATED_SEASON_RE.search(c) for c in all_clauses):
+        clauses = []        # "not a Summer 2027 internship": the JD is no help
     jd_explicit = _jd_explicit(clauses, anchor)
     if jd_explicit and not _jd_consistent(jd_explicit, gate, clauses, False):
         jd_explicit = []

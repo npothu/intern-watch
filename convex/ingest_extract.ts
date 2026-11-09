@@ -508,9 +508,15 @@ const JD_SEASON_WORD_RE = new RegExp(
   `\\b(${SEASON_ALT})\\b(?!\\s+(?:under|within|into|behind|short|through|off|apart|outside|in love)\\b)`, "gi");
 // A placement longer than one term: a single-term answer needs a stated span.
 const JD_LONG_DURATION_RE =
-  /\b(?:(?:[5-9]|[1-9]\d|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-9]\d|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*|fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms)|(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|\d+[\s-]*years?)\b/i;
-// A duration about the applicant's history, not this posting.
-const JD_OTHER_DURATION_RE = /\b(?:previous|prior|past|experience|completed|preferred)\b/i;
+  /\b(?:(?:[5-9]|[1-9]\d|five|six|seven|eight|nine|ten|eleven|twelve|eighteen|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*)\+?[\s-]*(?:calendar[\s-]+)?months?|(?:2\d|[3-9]\d|twenty[\s-]*\w*|thirty[\s-]*\w*|forty[\s-]*\w*|fifty[\s-]*\w*)\+?[\s-]*weeks?|half[\s-]*(?:a[\s-]+)?year|(?:two|2|multi)[\s-]*(?:semesters?|terms)|(?:year|12[\s-]*months?)[\s-]*long|(?:one|1|full|two|2|multi)[\s-]*years?|\d+[\s-]*years?|lasts?\s+(?:a|one)\s+(?:full\s+)?year|over\s+a\s+year|(?:a|one)\s+full\s+year|(?:1[5-9]\d|[2-9]\d\d)[\s-]*days?)\b/gi;
+// A duration phrase about the applicant's history, judged on the words around the phrase (see normalize.py).
+const JD_DURATION_HISTORY_BEFORE_RE = /\b(?:previous|prior|past|completed|completing)\W+(?:\w+\W+)?$/i;
+const JD_DURATION_HISTORY_AFTER_RE = /^\W*(?:of\s+)?(?:\w+\s+){0,2}?experience\b/i;
+// "This is not a Summer 2027 internship": a negated season - the JD is no help.
+const JD_NEGATED_SEASON_RE = new RegExp(
+  `(?:\\bnot|n['’]t|\\bnever)\\s+(?:(?:a|an|the|for|in|during)\\s+)?(?:${SEASON_LIST})[\\s_-]*(?:of\\s+)?(?:20|[‘’']\\s*)(?:${YY})(?!\\d)`,
+  "i",
+);
 // Placement evidence that keeps a hard-skipped clause in the gate (see normalize.py).
 const JD_PLACEMENT_NOUN = "(?:intern(?:ship)?s?|co-?ops?|placements?|cohorts?|program(?:me)?s?)\\b";
 const JD_PLACEMENT_EVIDENCE_RE = new RegExp(
@@ -702,6 +708,17 @@ function jdSeasonOnly(clauses: string[], anchor: Date): string[] {
  * only if every other temporal mention outside graduation/deadline clauses
  * fits inside it, and a placement longer than one term came from a span.
  */
+/** Whether a placement clause gives this posting a long duration (not the applicant's history). */
+function placementDurationIsLong(clause: string): boolean {
+  for (const m of clause.matchAll(JD_LONG_DURATION_RE)) {
+    const at = m.index ?? 0;
+    if (JD_DURATION_HISTORY_BEFORE_RE.test(clause.slice(0, at))) continue;
+    if (JD_DURATION_HISTORY_AFTER_RE.test(clause.slice(at + m[0].length))) continue;
+    return true;
+  }
+  return false;
+}
+
 function jdConsistent(terms: string[], gate: string[], placement: string[], fromSpan: boolean): boolean {
   const parsed = terms.map((t) => /^(Spring|Summer|Fall|Winter) (\d{4})$/.exec(t)).filter((m) => m !== null);
   const cover = new Set<string>();
@@ -716,7 +733,7 @@ function jdConsistent(terms: string[], gate: string[], placement: string[], from
   }
   // Duration only from placement clauses: "a 6-month application limit" is not the placement.
   // A long duration in any placement clause is doubt unless a stated span covers several terms.
-  if (placement.some((c) => JD_LONG_DURATION_RE.test(c) && !JD_OTHER_DURATION_RE.test(c)) && !(fromSpan && terms.length > 1)) {
+  if (placement.some(placementDurationIsLong) && !(fromSpan && terms.length > 1)) {
     return false;
   }
   for (const c of gate) {
@@ -755,7 +772,8 @@ export function inferTermDetailed(input: {
   const all = input.jd ? splitClauses(input.jd.replace(SPACE_RE, " ")) : [];
   // A hard-skipped clause with placement evidence still has to agree with the answer.
   const gate = all.filter((c) => !JD_HARD_SKIP_RE.test(c) || JD_PLACEMENT_EVIDENCE_RE.test(c));
-  const clauses = jdClauses(all);
+  // "not a Summer 2027 internship": the JD is no help.
+  const clauses = all.some((c) => JD_NEGATED_SEASON_RE.test(c)) ? [] : jdClauses(all);
   const done = (terms: string[], confidence: TermConfidence, source: TermInference["source"]): TermInference => {
     const ordered = orderedTerms(terms);
     return { terms: ordered, term: ordered[0] ?? "", confidence, source };

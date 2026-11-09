@@ -407,23 +407,43 @@ def _backfill_apply_urls(state: dict, resolver,
     return resolved
 
 
+def _jd_term_unwanted(uf: UserFilter, job: Job) -> bool:
+    """A JD-derived term this user does not want: the job was treated as
+    unknown-term for them (see UserFilter.evaluate)."""
+    return job.terms_from_jd and not set(job.terms) & uf.terms_wanted
+
+
 def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
     """Re-run the rule engine with LLM facts; returns the verdict and the Job
     it judged (what the caller should deliver).
 
     An LLM-supplied term for a job with NO term is written onto the shared
-    job (term is objective and shared across users). One that replaces a
-    JD-derived term is applied to a per-user copy instead: that JD term only
-    reached the LLM because THIS user did not want it, and another user who
-    does want it must still be able to accept on it, whatever order users
-    run in."""
-    if facts.get("term") and job.terms_from_jd:
-        job = job.model_copy(update={"terms": [facts["term"]],
-                                     "term_confidence": "inferred",
-                                     "terms_from_jd": False})
+    job (term is objective and shared across users). A JD-derived term is
+    replaced by the LLM's only when this user did not want it - the only
+    case in which the term question reached the LLM for them - and then on
+    a deep per-user copy, so another user who does want the JD term still
+    accepts on it, whatever order users run in. A wanted JD term stands:
+    the facts were asked for the company or metro, and a term cached from
+    another user's question must not move the job to a different season."""
+    if facts.get("term") and _jd_term_unwanted(uf, job):
+        job = job.model_copy(deep=True, update={"terms": [facts["term"]],
+                                                "term_confidence": "inferred",
+                                                "terms_from_jd": False})
     elif facts.get("term") and not job.terms:
         job.terms, job.term_confidence = [facts["term"]], "inferred"
     return uf.evaluate(job, llm_facts=facts), job
+
+
+def _delivered(uf: UserFilter, job: Job) -> Job:
+    """The Job an accept delivers. One accepted while its JD term was not
+    wanted (the term-unknown fallback, or unknown_term_policy keep) goes
+    out as a deep copy with no term, so the email/dashboard snapshot says
+    "unknown" instead of showing a season this user does not want."""
+    if _jd_term_unwanted(uf, job):
+        return job.model_copy(deep=True, update={"terms": [],
+                                                 "term_confidence": "unknown",
+                                                 "terms_from_jd": False})
+    return job
 
 
 def _cache_covers(needs: list[str], cached: dict) -> bool:
@@ -563,7 +583,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     for job in candidates:
         verdict = uf.evaluate(job, today=today)
         if verdict.status == "accept":
-            accepted.append((job, verdict.reasons))
+            accepted.append((_delivered(uf, job), verdict.reasons))
             st.clear_pending(state, job.dedup_key, name)
         elif verdict.status == "reject":
             st.clear_pending(state, job.dedup_key, name)
@@ -572,7 +592,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             if _cache_covers(verdict.needs, cached):
                 final, judged = _finalize(uf, job, cached)
                 if final.status == "accept":
-                    accepted.append((judged, final.reasons))
+                    accepted.append((_delivered(uf, judged), final.reasons))
                 st.clear_pending(state, job.dedup_key, name)
             else:
                 llm_queue.append(job)
@@ -621,7 +641,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             merged_facts = _cached_facts(state, job, name)
             final, judged = _finalize(uf, job, merged_facts)
             if final.status == "accept":
-                accepted.append((judged, final.reasons))
+                accepted.append((_delivered(uf, judged), final.reasons))
             st.clear_pending(state, job.dedup_key, name)
         for job in deferred:
             st.set_pending(state, job.dedup_key, name)

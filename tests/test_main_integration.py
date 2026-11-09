@@ -437,9 +437,10 @@ def test_infer_terms_from_jds_only_touches_unknown_terms_with_a_jd():
 
 # ------------------------- a JD-derived term may only accept, never reject
 
-def _jd_llm_run(monkeypatch, tmp_path, llm_term, terms=None, rules=None):
+def _jd_llm_run(monkeypatch, tmp_path, llm_term, terms=None, rules=None, snapshots=None):
     """One run with a single job whose JD says Fall 2027 while the user wants
-    Summer 2027; the fake LLM answers `llm_term`. Returns (state, payloads)."""
+    Summer 2027; the fake LLM answers `llm_term`. Returns (state, payloads).
+    `snapshots`, when a list, collects the delivered match items."""
     job = _job(1, term=None)
     job.term_confidence = "unknown"
     job.description = "Join our Fall 2027 internship program in Atlanta."
@@ -463,6 +464,15 @@ def _jd_llm_run(monkeypatch, tmp_path, llm_term, terms=None, rules=None):
         return {j.dedup_key: {"term": llm_term} for j in batch}
 
     monkeypatch.setattr(main, "classify", fake_classify)
+    if snapshots is not None:
+        from src.notify import match_item
+        real_notify = main._notify_email
+
+        def capture(user_cfg, accepted, state, dry_run, now, terms_order, *rest):
+            snapshots.extend(match_item(j, r, terms_order) for j, r in accepted)
+            return real_notify(user_cfg, accepted, state, dry_run, now, terms_order, *rest)
+
+        monkeypatch.setattr(main, "_notify_email", capture)
     state_file = tmp_path / "seen.json"
     pre = st.empty_state()
     st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
@@ -566,3 +576,71 @@ def test_url_slug_terms_are_source_data_not_accept_only():
     jd.description = "Join our Fall 2027 internship program."
     main.infer_terms_from_jds([jd], TODAY)
     assert (jd.terms, jd.terms_from_jd) == (["Fall 2027"], True)
+
+
+def _fall_jd_filter():
+    """Grok's repro: wants Spring/Summer/Fall 2027; Summer accepts anything,
+    Fall needs top company / Atlanta / remote. The job's JD says Fall 2027
+    and it is in Austin."""
+    from pathlib import Path
+
+    from src.filters import UserFilter
+    cfg = _user_cfg(terms=["Spring 2027", "Summer 2027", "Fall 2027"])
+    del cfg["rules"]
+    cfg["term_rules"] = {"Spring": "top_atl_remote", "Summer": "anything",
+                         "Fall": "top_atl_remote"}
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "tasks": ["term_inference", "top_company_judgment"]}
+    uf = UserFilter(cfg, Path(__file__).parents[1], today=TODAY)
+    uf.llm_enabled = True
+    job = _job(1, term="Fall 2027")
+    job.terms_from_jd = True
+    job.locations = ["Austin, TX"]
+    return uf, job
+
+
+def test_wanted_jd_term_is_not_moved_by_a_cached_llm_term_not_top():
+    uf, job = _fall_jd_filter()
+    first = uf.evaluate(job)
+    assert first.status == "ambiguous" and first.needs == ["top_company"]
+    # Another user's term question cached Summer 2027 for this job.
+    final, judged = main._finalize(uf, job, {"term": "Summer 2027", "is_top_company": False,
+                                             "in_atlanta_metro": False})
+    assert judged.terms == ["Fall 2027"]
+    assert final.status == "reject"     # judged as Fall: not top, not Atlanta
+    assert job.terms == ["Fall 2027"] and job.terms_from_jd
+
+
+def test_wanted_jd_term_is_not_moved_by_a_cached_llm_term_top():
+    uf, job = _fall_jd_filter()
+    final, judged = main._finalize(uf, job, {"term": "Winter 2027", "is_top_company": True,
+                                             "in_atlanta_metro": False})
+    assert judged.terms == ["Fall 2027"]
+    assert final.status == "accept"     # kept as Fall, the top-company verdict decides
+
+
+def test_term_unknown_accept_delivers_no_jd_term(monkeypatch, tmp_path):
+    # LLM null -> every-wanted-term fallback accepts; the delivered snapshot
+    # must say unknown, not the Fall 2027 JD guess this user did not want.
+    items: list[dict] = []
+    state, _ = _jd_llm_run(monkeypatch, tmp_path, None, snapshots=items)
+    assert st.was_notified(state, _key(1), "example")
+    assert [it.get("term") for it in items] == ["Unknown term"]     # not "Fall 2027"
+
+
+def test_llm_summer_accept_delivers_the_llm_term(monkeypatch, tmp_path):
+    items: list[dict] = []
+    _jd_llm_run(monkeypatch, tmp_path, "Summer 2027", snapshots=items)
+    assert [it.get("term") for it in items] == ["Summer 2027"]
+
+
+def test_per_user_copies_are_deep():
+    from src.dedupe import _merge_pair
+    uf, job = _fall_jd_filter()
+    uf.terms_wanted = {"Summer 2027"}            # make the JD term unwanted
+    _, judged = main._finalize(uf, job, {"term": "Summer 2027"})
+    assert judged is not job and judged.locations is not job.locations
+    _merge_pair(judged, _job(2, term="Summer 2027"))   # a later URL merge
+    assert job.locations == ["Austin, TX"]
+    delivered = main._delivered(uf, job)
+    assert delivered.terms == [] and delivered.locations is not job.locations
