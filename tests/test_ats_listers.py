@@ -881,3 +881,24 @@ def test_amd_icims_apply_link_joins_its_jibe_posting(url):
 def test_other_icims_portals_keep_their_own_token():
     assert canonical_url("https://careers-gdms.icims.com/jobs/75637/login") == (
         "ats:icims:careers-gdms:75637")
+
+
+def test_slack_never_stops_on_a_full_page():
+    # total 7 with slack 2: a full page reaching 6 must not end the query
+    asked = []
+
+    def fetch(offset):
+        asked.append(offset)
+        ids = [str(offset + i) for i in range(3 if offset < 6 else 1)]
+        return "", ids, 7
+
+    got = listing_http.page_through(fetch, page_size=3, cap=9, what="t",
+                                    slack=2)
+    assert asked == [0, 3, 6] and len(got.ids) == 7
+
+
+def test_slack_needs_both_raw_and_distinct_shortfall_within_it():
+    # stops short by 1 row, but only 3 distinct of a stated 6
+    fetch = _pager_fetch({0: ["a", "b", "c"], 3: ["a", "a"]}, 6)
+    with pytest.raises(listing_http.IncompleteListing, match="distinct"):
+        listing_http.page_through(fetch, page_size=3, cap=9, what="t", slack=2)

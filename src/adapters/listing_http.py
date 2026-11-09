@@ -190,7 +190,8 @@ def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
     second, shifted pass) passes unique=False and checks the union itself.
     `slack` lets a feed whose stated total counts rows it never lists
     (Oracle: BNY states 594 and lists 593 under every sort) finish up to
-    that many rows short. A relevancy-sorted page with no intern title is
+    that many rows short -- only after it stopped on a short page, and only
+    when both the rows read and the distinct ids are within `slack`. A relevancy-sorted page with no intern title is
     NOT the end: on a live Oracle board an intern title followed such a
     page."""
     pages: list[str] = []
@@ -202,9 +203,11 @@ def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
         pages.append(raw)
         ids.update(row_ids)
         seen += len(row_ids)
-        done = bool(total and seen >= total - slack)
+        # Keep paging while pages are full: slack only applies once the feed
+        # has actually stopped (a short page), never to cut a full page off.
+        done = bool(total and seen >= total)
         if not done and len(row_ids) < page_size:
-            if total:
+            if total and total - seen > slack:
                 raise IncompleteListing(
                     f"{what}: short page ({len(row_ids)} rows) at {seen} of "
                     f"{total}")
