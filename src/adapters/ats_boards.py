@@ -53,6 +53,13 @@ _LISTERS: dict[str, Callable[[httpx.Client, dict], list[str]]] = {
 }
 
 
+def polled_ats() -> frozenset[str]:
+    """Every `ats:` value fetch() can poll: the one-shot URL table, the paged
+    listers, and workday (prefetched in fetch(), outside both tables). A
+    boards row for any other name raises in fetch()."""
+    return frozenset(_API) | frozenset(_LISTERS) | {"workday"}
+
+
 def _lever_jd(j: dict) -> str | None:
     """Lever splits the JD: intro in descriptionPlain, the requirement
     bullets (where degree/clearance demands live) in `lists`, closing

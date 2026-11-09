@@ -6,6 +6,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canonicalUrl, postingIdentity, preferredApplyUrl, validateUrl } from "./ingest_extract";
 import { dedupInfoForUrl } from "./short_key";
+import { detectAtsBoard, isAtsSupported, isBoardWatched, normalizeFoundVia } from "./ats_detect";
 
 export { dedupInfoForUrl } from "./short_key";
 
@@ -53,8 +54,16 @@ export const manualArgs = {
 };
 
 export const requestIngest = mutation({
-  args: { user: v.string(), url: v.string(), secret: v.string(), ...manualArgs },
-  handler: async (ctx, { user, url, secret, ...fields }) => {
+  args: {
+    user: v.string(),
+    url: v.string(),
+    secret: v.string(),
+    ...manualArgs,
+    // Where the user found the link ("instagram", "linkedin", ...), counted by
+    // the coverage-gap report.
+    foundVia: v.optional(v.string()),
+  },
+  handler: async (ctx, { user, url, secret, foundVia, ...fields }) => {
     checkSecret(secret);
     // Validate and canonicalize
     validateUrl(url);
@@ -160,7 +169,11 @@ export const requestIngest = mutation({
       }
     }
 
-    // Not a duplicate -> insert fetching row and schedule ingest
+    // Not a duplicate -> insert fetching row and schedule ingest. A manual add
+    // is a posting the watcher missed: record which board it came from and
+    // whether the watcher polls that board, so the add result can offer to
+    // close the gap.
+    const gap = await coverageGap(ctx, user, canonical, foundVia);
     const now = Date.now();
     const ingestId = await ctx.db.insert("manualIngests", {
       user,
@@ -169,15 +182,34 @@ export const requestIngest = mutation({
       canonicalUrl: canonical,
       status: "fetching",
       dedupKey,
+      ...gap,
       createdAt: now,
       updatedAt: now,
     });
     await ctx.scheduler.runAfter(0, internal.ingest_node.runIngest, {
       user, ingestId, ...(Object.keys(manual).length ? { manual } : {}),
     });
-    return { ingestId, status: "fetching" as const, short };
+    return { ingestId, status: "fetching" as const, short, ...gap };
   },
 });
+
+async function coverageGap(ctx: any, user: string, url: string, foundVia?: string) {
+  const hit = detectAtsBoard(url);
+  const settings = await ctx.db
+    .query("settings")
+    .withIndex("by_user", (q: any) => q.eq("user", user))
+    .first();
+  const watched = isBoardWatched(hit, settings?.watchReport);
+  const supported = isAtsSupported(hit, settings?.watchReport);
+  const via = normalizeFoundVia(foundVia);
+  return {
+    ...(hit ? { ats: hit.ats } : {}),
+    ...(hit?.board ? { atsBoard: hit.board } : {}),
+    ...(watched !== undefined ? { boardWatched: watched } : {}),
+    ...(supported !== undefined ? { atsSupported: supported } : {}),
+    ...(via ? { foundVia: via } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Public query: getIngestStatus
@@ -251,6 +283,20 @@ export const upsertMatchInternal = internalMutation({
     if (existing) {
       short = existing.short;
       item = { ...existing.item, url: preferredApplyUrl(existing.item?.url ?? "", item.url ?? "") };
+    } else if (item.source === "manual") {
+      // Carry the add's coverage facts onto the match (and from there into the
+      // ledger snapshot) so the gap report can count misses by ATS and source.
+      const ingest = await ctx.db
+        .query("manualIngests")
+        .withIndex("by_user_short", (q) => q.eq("user", user).eq("short", short))
+        .first();
+      const hit = typeof item.url === "string" ? detectAtsBoard(item.url) : null;
+      item = {
+        ...item,
+        ...(hit ? { ats: hit.ats } : {}),
+        ...(hit?.board ? { atsBoard: hit.board } : {}),
+        ...(ingest?.foundVia ? { foundVia: ingest.foundVia } : {}),
+      };
     }
     const row: WithoutSystemFields<Doc<"matches">> = { user, short, item, pushedAt: Date.now() };
     // A freshly acquired JD wins over an older auto-acquired one, but a

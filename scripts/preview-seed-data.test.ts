@@ -44,3 +44,19 @@ test("seed goes through the real tracker mutations", async () => {
   expect(counts.applications.every((row) => row.user === user)).toBe(true);
   expect(counts.ticks).toBeGreaterThan(applications.length);
 });
+
+test("seeded watch report drives the add-URL watched-board hint", async () => {
+  process.env.TRACKER_SECRET = SECRET;
+  const t = convexTest(schema);
+  const { watchReport } = buildPreviewSeed(sha1HexSync);
+  const user = "nathan";
+  await t.mutation(api.settings.putWatchReport, { user, report: watchReport, secret: SECRET });
+  const watched = await t.mutation(api.ingest.requestIngest, {
+    user, url: "https://job-boards.greenhouse.io/previewwatched/jobs/1", secret: SECRET,
+  });
+  const unwatched = await t.mutation(api.ingest.requestIngest, {
+    user, url: "https://jobs.lever.co/notwatched/1", secret: SECRET,
+  });
+  expect(watched).toMatchObject({ boardWatched: true });
+  expect(unwatched).toMatchObject({ boardWatched: false, atsSupported: true, ats: "lever", atsBoard: "notwatched" });
+});

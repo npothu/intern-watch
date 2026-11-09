@@ -31,7 +31,9 @@ STATUSES = ("applied", "oa", "phone_screen", "interview", "offer",
 
 _SNAPSHOT_FIELDS = ("key", "company", "title", "url", "location", "term",
                     "salary", "tag", "added", "jobright_id", "jd_url",
-                    "resume")
+                    "resume",
+                    # coverage-gap facts on manual adds (src/coverage.py)
+                    "ats", "atsBoard", "foundVia")
 
 
 def ledger_path(root: Path) -> Path:

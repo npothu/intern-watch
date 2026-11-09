@@ -186,12 +186,13 @@ progressed past "applied". NEVER pruned — do not "clean it up".
   path must go through one of the two - never recompute
   `Path(__file__).parents[n]`.
 - **Reusable workflows.** `watch`, `dashboard-write`, `resume`,
-  `resume-batch` and `resume-ondemand` all carry a `workflow_call` trigger
+  `resume-batch`, `resume-ondemand` and `gap-report` all carry a `workflow_call` trigger
   next to their own. A data repo calls them with `secrets: inherit`; the job
   checks out the caller (data) at the workspace root and this repo under
   `code/`, runs from `code/` with `INTERN_BADDIE_DATA_DIR` set, and commits
-  state back to the caller. Inputs `code_ref` / `data_ref` / `environment`
-  pick the code ref, the data branch and the GitHub environment (e.g. a
+  state back to the caller (`gap-report` is read-only: it commits nothing and
+  only updates the caller's "coverage gaps" issue). Inputs `code_ref` /
+  `data_ref` / `environment` pick the code ref, the data branch and the GitHub environment (e.g. a
   `staging` environment that overrides `STORE`). Anything that changes a
   workflow's env var list or checkout layout must be made in the reusable
   body, not the thin caller.
