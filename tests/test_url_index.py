@@ -159,3 +159,52 @@ def test_migrate_backfills_jr_apply_urls_first_wins():
     assert "canon" not in s["jobs"]["jr:owned"]
     assert s["url_index"]["ats:gh:999"] == "jr:fresh"
     assert s["jobs"]["jr:fresh"]["canon"] == "ats:gh:999"
+
+
+def _two_spellings_of_one_oracle_req(s):
+    st.touch(s, "url:early", ["simplify"], TODAY)
+    st.touch(s, "url:late", ["ats-boards"], TODAY + dt.timedelta(days=3))
+    s["url_index"] = {
+        "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/"
+        "sites/CX/job/26011784": "url:early",
+        "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/"
+        "sites/CX_1/job/26011784": "url:late",
+    }
+
+
+def test_migrate_v5_new_token_owned_later_key_beats_earlier_unowned():
+    # The notified key is the LATER first_seen: owned-first must still win,
+    # or the url-index gate would stop suppressing re-spellings of it.
+    s = st.empty_state()
+    _two_spellings_of_one_oracle_req(s)
+    st.mark_notified(s, "url:late", "u")
+    st.migrate_url_index(s)
+    token = "ats:oracle:egug.fa.us2.oraclecloud.com:26011784"
+    assert s["url_index"] == {token: "url:late"}
+    assert s["jobs"]["url:late"]["canon"] == token
+    assert s["_meta"]["url_index_version"] == st.CANON_VERSION == 5
+
+
+def test_migrate_v5_listed_later_key_beats_earlier_unowned():
+    s = st.empty_state()
+    _two_spellings_of_one_oracle_req(s)
+    s["outbox"] = {"u": [{"key": "url:late"}]}
+    st.migrate_url_index(s)
+    assert list(s["url_index"].values()) == ["url:late"]
+
+
+def test_migrate_v5_unowned_pair_keeps_earliest():
+    s = st.empty_state()
+    _two_spellings_of_one_oracle_req(s)
+    st.migrate_url_index(s)
+    assert list(s["url_index"].values()) == ["url:early"]
+
+
+def test_migrate_from_v4_rekeys_new_families_only():
+    s = st.empty_state()
+    _two_spellings_of_one_oracle_req(s)
+    s["url_index"]["ats:sr:aecom2:744000155565444"] = "url:sr"
+    s["_meta"]["url_index_version"] = 4
+    st.migrate_url_index(s)
+    assert s["url_index"]["ats:sr:aecom2:744000155565444"] == "url:sr"
+    assert "ats:oracle:egug.fa.us2.oraclecloud.com:26011784" in s["url_index"]

@@ -21,7 +21,9 @@ one, since stored `sources` are sorted and say nothing about the producer):
   sources       every source id it appeared in (push time, from state)
   postedAt      ISO date from the source's posting date (Job.date_posted)
   delivery      {"mode": "immediate"|"digest", "at": ISO-8601 UTC}
-  termSource    "title" (source row or title, no LLM) | "llm" | "unresolved"
+  termSource    "title" (source row or title, no LLM) | "llm" | "unresolved";
+                omitted when the term was read from the JD body
+                (Job.terms_from_jd) and not replaced by the LLM
   metro         {"name", "verdict", "source": "rules"|"llm"}
   topCompany    {"verdict", "judgedAt", "source": "list"|"llm"}
   clearanceObtainable  true when the JD mentions a clearance only as
@@ -37,6 +39,7 @@ import datetime as dt
 from . import state as st
 from .filters import _METRO_MATCHES, TOP_COMPANIES, jd_clearance_obtainable
 from .models import Job
+from .recheck import RECHECK_REASON
 
 METRO_NAME = "Atlanta, GA"   # the only metro the rule engine knows
 
@@ -83,7 +86,9 @@ def _top_company(reasons: list[str], llm_facts: dict | None, state: dict,
 
 
 def _accepted_by(reasons: list[str]) -> tuple[str, str | None]:
-    rule = ", ".join(r for r in reasons if r != "term-unknown") or None
+    # "recheck" marks how the job reached the rule engine, not a condition.
+    rule = ", ".join(r for r in reasons
+                     if r not in ("term-unknown", RECHECK_REASON)) or None
     if "company:priority" in reasons:
         return "priority", "company:priority"
     if "term-unknown" in reasons:
@@ -104,8 +109,10 @@ def build(job: Job, reasons: list[str], *, user: str, state: dict,
         facts["postedAt"] = job.date_posted.isoformat()
     if "term-unknown" in reasons:
         facts["termSource"] = "unresolved"
-    elif job.terms:
-        facts["termSource"] = "llm" if llm_termed else "title"
+    elif job.terms and llm_termed:
+        facts["termSource"] = "llm"
+    elif job.terms and not job.terms_from_jd:
+        facts["termSource"] = "title"
     metro = _metro(reasons, llm_facts)
     if metro is not None:
         facts["metro"] = metro

@@ -17,7 +17,12 @@ one YAML (see the README's fork checklist).
    that mix in hardware/business roles) additionally need a
    `strict_include_keywords` hit (bare "engineer" doesn't count there).
    Substring gotcha: "data science" does NOT match "Data Scientist" — that's
-   why both keywords exist.
+   why both keywords exist. The one exception (`filters.role_keyword`): a
+   keyword written with edge spaces (`" ai "`, `" hr "`) means word
+   boundaries, so it also matches at the start/end of a title and next to
+   punctuation ("AI Intern", "Embodied AI", "AI/ML"). Every other keyword
+   is a plain substring of the raw title, so "new grad" does not match
+   "New-Grad".
 2. **Eliminations**: country allowlist (unknown locations kept), unpaid,
    grad-only (MS/PhD-only), active-clearance-required (obtainable kept),
    veteran-only. Titles and (for ATS jobs) JD bodies, separate patterns.
@@ -47,9 +52,27 @@ one YAML (see the README's fork checklist).
    `state["companies"]` — first verdict wins and sticks (~120 days), so word
    the prose definition in the user yaml carefully.
 
-Accepted matches go to the email outbox + dashboard; **rejected jobs are
-final** — they are only evaluated when first seen (or while "pending"), so a
-filter fix does NOT retroactively deliver previously rejected jobs.
+Accepted matches go to the email outbox + dashboard. **A rejection is final
+only while its reason holds** (`src/recheck.py`): each rejection records, per
+user, the rejecting stage (role / elim / term / rules / llm) and a fingerprint
+of just the config that stage read for that job (`jobs[key]["rj"]`). Each run,
+a still-listed job whose fingerprint no longer matches is re-run from the top;
+an accept is delivered tagged `[RECHECK]` via the digest (never the immediate
+priority email), at most `recheck.per_run` re-runs per run and
+`recheck.daily_limit` deliveries per day (user yaml `recheck:` block,
+defaults `RECHECK_CAP`=50 / `RECHECK_DAILY_DELIVERIES`=40; `daily_limit:
+null` = no daily limit, `0` = no recheck deliveries, `per_run: 0` = no
+re-runs, and either pause leaves the free re-fingerprint pass and bootstrap
+running; validated by config_check), behind new jobs for the LLM
+cap. A run whose configured LLM is unavailable (key missing) skips rechecks
+entirely, so a degraded verdict is never committed. Jobs no longer listed,
+delivered, or `seeded` are never rechecked, and nothing is ever
+un-delivered. A matching-code change must bump
+its stage's version (`filters.ROLE_MATCH_VERSION`, `ELIM_MATCH_VERSION`) to
+recheck. Recheck accepts never go to the priority email or the instant
+Discord webhook. Keys in the outbox, on the dashboard, under a content
+signature or in the applications ledger count as delivered and are never
+rechecked.
 
 ## Sources (`sources.yaml`)
 
@@ -57,7 +80,24 @@ jobright-ai GitHub README mirrors (SWE / Engineer / PM / **Data-Analysis** —
 Data Scientist roles appear ONLY in Data-Analysis), SimplifyJobs, vanshb03,
 speedyapply, and `ats-boards` (direct Greenhouse/Lever/Ashby JSON APIs for
 ~90 boards in `data/ats_boards.yaml`, refreshed monthly by
-`refresh-boards.yml`). Known coverage limits:
+`refresh-boards.yml`; plus hand-added `manual: true` / non-probed rows for
+the paged listers -- SmartRecruiters, Oracle CX, Eightfold, IBM, Jibe -- which
+the refresh keeps).
+
+**First sight seeds, it does not deliver** (`src/seeding.py`). The first time
+a source (by `name`) or an ats board (by `<ats>:<slug>`, recorded in
+`_meta.known_sources` / `known_boards`) answers, the jobs it lists that are
+new this run are marked seen, tagged `seeded: <date>`, and never evaluated --
+unless the same job also arrived from an already-known source/board. Put
+`backfill: true` on a sources.yaml or ats_boards.yaml row to deliver its
+backlog instead. Renaming a source or changing a board's slug therefore
+seeds its current listings once. A multi-board adapter must stamp
+`Job.board` and fill `Adapter.fetched_boards` (ats-boards `parse()` and its
+fetch loop do both for every lister). A board's rows must be its complete
+listing: a lister whose page fails or is capped short must raise for that
+board, never return a partial list (it would be seeded as the whole backlog
+and the tail delivered later). `--seed` and the first run tag `seeded` too.
+Known coverage limits:
 - jobright's GitHub mirrors are a SUBSET of jobright.ai; some postings never
   appear in any repo. The full feed is auth-only and jobright's ToS
   disallows crawling — the template never crawls it: it reads the public
@@ -73,9 +113,16 @@ speedyapply, and `ats-boards` (direct Greenhouse/Lever/Ashby JSON APIs for
   supplies the JD, but the employer link is not resolved, so digests keep the
   jobright URL. This is a deliberate operator choice, not a credential leak;
   keep the per-run cap and never use it to list or crawl jobs.
+- SmartRecruiters: `api.smartrecruiters.com/robots.txt` disallows `/` for
+  all bots (it allows `/v1/companies/` only for LinkedInBot). The watcher
+  uses the documented public, unauthenticated Postings API anyway, with an
+  honest bot UA and a few requests per board per run -- an operator choice,
+  at the operator's risk.
 - jobright README rows can be added and removed within ~5 hours (hence the
   2h cron), and repos retain only ~7 days.
-- Employers with proprietary ATSes have no ats-boards backstop.
+- Employers with proprietary ATSes have no ats-boards backstop. Avature
+  portals (bot wall: empty 202), Phenom and bare iCIMS portals have no
+  lister; see the adapters' docstrings for why.
 
 ## Debugging "why did job X (not) show up"
 
@@ -185,14 +232,20 @@ model - two models disagreeing is the signal worth reading.
 The failure modes here are silent, so check these explicitly. Generic review
 will not find them:
 
-- **Rejected jobs are final.** A job is evaluated only when first seen (or
-  while pending), so a filter fix does NOT retroactively deliver previously
-  rejected jobs. Any change claiming to "fix" a filter must say what happens
-  to the jobs already rejected by the old one - usually nothing.
+- **Rejections are rechecked only through their fingerprint.** A config
+  change re-evaluates still-listed jobs whose rejecting stage's fingerprint
+  (`src/recheck.py`) covers it; a filter CODE change does nothing to old
+  rejections unless it bumps that stage's version constant (or extends the
+  fingerprint). Any change to a filter must say which it does and how many
+  still-listed rejections it will recheck. A new fingerprint input that
+  churns every run (e.g. a whole tracker list instead of "is this employer on
+  it") rewrites thousands of seen.json entries per commit - keep inputs
+  per-job.
 - **Top-company verdicts stick.** `state["companies"][<norm>]["top"]` is
   per-employer, per-user, first-verdict-wins for ~120 days. Editing the prose
-  definition in a user yaml does not re-judge cached employers; the entry has
-  to be deleted.
+  definition in a user yaml does not re-judge cached employers (a recheck
+  reuses the cached verdict); the entry has to be deleted, which also
+  rechecks that employer's still-listed llm-stage rejections.
 - **Filter order is load-bearing.** Role filter → eliminations → term → rules
   → LLM. Moving a check earlier or later changes which jobs reach the
   cost-capped LLM step, not just whether they pass.

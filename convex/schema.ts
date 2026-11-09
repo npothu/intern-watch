@@ -97,6 +97,14 @@ export default defineSchema({
         closedAt: v.optional(v.number()),
       }),
     ),
+    // Hand corrections (PATCH /matches/<short>), kept beside `item` because
+    // pushMatches replaces `item` wholesale on every watcher run. getMatches
+    // overlays them on the item. Extension point: match_overrides.ts lists
+    // the edits a new field (e.g. `url`) needs.
+    overrides: v.optional(v.object({
+      term: v.optional(v.string()),
+      updatedAt: v.number(),
+    })),
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"])

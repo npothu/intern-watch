@@ -354,10 +354,11 @@ def test_cross_source_url_dupe_reaches_outbox_once(monkeypatch, tmp_path):
           [_user_cfg()])
     _freeze_clock(monkeypatch)
 
-    # not a first run: pre-seed an unrelated entry.
+    # not a first run: pre-seed an unrelated entry. It names the jobs' source
+    # so that source counts as already known (not first sight, src/seeding.py).
     state_file = tmp_path / "seen.json"
     pre = st.empty_state()
-    st.touch(pre, "jr:preexisting", ["x"], TODAY)
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
     st.save_state(pre, state_file)
 
     rc = main.main(["--state-file", str(state_file)])
@@ -374,3 +375,484 @@ def test_cross_source_url_dupe_reaches_outbox_once(monkeypatch, tmp_path):
     (suppressed, points_to), = dups.items()
     assert points_to == survivor
     assert "dup_of" not in state["jobs"][survivor]
+
+
+# ------------------------------------- JD-body term inference before the LLM
+
+def test_jd_term_inference_resolves_unknown_terms_before_the_llm(monkeypatch, tmp_path):
+    # Three title-only-unknown jobs. Two carry a JD body already (as ATS
+    # boards deliver it); the third has none. Only the third reaches the LLM.
+    listed = [_job(i, term=None) for i in (1, 2, 3)]
+    for job in listed:
+        job.term_confidence = "unknown"
+    # Dated: a yearless "summer internship" read in June is ambiguous by
+    # design (unknown -> LLM), so this one names its start.
+    listed[0].description = "This 12-week internship starts in June 2027."
+    listed[1].description = "Internship dates: May-August 2027. Pursuing a BS degree."
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return list(listed)
+
+    sources = [SourceConfig(name="ok-src", adapter="a")]
+    cfg = _user_cfg(terms=["Summer 2027"])
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "provider": "gemini",
+                  "tasks": ["term_inference"], "max_jobs_per_run": 10}
+    _wire(monkeypatch, sources, {"ok-src": OkAdapter}, [cfg])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+
+    classified: list[str] = []
+
+    def fake_classify(batch, top_def, terms, llm_cfg):
+        classified.extend(j.dedup_key for j in batch)
+        return {j.dedup_key: {"term": "Summer 2027"} for j in batch}
+
+    monkeypatch.setattr(main, "classify", fake_classify)
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+
+    assert main.main(["--state-file", str(state_file)]) == 0
+
+    assert classified == [_key(3)]
+    state = st.load_state(state_file)
+    for i in (1, 2, 3):
+        assert st.was_notified(state, _key(i), "example")
+
+
+def test_infer_terms_from_jds_only_touches_unknown_terms_with_a_jd():
+    known = _job(1)                                   # title term: untouched
+    known.description = "Our Fall 2027 co-op."
+    no_jd = _job(2, term=None)                        # nothing to read
+    jd = _job(3, term=None)
+    jd.description = "Start date: January 11, 2027."
+    jd.date_posted = dt.date(2026, 10, 1)
+    assert main.infer_terms_from_jds([known, no_jd, jd], TODAY) == 1
+    assert known.terms == ["Summer 2027"]
+    assert no_jd.terms == []
+    assert (jd.terms, jd.term_confidence) == (["Spring 2027"], "inferred")
+
+
+# ------------------------- a JD-derived term may only accept, never reject
+
+def _jd_llm_run(monkeypatch, tmp_path, llm_term, terms=None, rules=None, snapshots=None):
+    """One run with a single job whose JD says Fall 2027 while the user wants
+    Summer 2027; the fake LLM answers `llm_term`. Returns (state, payloads).
+    `snapshots`, when a list, collects the delivered match items."""
+    job = _job(1, term=None)
+    job.term_confidence = "unknown"
+    job.description = "Join our Fall 2027 internship program in Atlanta."
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [job]
+
+    cfg = _user_cfg(terms=terms or ["Summer 2027"], rules=rules)
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "provider": "gemini",
+                  "tasks": ["term_inference"], "max_jobs_per_run": 10}
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": OkAdapter}, [cfg])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    batches: list[list[Job]] = []
+
+    def fake_classify(batch, top_def, wanted, llm_cfg):
+        batches.append(list(batch))
+        return {j.dedup_key: {"term": llm_term} for j in batch}
+
+    monkeypatch.setattr(main, "classify", fake_classify)
+    if snapshots is not None:
+        from src.notify import match_item
+        real_notify = main._notify_email
+
+        def capture(user_cfg, accepted, state, dry_run, now, terms_order, *rest):
+            snapshots.extend(match_item(j, r, terms_order) for j, r in accepted)
+            return real_notify(user_cfg, accepted, state, dry_run, now, terms_order, *rest)
+
+        monkeypatch.setattr(main, "_notify_email", capture)
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    assert main.main(["--state-file", str(state_file)]) == 0
+    return st.load_state(state_file), batches
+
+
+def test_unwanted_jd_term_goes_to_the_llm_and_its_summer_verdict_accepts(monkeypatch, tmp_path):
+    state, batches = _jd_llm_run(monkeypatch, tmp_path, "Summer 2027")
+    # Without the accept-only rule this was a permanent term-not-wanted.
+    assert [j.dedup_key for b in batches for j in b] == [_key(1)]
+    assert st.was_notified(state, _key(1), "example")
+
+
+def test_unwanted_jd_term_with_a_null_llm_verdict_uses_the_every_wanted_term_fallback(
+        monkeypatch, tmp_path):
+    # Every wanted term (just Summer 2027) accepts -> the fallback accepts.
+    state, _ = _jd_llm_run(monkeypatch, tmp_path, None)
+    assert st.was_notified(state, _key(1), "example")
+
+
+def test_jd_term_stage_verdicts():
+    from pathlib import Path
+
+    from src.filters import UserFilter
+    cfg = _user_cfg(terms=["Summer 2027", "Spring 2028"])   # Spring 2028 has no rule
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "tasks": ["term_inference"]}
+    uf = UserFilter(cfg, Path(__file__).parents[1], today=TODAY)
+    uf.llm_enabled = True
+
+    def jd_job(term):
+        j = _job(1, term=term)
+        j.terms_from_jd = True
+        return j
+
+    # wanted JD term: proceeds to the rules as before
+    assert uf.evaluate(jd_job("Summer 2027")).status == "accept"
+    # unwanted JD term: unknown-term, handed to the LLM
+    first = uf.evaluate(jd_job("Fall 2027"))
+    assert (first.status, first.reasons) == ("ambiguous", ["unknown-term"])
+    assert "term" in first.needs
+    # LLM null: every-wanted-term fallback; Spring 2028 has no rule -> unresolved
+    second = uf.evaluate(jd_job("Fall 2027"), llm_facts={"term": None})
+    assert (second.status, second.reasons) == ("reject", ["term-unresolved"])
+    # the same term from title/source data keeps rejecting as term-not-wanted
+    source = uf.evaluate(_job(1, term="Fall 2027"))
+    assert (source.status, source.reasons) == ("reject", ["term-not-wanted"])
+
+
+def _two_user_run(monkeypatch, tmp_path, order):
+    """JD says Fall 2027; one user wants Summer 2027 (its LLM says Summer),
+    the other wants Fall 2027. Users run in `order`."""
+    job = _job(1, term=None)
+    job.term_confidence = "unknown"
+    job.description = "Join our Fall 2027 internship program in Atlanta."
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [job]
+
+    def cfg_for(name, term):
+        cfg = _user_cfg(name=name, terms=[term],
+                        rules=[{"when": {"term": [term]}, "accept_if_any": [{"always": True}]}])
+        cfg["unknown_term_policy"] = "llm"
+        cfg["llm"] = {"enabled": True, "provider": "gemini",
+                      "tasks": ["term_inference"], "max_jobs_per_run": 10}
+        return cfg
+
+    users = {"summer": cfg_for("summer", "Summer 2027"), "fall": cfg_for("fall", "Fall 2027")}
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": OkAdapter}, [users[n] for n in order])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main, "classify", lambda batch, *a: {
+        j.dedup_key: {"term": "Summer 2027"} for j in batch})
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    assert main.main(["--state-file", str(state_file)]) == 0
+    return st.load_state(state_file)
+
+
+def test_llm_term_replacing_a_jd_term_does_not_leak_to_other_users(monkeypatch, tmp_path):
+    # The summer user's LLM verdict must not overwrite the shared job's JD
+    # term for the fall user, whichever runs first.
+    for order in (("summer", "fall"), ("fall", "summer")):
+        state = _two_user_run(monkeypatch, tmp_path / "-".join(order), order)
+        assert st.was_notified(state, _key(1), "summer"), order
+        assert st.was_notified(state, _key(1), "fall"), order
+
+
+def test_url_slug_terms_are_source_data_not_accept_only():
+    job = _job(1, term=None, url="https://jobs.lever.co/acme/software-engineer-intern-fall-2027")
+    job.description = "Build backend services with the platform team in Austin."
+    assert main.infer_terms_from_jds([job], TODAY) == 1
+    assert (job.terms, job.terms_from_jd) == (["Fall 2027"], False)
+    jd = _job(2, term=None)
+    jd.description = "Join our Fall 2027 internship program."
+    main.infer_terms_from_jds([jd], TODAY)
+    assert (jd.terms, jd.terms_from_jd) == (["Fall 2027"], True)
+
+
+def _fall_jd_filter():
+    """Grok's repro: wants Spring/Summer/Fall 2027; Summer accepts anything,
+    Fall needs top company / Atlanta / remote. The job's JD says Fall 2027
+    and it is in Austin."""
+    from pathlib import Path
+
+    from src.filters import UserFilter
+    cfg = _user_cfg(terms=["Spring 2027", "Summer 2027", "Fall 2027"])
+    del cfg["rules"]
+    cfg["term_rules"] = {"Spring": "top_atl_remote", "Summer": "anything",
+                         "Fall": "top_atl_remote"}
+    cfg["unknown_term_policy"] = "llm"
+    cfg["llm"] = {"enabled": True, "tasks": ["term_inference", "top_company_judgment"]}
+    uf = UserFilter(cfg, Path(__file__).parents[1], today=TODAY)
+    uf.llm_enabled = True
+    job = _job(1, term="Fall 2027")
+    job.terms_from_jd = True
+    job.locations = ["Austin, TX"]
+    return uf, job
+
+
+def test_wanted_jd_term_is_not_moved_by_a_cached_llm_term_not_top():
+    uf, job = _fall_jd_filter()
+    first = uf.evaluate(job)
+    assert first.status == "ambiguous" and first.needs == ["top_company"]
+    # Another user's term question cached Summer 2027 for this job.
+    final, judged = main._finalize(uf, job, {"term": "Summer 2027", "is_top_company": False,
+                                             "in_atlanta_metro": False})
+    assert judged.terms == ["Fall 2027"]
+    assert final.status == "reject"     # judged as Fall: not top, not Atlanta
+    assert job.terms == ["Fall 2027"] and job.terms_from_jd
+
+
+def test_wanted_jd_term_is_not_moved_by_a_cached_llm_term_top():
+    uf, job = _fall_jd_filter()
+    final, judged = main._finalize(uf, job, {"term": "Winter 2027", "is_top_company": True,
+                                             "in_atlanta_metro": False})
+    assert judged.terms == ["Fall 2027"]
+    assert final.status == "accept"     # kept as Fall, the top-company verdict decides
+
+
+def test_term_unknown_accept_delivers_no_jd_term(monkeypatch, tmp_path):
+    # LLM null -> every-wanted-term fallback accepts; the delivered snapshot
+    # must say unknown, not the Fall 2027 JD guess this user did not want.
+    items: list[dict] = []
+    state, _ = _jd_llm_run(monkeypatch, tmp_path, None, snapshots=items)
+    assert st.was_notified(state, _key(1), "example")
+    assert [it.get("term") for it in items] == ["Unknown term"]     # not "Fall 2027"
+
+
+def test_llm_summer_accept_delivers_the_llm_term(monkeypatch, tmp_path):
+    items: list[dict] = []
+    _jd_llm_run(monkeypatch, tmp_path, "Summer 2027", snapshots=items)
+    assert [it.get("term") for it in items] == ["Summer 2027"]
+
+
+def test_per_user_copies_are_deep():
+    from src.dedupe import _merge_pair
+    uf, job = _fall_jd_filter()
+    uf.terms_wanted = {"Summer 2027"}            # make the JD term unwanted
+    _, judged = main._finalize(uf, job, {"term": "Summer 2027"})
+    assert judged is not job and judged.locations is not job.locations
+    _merge_pair(judged, _job(2, term="Summer 2027"))   # a later URL merge
+    assert job.locations == ["Austin, TX"]
+    delivered = main._delivered(uf, job)
+    assert delivered.term_display_unknown and delivered.terms == job.terms
+    assert delivered.locations is not job.locations and not job.term_display_unknown
+
+
+def test_unknown_term_snapshot_does_not_wildcard_content_dedup(monkeypatch, tmp_path):
+    """Run 1 delivers the Fall-JD job to a summer-only user as "Unknown
+    term" (LLM null -> fallback). Run 2 brings an explicit Summer 2027
+    posting of the same company and title: it must still be delivered. An
+    "Unknown term" content signature would wildcard-suppress it."""
+    items: list[dict] = []
+    state, _ = _jd_llm_run(monkeypatch, tmp_path, None, snapshots=items)
+    assert [it["term"] for it in items] == ["Unknown term"]
+    summer = Job(company="Company1", title="Software Engineer Intern",
+                 url="https://x.com/summer-posting", source="ok-src",
+                 terms=["Summer 2027"], term_confidence="explicit",
+                 locations=["Atlanta, GA"])
+
+    class Run2:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [summer]
+
+    monkeypatch.setattr(main, "make_adapter", lambda cfg: Run2(cfg))
+    assert main.main(["--state-file", str(tmp_path / "seen.json")]) == 0
+    state = st.load_state(tmp_path / "seen.json")
+    key = dedup_key(summer)
+    # Run 1 used the 12:00 email slot, so the match waits in the outbox.
+    assert key in {it["key"] for it in st.outbox_items(state, "example")} \
+        or st.was_notified(state, key, "example")
+
+
+# ------------------------------------------------ JD-fetch cap leaves pending
+
+def test_jd_cap_overflow_stays_pending_unevaluated_then_decides(
+        monkeypatch, tmp_path):
+    import httpx
+    listed = [_job(i) for i in (1, 2, 3)]
+    for j in listed:
+        j.jd_url = f"https://api.example/jd/{j.url.rsplit('/', 1)[1]}"
+
+    class OkAdapter:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today): return [j.model_copy() for j in listed]
+
+    sources = [SourceConfig(name="ok-src", adapter="a")]
+    _wire(monkeypatch, sources, {"ok-src": OkAdapter}, [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    monkeypatch.setattr(main, "JD_FETCH_CAP", 2)
+    fetched = []
+    real = httpx.Client
+
+    def handler(req):
+        fetched.append(str(req.url))
+        return httpx.Response(200, json={"content": "<p>Paid internship.</p>"})
+
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(handler), **kw))
+
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+
+    assert main.main(["--state-file", str(state_file)]) == 0
+    state = st.load_state(state_file)
+    assert len(fetched) == 2
+    waiting = st.pending_keys(state, "example")
+    assert len(waiting) == 1
+    (late,) = waiting
+    # not evaluated: neither delivered nor queued
+    assert not st.was_notified(state, late, "example")
+    assert late not in {it["key"] for it in st.outbox_items(state, "example")}
+
+    # next run: no new jobs, the pending one gets its JD and is decided
+    assert main.main(["--state-file", str(state_file)]) == 0
+    state = st.load_state(state_file)
+    assert len(fetched) == 3
+    assert st.pending_keys(state, "example") == set()
+    assert (st.was_notified(state, late, "example")
+            or late in {it["key"] for it in st.outbox_items(state, "example")})
+
+
+def test_enrich_jds_cap_takes_oldest_first_and_reports_the_rest(monkeypatch):
+    import httpx
+    jobs = [Job(company="c", title="Intern", url=f"https://x/{k}",
+                jd_url=f"https://api.example/{k}", source="s") for k in "abc"]
+    for j, k in zip(jobs, ("url:a", "url:b", "url:c"), strict=True):
+        j.dedup_key = k
+    state = st.empty_state()
+    st.touch(state, "url:a", ["s"], TODAY)                         # newest
+    st.touch(state, "url:b", ["s"], TODAY - dt.timedelta(days=5))  # oldest
+    st.touch(state, "url:c", ["s"], TODAY - dt.timedelta(days=2))
+    monkeypatch.setattr(main, "JD_FETCH_CAP", 2)
+    real = httpx.Client
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"content": "jd"})), **kw))
+    deferred: list[str] = []
+    assert main.enrich_jds(jobs, state, deferred) == 2
+    assert deferred == ["url:a"]
+    assert jobs[0].description is None and jobs[1].description == "jd"
+
+
+def _jd_cap_run(monkeypatch, tmp_path, feeds, cap=0,
+                jd="<p>Paid internship.</p>"):
+    """Run main once per entry of `feeds` (a list of job lists the stub
+    source returns that run) with JD_FETCH_CAP=cap; returns the state."""
+    import httpx
+    run = {"i": 0}
+
+    class Feed:
+        def __init__(self, cfg): pass
+        def fetch(self, client, today):
+            return [j.model_copy() for j in feeds[run["i"]]]
+
+    _wire(monkeypatch, [SourceConfig(name="ok-src", adapter="a")],
+          {"ok-src": Feed}, [_user_cfg()])
+    _freeze_clock(monkeypatch)
+    real = httpx.Client
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, json={"content": jd})), **kw))
+    state_file = tmp_path / "seen.json"
+    pre = st.empty_state()
+    st.touch(pre, "jr:preexisting", ["ok-src"], TODAY)
+    st.save_state(pre, state_file)
+    states = []
+    for i, _ in enumerate(feeds):
+        run["i"] = i
+        monkeypatch.setattr(main, "JD_FETCH_CAP", cap if i == 0 else 80)
+        assert main.main(["--state-file", str(state_file)]) == 0
+        states.append(st.load_state(state_file))
+    return states
+
+
+def _delivered(state, key):
+    return (st.was_notified(state, key, "example")
+            or key in {it["key"] for it in st.outbox_items(state, "example")})
+
+
+def test_jd_deferred_rows_twin_is_held_until_both_are_decided(
+        monkeypatch, tmp_path):
+    ats = _job(1, url="https://boards.greenhouse.io/acme/jobs/777")
+    ats.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/777"
+    twin = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/777")
+    twin.company = ats.company
+    s1, s2 = _jd_cap_run(monkeypatch, tmp_path, [[ats, twin], [ats, twin]])
+    ka, kt = dedup_key(ats), dedup_key(twin)
+    assert ka != kt
+    # run 1: the ATS row waits on its JD and its twin waits with it
+    assert st.pending_keys(s1, "example") == {ka, kt}
+    assert not _delivered(s1, ka) and not _delivered(s1, kt)
+    # run 2: decided together, delivered once
+    assert st.pending_keys(s2, "example") == set()
+    # delivered once: one spelling survives, the other is its dup
+    dups = {k: s2["jobs"][k].get("dup_of") for k in (ka, kt)}
+    assert sorted(v is None for v in dups.values()) == [False, True]
+    survivor = next(k for k, v in dups.items() if v is None)
+    assert set(dups.values()) == {None, survivor}
+    assert _delivered(s2, survivor)
+
+
+def test_jd_deferred_row_that_vanishes_is_still_evaluated_on_relist(
+        monkeypatch, tmp_path):
+    job = _job(1, url="https://boards.greenhouse.io/acme/jobs/888")
+    job.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/888"
+    other = _job(2)
+    s1, s2, s3 = _jd_cap_run(monkeypatch, tmp_path,
+                             [[job], [other], [job]])
+    key = dedup_key(job)
+    assert key in st.pending_keys(s1, "example")
+    assert key in st.pending_keys(s2, "example")      # gone, but not dropped
+    assert key not in st.pending_keys(s3, "example")  # relisted: decided
+    assert _delivered(s3, key)
+    assert "jd_deferred" not in s3["jobs"][key]
+
+
+def test_held_twin_is_decided_with_the_ats_jd_eliminations(
+        monkeypatch, tmp_path):
+    ats = _job(1, url="https://boards.greenhouse.io/acme/jobs/999")
+    ats.jd_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/999"
+    twin = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/999")
+    twin.company = ats.company
+    jd = ("<p>Candidates must hold an active TS/SCI security clearance at "
+          "the time of application.</p>")
+    s1, s2 = _jd_cap_run(monkeypatch, tmp_path, [[ats, twin], [ats, twin]],
+                         jd=jd)
+    ka, kt = dedup_key(ats), dedup_key(twin)
+    assert st.pending_keys(s1, "example") == {ka, kt}
+    # run 2: the ATS row is rejected by its JD, and the twin with it
+    assert st.pending_keys(s2, "example") == set()
+    assert not _delivered(s2, ka) and not _delivered(s2, kt)
+    # the twin's reject is fingerprinted like any reject, so a config change
+    # can recheck it (not seen-and-forgotten)
+    assert s2["jobs"][kt]["rj"]["example"].startswith("elim:")
+    assert s2["jobs"][ka]["rj"]["example"].startswith("elim:")
+
+
+def test_twin_takes_the_longest_jd_of_its_same_canon_rows():
+    from src.filters import UserFilter
+    from src.paths import ROOT
+    url = "https://boards.greenhouse.io/acme/jobs/4242"
+    blurb = _job(1, url=url)
+    blurb.description = "Great internship."
+    full = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/4242")
+    full.description = ("Great internship. Applicants must hold an active "
+                        "TS/SCI security clearance.")
+    twin = _job(3, url="https://boards.greenhouse.io/acme/jobs/4242?gh_src=x")
+    uf = UserFilter(_user_cfg(), ROOT, today=TODAY)
+    kept = main._apply_twin_jds(uf, [blurb, full, twin], [(twin, ["ok"])],
+                                "example", TODAY)
+    assert kept == []
+    assert "TS/SCI" in (twin.description or "")

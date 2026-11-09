@@ -29,6 +29,7 @@ FIXTURE_NAMES = {
     ("vanshb03-2027", "README.md"): "vanshb03_README.md",
     ("vanshb03-2027", "OFFSEASON_README.md"): "vanshb03_OFFSEASON_README.md",
     ("speedyapply", "README.md"): "speedyapply_README.md",
+    ("speedyapply-ai", "README.md"): "speedyapply_ai_README.md",
 }
 
 SAMPLE_TERMS = {"Fall 2026", "Spring 2027", "Summer 2027", "Summer 2026", "N/A"}

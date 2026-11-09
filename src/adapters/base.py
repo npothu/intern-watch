@@ -61,6 +61,9 @@ def fetch_text(client: httpx.Client, url: str) -> str:
 class Adapter(ABC):
     def __init__(self, cfg: SourceConfig):
         self.cfg = cfg
+        # Multi-board adapters fill this during fetch: board id -> the row's
+        # `backfill` flag, for every board that answered (see src/seeding.py).
+        self.fetched_boards: dict[str, bool] = {}
 
     def fetch(self, client: httpx.Client, today: dt.date) -> list[Job]:
         """Fetch every file for this source and parse. Raises on fetch error;

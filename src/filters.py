@@ -341,6 +341,55 @@ class Verdict:
     needs: list[str] = field(default_factory=list)  # of: term, top_company, atlanta_metro
 
 
+# --- Role-filter keyword matching. Case-folded SUBSTRING matching, against
+# two forms of the title joined by a NUL (so no match spans both):
+#   1. the raw case-folded title, exactly what older code matched;
+#   2. word-split: every run of characters other than letters, digits, "+",
+#      "#" and "&" becomes one _WB separator, with one at each end.
+# Almost every keyword is matched against form 1 only, i.e. as before:
+# "data science" does NOT match "Data Scientist", "new grad" does not match
+# "New-Grad", ".net" and "full-stack" are literal. Only a keyword written
+# with edge spaces (" ai ", " hr ") and otherwise plain (letters, digits,
+# spaces, "+#&") is rewritten into form 2's alphabet, where its spaces mean
+# word boundaries: it now matches at the start or end of a title and next to
+# punctuation ("AI Intern", "Embodied AI", "(AI)", "AI/ML"), which the raw
+# title never allowed.
+# Bump ROLE_MATCH_VERSION whenever this matching changes: it is part of the
+# role stage's recheck fingerprint, so still-listed jobs the old matching
+# rejected get re-evaluated (src/recheck.py).
+ROLE_MATCH_VERSION = 2
+# Same contract for the elimination patterns (grad-only, unpaid, clearance,
+# veteran regexes below): bump it with a pattern fix so still-listed jobs the
+# old patterns eliminated are rechecked.
+ELIM_MATCH_VERSION = 1
+_WB = "\x01"   # word boundary in form 2; never occurs in a raw title
+_KW_SPLIT_RE = re.compile(r"[^0-9a-z+#&]+")
+_KW_PLAIN_RE = re.compile(r"[0-9a-z+#& ]+")
+
+
+def role_text(title: str) -> str:
+    """The form of a title that role keywords are matched against."""
+    folded = title.casefold().replace("\x00", "").replace(_WB, "")
+    words = _KW_SPLIT_RE.sub(_WB, folded).strip(_WB)
+    return f"{folded}\x00{_WB}{words}{_WB}"
+
+
+def role_keyword(kw: str) -> str:
+    """A role keyword in the form role_text matches (see above)."""
+    folded = kw.casefold()
+    padded = folded[:1] == " " or folded[-1:] == " "
+    if not padded or not folded.strip() or not _KW_PLAIN_RE.fullmatch(folded):
+        return folded
+    lead = _WB if folded[0] == " " else ""
+    tail = _WB if folded[-1] == " " else ""
+    return lead + _WB.join(folded.split()) + tail
+
+
+def keyword_label(kw: str) -> str:
+    """A role keyword as the user wrote it (for reasons and --explain)."""
+    return kw.replace(_WB, " ")
+
+
 def _accept(*reasons: str) -> Verdict:
     return Verdict("accept", list(reasons))
 
@@ -361,13 +410,13 @@ class UserFilter:
             today = date.today()
         self._company_lists: dict[str, CompanyList] = {}
         role = cfg.get("role_filter", {})
-        self.include = [k.casefold() for k in role.get("include_keywords", [])]
-        self.exclude = [k.casefold() for k in role.get("exclude_keywords", [])]
+        self.include = [role_keyword(k) for k in role.get("include_keywords", [])]
+        self.exclude = [role_keyword(k) for k in role.get("exclude_keywords", [])]
         # Sources listed here must also match strict_include_keywords (a tighter
         # subset of include_keywords that excludes bare "engineer"). This lets
         # broad non-SW engineering repos pass only clearly SW-titled roles.
         self.strict_sources: set[str] = set(role.get("strict_sources", []))
-        self.strict_include = [k.casefold()
+        self.strict_include = [role_keyword(k)
                                for k in role.get("strict_include_keywords", [])]
         # Chronological list for grouping/ordering; the set for membership.
         self.terms_order: list[str] = terms_mod.wanted_terms(cfg, today)
@@ -547,10 +596,10 @@ class UserFilter:
         If the LLM supplied a term for an unknown-term job, the caller has
         already written it onto job.terms. `today` (default date.today())
         anchors the optional stale-posting elimination."""
-        title = job.title.casefold()
+        title = role_text(job.title)
         for kw in self.exclude:
             if kw in title:
-                return _reject(f"excluded-keyword:{kw}")
+                return _reject(f"excluded-keyword:{keyword_label(kw)}")
         if self.include and not any(kw in title for kw in self.include):
             return _reject("no-role-keyword")
         if self.strict_sources and self.strict_include \
@@ -561,7 +610,13 @@ class UserFilter:
         if elim:
             return _reject(elim)
 
-        if not job.terms:
+        # A term read from the JD body may only accept: one outside the wanted
+        # set is handled exactly like no term (LLM, then the every-wanted-
+        # term fallback), so a misread JD costs an LLM call, never a
+        # permanent term-not-wanted rejection. Title/URL/source terms keep
+        # their behaviour.
+        jd_term_unwanted = job.terms_from_jd and not set(job.terms) & self.terms_wanted
+        if not job.terms or jd_term_unwanted:
             if llm_facts is not None:
                 # Even the LLM couldn't resolve a term. Don't hard-drop: accept
                 # iff the job passes the rules under EVERY wanted term (the most

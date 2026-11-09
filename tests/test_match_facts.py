@@ -563,3 +563,58 @@ def test_clearance_obtainable_through_process_user(monkeypatch, tmp_path):
         is True
     assert "clearanceObtainable" not in \
         stores["off"].matches["off"][0]["facts"]
+
+
+# ------------------------------- merge with main: JD terms and rechecks
+
+def test_jd_body_term_has_no_term_source():
+    # A term read from the JD body is neither the source row's nor the LLM's.
+    assert "termSource" not in _build(_j(terms_from_jd=True), ["always"])
+    # URL-slug terms are source data
+    assert _build(_j(terms_inferred=True), ["always"])["termSource"] == "title"
+    assert _build(_j(terms_from_jd=True), ["always"],
+                  llm_termed=True)["termSource"] == "llm"
+
+
+def test_recheck_marker_is_not_the_accepting_rule():
+    f = _build(_j(), ["location:remote", main.RECHECK_REASON])
+    assert f["acceptedBy"] == "rule"
+    assert f["acceptedRule"] == "location:remote"
+
+
+def test_llm_term_on_one_users_copy_is_llm_only_for_that_user(monkeypatch,
+                                                              tmp_path):
+    # JD says Fall 2027. The summer user does not want it, so the LLM is
+    # asked and says Summer (replaced on that user's own copy); the fall user
+    # accepts on the JD term. Whichever runs first, only the summer user's
+    # facts say the term came from the LLM.
+    _wire_push(monkeypatch, tmp_path)
+
+    def cfg_for(name, term):
+        cfg = _user_cfg(name=name, terms=[term])
+        cfg["dashboard"] = True
+        cfg["rules"] = [{"when": {"term": [term]},
+                         "accept_if_any": [{"always": True}]}]
+        cfg["unknown_term_policy"] = "llm"
+        cfg["llm"] = {"enabled": True, "tasks": ["term_inference"]}
+        return cfg
+    cfgs = {"summer": cfg_for("summer", "Summer 2027"),
+            "fall": cfg_for("fall", "Fall 2027")}
+    monkeypatch.setenv(api_key_env_for(cfgs["summer"]["llm"]), "k")
+    monkeypatch.setattr(main, "classify", lambda batch, *a, **k: {
+        j.dedup_key: {"term": "Summer 2027"} for j in batch})
+    for order in (("summer", "fall"), ("fall", "summer")):
+        job = _j(terms=["Fall 2027"], term_confidence="inferred",
+                 terms_from_jd=True, terms_inferred=True,
+                 url=f"https://x.com/{order[0]}")
+        state = st.empty_state()
+        termed: set[str] = set()
+        stores = {n: FakeStore() for n in order}
+        for n in order:
+            main.process_user(cfgs[n], [job], state, dry_run=False, now=NOW,
+                              store=stores[n], llm_termed=termed)
+        assert termed == set(), order    # nothing written onto the shared job
+        summer = stores["summer"].matches["summer"][0]["facts"]
+        fall = stores["fall"].matches["fall"][0]["facts"]
+        assert summer["termSource"] == "llm", order
+        assert "termSource" not in fall, order

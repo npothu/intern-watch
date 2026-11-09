@@ -1,0 +1,163 @@
+{
+ "took": 19,
+ "timed_out": false,
+ "_shards": {
+  "total": 20,
+  "successful": 20,
+  "skipped": 0,
+  "failed": 0
+ },
+ "hits": {
+  "total": {
+   "value": 156,
+   "relation": "eq"
+  },
+  "max_score": 63.441154,
+  "hits": [
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "0638a952d27da44ce0256e1ae214ac29fa3baaa59c53ac895f33ab6ce485b114",
+    "_score": 63.441154,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=129790",
+     "dcdate": "2026-08-20",
+     "title": "Procurement Intern: 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "RESEARCH TRIANGLE PARK, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "1d169a38f95d223721ec0e68d9b14b84c4bb623cc6bf15f9b11b6aacde799c53",
+    "_score": 61.36534,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=136426",
+     "dcdate": "2026-11-03",
+     "title": "Product Management Intern 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "Yorktown Heights, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "4d8e36a90e38707b2dc8bd50aa3f3de24c5d18bb861320ce9f1ea1338bb78337",
+    "_score": 61.24006,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=134058",
+     "dcdate": "2026-11-03",
+     "title": "Sales Operations Intern 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "Yorktown Heights, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "c6777df51cc979feaacd004d0aeae784bb5d35269669ba660c44d18e17521bc0",
+    "_score": 59.66548,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=128807",
+     "dcdate": "2026-08-13",
+     "title": "Intern Cybersecurity Specialist \u2013 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "BATON ROUGE, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "87bf358d7b943d2e9f4467d536a8a341b212fb214640d94f9350b231c6c8dd5d",
+    "_score": 59.292397,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=128760",
+     "dcdate": "2026-08-13",
+     "title": "Consultant Intern \u2013 SAP 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "Dallas, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "461a088c64eb60d329207ef9d977e7f2131ce5410593d02368726250fc0824f2",
+    "_score": 58.789516,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=130092",
+     "dcdate": "2026-11-03",
+     "title": "Software Developer Intern/Tucson-AZ",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "TUCSON, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "7585636b8f3baeee6c98f7ffecf8350a4ccc1756553410840be2d6a6faa1166f",
+    "_score": 58.744843,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=128644",
+     "dcdate": "2026-10-05",
+     "title": "Strategy Consultant Intern 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "Chicago, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "056a695e172d3502f8b3f42c2fa96cbfd0b07088f397fe5d95082810864d441e",
+    "_score": 58.598846,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=129635",
+     "dcdate": "2026-08-17",
+     "title": "SAP Application Operations Intern 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "BATON ROUGE, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "86642dd208f838caa1c2cc46556d6a6c6b52086976e110aa12aac18e838178ef",
+    "_score": 58.23943,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=128815",
+     "dcdate": "2026-08-13",
+     "title": "Intern Application Developer - Oracle - 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "BATON ROUGE, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "1790b1a79bc29301eb36117269bab72257dd5cc0fc4e4ec5128eb453fdc06c76",
+    "_score": 58.168175,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=128767",
+     "dcdate": "2026-08-14",
+     "title": "Consultant Intern \u2013 SAP 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "Multiple Cities"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "b883954a399454991ec47b849d99c74f43a32918b54aec465fdf98b42da74d9f",
+    "_score": 58.081608,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=128591",
+     "dcdate": "2026-08-14",
+     "title": "Intern Consultant Oracle Cloud 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "Dallas, US"
+    }
+   },
+   {
+    "_index": "genesis-prod-1788036777996",
+    "_id": "3c956c6403ea0e2500945b60a8a6cc7eb384f9822d47e82cac4148c3923d5d6b",
+    "_score": 57.77468,
+    "_source": {
+     "url": "https://careers.ibm.com/careers/JobDetail?jobId=134067",
+     "dcdate": "2026-10-13",
+     "title": "Intern Supply Chain Specialist - 2027",
+     "field_keyword_18": "Internship",
+     "field_keyword_19": "BATON ROUGE, US"
+    }
+   }
+  ]
+ }
+}
