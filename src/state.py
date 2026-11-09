@@ -300,6 +300,14 @@ def company_top_put(state: dict, company: str, user: str, verdict: bool,
     e["judged"] = today.isoformat()
 
 
+def company_judged_get(state: dict, company: str) -> str | None:
+    """ISO date the employer's cached verdicts were last written, or None.
+    Shared by every user's verdict on that employer (company_top_put)."""
+    judged = state.get("companies", {}).get(norm_company(company), {}) \
+        .get("judged")
+    return judged if isinstance(judged, str) else None
+
+
 # Source health: consecutive-failure counters so a silently-broken source
 # (format change, dead board, repo gone) surfaces in the digest instead of
 # only in Actions logs. An entry exists only while a source is failing.
@@ -437,6 +445,24 @@ def matches_set_dismissed(state: dict, user: str, hidden: set[str],
             item.pop("restored", None)
         elif item.pop("dismissed", None):
             item["restored"] = True
+
+
+def matches_set_delivery(state: dict, user: str, keys: set[str], mode: str,
+                         at: dt.datetime) -> int:
+    """Record on the user's match items how and when they were emailed
+    (`facts.delivery`, display-only). First delivery wins: a later send never
+    overwrites it. Returns how many items were stamped."""
+    stamp = at.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    n = 0
+    for item in state["matches"].get(user, []):
+        if item.get("key") not in keys:
+            continue
+        facts = item.setdefault("facts", {})
+        if "delivery" in facts:
+            continue
+        facts["delivery"] = {"mode": mode, "at": stamp}
+        n += 1
+    return n
 
 
 # Content-duplicate suppression: a per-user map of content signature ->

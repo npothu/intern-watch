@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from . import content_dedup, dashboard, ledger
+from . import content_dedup, dashboard, ledger, match_facts
 from . import prefs as prefs_mod
 from . import state as st
 from .adapters import make_adapter
@@ -376,11 +376,17 @@ def _backfill_apply_urls(state: dict, resolver,
     return resolved
 
 
-def _finalize(uf: UserFilter, job: Job, facts: dict) -> Verdict:
+def _finalize(uf: UserFilter, job: Job, facts: dict,
+              llm_termed: set[str] | None = None) -> Verdict:
     """Re-run the rule engine with LLM facts. Writes an LLM-supplied term onto
-    the job first (term is objective and shared across users)."""
+    the job first (term is objective and shared across users). `llm_termed`,
+    when given, collects the keys whose term came from the LLM (display-only
+    match facts; the Job object is shared across users, so the set is
+    run-scoped)."""
     if not job.terms and facts.get("term"):
         job.terms, job.term_confidence = [facts["term"]], "inferred"
+        if llm_termed is not None:
+            llm_termed.add(job.dedup_key)
     return uf.evaluate(job, llm_facts=facts)
 
 
@@ -484,8 +490,11 @@ def _restamp_priority(state: dict, name: str, uf: UserFilter) -> int:
 def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  dry_run: bool, now: dt.datetime, send_now: bool = False,
                  enricher: _JobrightEnricher | None = None,
-                 resolver=None, store: TrackerStore | None = None) -> None:
+                 resolver=None, store: TrackerStore | None = None,
+                 llm_termed: set[str] | None = None) -> None:
     today = now.date()
+    if llm_termed is None:
+        llm_termed = set()
     # Settings > Watch (hosted store) overlays the yaml: terms window,
     # per-season presets, priority companies, remote, digest time/recipients.
     if store is None:
@@ -517,6 +526,9 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
 
     accepted: list[tuple[Job, list[str]]] = []
     llm_queue: list[Job] = []
+    # The LLM facts each accept's final evaluation ran with (display-only
+    # match facts; read after the decision, never fed back into it).
+    used_facts: dict[str, dict] = {}
 
     for job in candidates:
         verdict = uf.evaluate(job, today=today)
@@ -528,9 +540,10 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         else:  # ambiguous
             cached = _cached_facts(state, job, name)
             if _cache_covers(verdict.needs, cached):
-                final = _finalize(uf, job, cached)
+                final = _finalize(uf, job, cached, llm_termed)
                 if final.status == "accept":
                     accepted.append((job, final.reasons))
+                    used_facts[job.dedup_key] = cached
                 st.clear_pending(state, job.dedup_key, name)
             else:
                 llm_queue.append(job)
@@ -577,9 +590,10 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                 continue
             st.llm_cache_put(state, job.dedup_key, facts)
             merged_facts = _cached_facts(state, job, name)
-            final = _finalize(uf, job, merged_facts)
+            final = _finalize(uf, job, merged_facts, llm_termed)
             if final.status == "accept":
                 accepted.append((job, final.reasons))
+                used_facts[job.dedup_key] = merged_facts
             st.clear_pending(state, job.dedup_key, name)
         for job in deferred:
             st.set_pending(state, job.dedup_key, name)
@@ -614,6 +628,11 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             item = match_item(job, reasons, terms_order)
             if job.dedup_key in resume_paths:
                 item["resume"] = resume_paths[job.dedup_key]
+            item["facts"] = match_facts.build(
+                job, reasons, user=name, state=state, today=today,
+                llm_facts=used_facts.get(job.dedup_key),
+                llm_termed=job.dedup_key in llm_termed,
+                elim_active_clearance=uf.elim_active_clearance)
             st.matches_add(state, name,
                            {**item, "added": now.date().isoformat(),
                             "applied": False})
@@ -632,6 +651,12 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         store.put_watch_report(name, prefs_mod.watch_report(
             user_cfg, today, now, tracker, uf.legacy_rules,
             resolved=uf.priority_names))
+        # One row per run for the header sparkline. Best-effort, like the
+        # report.
+        store.put_watch_run(name, {
+            "at": int(now.timestamp() * 1000), "newMatches": len(accepted),
+            "scanned": len(candidates),
+            "source": os.environ.get("GITHUB_EVENT_NAME") or "local"})
 
 
 MATCH_JD_CAP = 12    # watch-time JD acquisitions per run; backlog drains on cron
@@ -752,8 +777,8 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                 saved = ledger.load_ledger(lpath)
                 saved[name] = book
                 ledger.save_ledger(saved, lpath)
-        store.push_matches(name, _matches_with_jds(store, state, name,
-                                                    user_cfg, resolver))
+        store.push_matches(name, match_facts.for_push(
+            state, _matches_with_jds(store, state, name, user_cfg, resolver)))
     except Exception:  # noqa: BLE001 - dashboard trouble never blocks delivery
         log.exception("user %s: dashboard update failed", name)
 
@@ -882,6 +907,8 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
                   attachments=attachments, user=name):
         for item in items:
             st.mark_notified(state, item["key"], name)
+        st.matches_set_delivery(state, name, {it["key"] for it in items},
+                                "digest", now)
         st.outbox_clear(state, name)
         st.set_last_email(state, name, now)
         st.mark_health_alerted(state, name)
@@ -927,6 +954,8 @@ def _send_priority_alert(name: str, email_cfg: dict, alerts: list[dict],
                   user=name):
         for item in alerts:
             st.mark_notified(state, item["key"], name)
+        st.matches_set_delivery(state, name, {it["key"] for it in alerts},
+                                "immediate", now)
         st.outbox_remove(state, name, {it["key"] for it in alerts})
         log.info("user %s: priority alert emailed %d match(es) to %s", name,
                  len(alerts), to_addr)
@@ -1184,6 +1213,7 @@ def main(argv: list[str] | None = None) -> int:
     from .adapters.jobright_auth import JobrightSession
     resolver = JobrightSession.from_env()
     enricher = _JobrightEnricher(session=resolver)
+    llm_termed: set[str] = set()   # run-scoped: Job objects are shared
     for user_cfg in users:
         name = user_cfg["name"]
         candidates = list(new_jobs)
@@ -1199,7 +1229,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,
-                         resolver=resolver)
+                         resolver=resolver, llm_termed=llm_termed)
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()

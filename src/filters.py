@@ -160,6 +160,19 @@ def jd_requires_active_clearance(description: str) -> bool:
     return False
 
 
+def jd_clearance_obtainable(description: str) -> bool:
+    """True when the JD mentions a clearance only as something the candidate
+    can obtain: some mention carries an obtainable cue and none reads as an
+    active-clearance requirement. Display-only (match facts); never consulted
+    by the rule engine."""
+    if jd_requires_active_clearance(description):
+        return False
+    return any(_JD_OBTAINABLE_RE.search(
+        description[max(0, m.start() - _JD_CLEARANCE_WINDOW):
+                    m.end() + _JD_CLEARANCE_WINDOW])
+        for m in _JD_CLEARANCE_RE.finditer(description))
+
+
 def jd_grad_only(description: str) -> bool:
     return bool(_JD_GRAD_RE.search(description)
                 and not _JD_UNDERGRAD_RE.search(description))
