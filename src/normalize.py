@@ -457,7 +457,7 @@ _JD_LONG_DURATION_RE = re.compile(
 _JD_DURATION_HISTORY_BEFORE_RE = re.compile(
     r"\b(?:previous|prior|past|completed)\W+(?:\w+\W+)?$", _RX)
 _JD_DURATION_HISTORY_AFTER_RE = re.compile(
-    r"\W*(?:of\s+)?(?:(?!intern|co-?op|program|placement|fellowship)\w+\s+){0,2}?"
+    r"\W*(?:of\s+)?(?:(?!(?:intern(?:ship)?s?|co-?ops?|program(?:me)?s?|placements?|fellowships?)\b)\w+\s+){0,2}?"
     r"experience\b", _RX)
 # "This is not a Summer 2027 internship": a negated season - the JD says
 # nothing usable about the term.

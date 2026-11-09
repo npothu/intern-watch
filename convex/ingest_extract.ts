@@ -515,7 +515,7 @@ const JD_LONG_DURATION_RE =
 // Only the applicant's own history: "previous/prior/past/completed" right before, or
 // "N months of (sales) experience" right after with no internship noun in between.
 const JD_DURATION_HISTORY_BEFORE_RE = /\b(?:previous|prior|past|completed)\W+(?:\w+\W+)?$/i;
-const JD_DURATION_HISTORY_AFTER_RE = /^\W*(?:of\s+)?(?:(?!intern|co-?op|program|placement|fellowship)\w+\s+){0,2}?experience\b/i;
+const JD_DURATION_HISTORY_AFTER_RE = /^\W*(?:of\s+)?(?:(?!(?:intern(?:ship)?s?|co-?ops?|program(?:me)?s?|placements?|fellowships?)\b)\w+\s+){0,2}?experience\b/i;
 // A negated season ("is not a Summer 2027", "won't be a", "not a summer internship"): the JD
 // is no help. "do not fall under" is the verb.
 const JD_NEGATED_SEASON_RE = new RegExp(
