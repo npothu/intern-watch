@@ -67,7 +67,8 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
                 start=start))
             data = json.loads(raw)
             total = int((data.get("data") or {}).get("count") or 0)
-            return (raw, [str(p.get("id") or "") for p in _positions(data)],
+            return (raw, ["" if p.get("id") is None else str(p["id"])
+                         for p in _positions(data)],
                     total)
         what = f"eightfold/{board['slug']} q={query}"
         first = page_through(fetch, page_size=PAGE_SIZE, cap=cap, what=what,

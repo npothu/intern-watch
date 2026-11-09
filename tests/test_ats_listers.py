@@ -902,3 +902,38 @@ def test_slack_needs_both_raw_and_distinct_shortfall_within_it():
     fetch = _pager_fetch({0: ["a", "b", "c"], 3: ["a", "a"]}, 6)
     with pytest.raises(listing_http.IncompleteListing, match="distinct"):
         listing_http.page_through(fetch, page_size=3, cap=9, what="t", slack=2)
+
+
+def test_blank_ids_do_not_count_as_postings():
+    # 3 rows reach the stated 3, but one has no id: 2 distinct postings
+    fetch = _pager_fetch({0: ["a", "", "b"]}, 3)
+    with pytest.raises(listing_http.IncompleteListing, match="distinct"):
+        listing_http.page_through(fetch, page_size=3, cap=9, what="t")
+
+
+def test_eightfold_union_ignores_rows_without_an_id():
+    from src.adapters import eightfold
+
+    def handler(req):
+        start = int(req.url.params["start"])
+        # 11 stated; every pass shows ids 0..9 plus one row without an id
+        rows = ([{"id": i, "name": "Intern"} for i in range(10)]
+                if start in (0, 5) else [{"name": "Intern"}])
+        return httpx.Response(200, json={"data": {"count": 11,
+                                                  "positions": rows}})
+
+    with _client(handler) as c, pytest.raises(listing_http.IncompleteListing,
+                                              match="shifted"):
+        eightfold.fetch_pages(c, {"slug": MS_SLUG})
+
+
+def test_retry_after_http_date(monkeypatch):
+    import datetime as dt
+    from email.utils import format_datetime
+    when = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=30)
+    resp = httpx.Response(429, headers={"Retry-After": format_datetime(when, usegmt=True)})
+    assert 25 <= listing_http._retry_after(resp, 1) <= 30
+    past = httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
+    assert listing_http._retry_after(past, 1) == 0.0
+    junk = httpx.Response(429, headers={"Retry-After": "soon"})
+    assert listing_http._retry_after(junk, 2) == listing_http.RETRY_DELAY * 2

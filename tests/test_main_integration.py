@@ -835,3 +835,20 @@ def test_held_twin_is_decided_with_the_ats_jd_eliminations(
     # run 2: the ATS row is rejected by its JD, and the twin with it
     assert st.pending_keys(s2, "example") == set()
     assert not _delivered(s2, ka) and not _delivered(s2, kt)
+
+
+def test_twin_takes_the_longest_jd_of_its_same_canon_rows():
+    from src.filters import UserFilter
+    from src.paths import ROOT
+    url = "https://boards.greenhouse.io/acme/jobs/4242"
+    blurb = _job(1, url=url)
+    blurb.description = "Great internship."
+    full = _job(2, url="https://job-boards.greenhouse.io/acme/jobs/4242")
+    full.description = ("Great internship. Applicants must hold an active "
+                        "TS/SCI security clearance.")
+    twin = _job(3, url="https://boards.greenhouse.io/acme/jobs/4242?gh_src=x")
+    uf = UserFilter(_user_cfg(), ROOT, today=TODAY)
+    kept = main._apply_twin_jds(uf, [blurb, full, twin], [(twin, ["ok"])],
+                                "example", TODAY)
+    assert kept == []
+    assert "TS/SCI" in (twin.description or "")

@@ -439,8 +439,10 @@ def _apply_twin_jds(uf: UserFilter, candidates: list[Job],
     jds: dict[str, str] = {}
     for job in candidates:
         canon = canonical_url(job.url) if job.description else None
-        if canon:
-            jds.setdefault(canon, job.description or "")
+        # The longest body wins: a short aggregator blurb must not shadow the
+        # full ATS JD that carries the eliminating lines.
+        if canon and len(job.description or "") > len(jds.get(canon, "")):
+            jds[canon] = job.description or ""
     if not jds:
         return accepted
     kept = []

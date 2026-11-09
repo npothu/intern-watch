@@ -30,6 +30,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -121,11 +122,21 @@ class Pacer:
 
 def _retry_after(resp: httpx.Response, attempt: int) -> float:
     """Seconds to wait before retry number `attempt` (1-based) of a 429:
-    the server's Retry-After (seconds form) when present, capped, else
-    exponential backoff from RETRY_DELAY."""
+    the server's Retry-After -- delta-seconds or an HTTP-date -- capped at
+    RETRY_AFTER_MAX, else exponential backoff from RETRY_DELAY."""
     value = (resp.headers.get("Retry-After") or "").strip()
     if value.isdigit():
         return min(float(value), RETRY_AFTER_MAX)
+    if value:
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            when = None
+        if when is not None:
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=dt.UTC)
+            delta = (when - dt.datetime.now(dt.UTC)).total_seconds()
+            return min(max(delta, 0.0), RETRY_AFTER_MAX)
     return RETRY_DELAY * 2 ** (attempt - 1)
 
 
@@ -191,9 +202,9 @@ def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
     `slack` lets a feed whose stated total counts rows it never lists
     (Oracle: BNY states 594 and lists 593 under every sort) finish up to
     that many rows short -- only after it stopped on a short page, and only
-    when both the rows read and the distinct ids are within `slack`. A relevancy-sorted page with no intern title is
-    NOT the end: on a live Oracle board an intern title followed such a
-    page."""
+    when both the rows read and the distinct ids are within `slack`. A
+    relevancy-sorted page with no intern title is NOT the end: on a live
+    Oracle board an intern title followed such a page."""
     pages: list[str] = []
     ids: set[str] = set()
     seen = start
@@ -201,7 +212,7 @@ def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
     for n in range(cap):
         raw, row_ids, total = fetch(seen)
         pages.append(raw)
-        ids.update(row_ids)
+        ids.update(i for i in row_ids if i)    # a row with no id is no posting
         seen += len(row_ids)
         # Keep paging while pages are full: slack only applies once the feed
         # has actually stopped (a short page), never to cut a full page off.
