@@ -5,7 +5,7 @@ import * as s from "./schemas";
 import { ApiError } from "./auth";
 import { withBackedShort } from "../ingest-short";
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type Params = Record<string, string>;
 export type Endpoint = {
   method: Method;
@@ -145,6 +145,8 @@ export const endpoints: Endpoint[] = [
     await store.resolveInboxAction(user, { id, ...body });
     return { resolved: true };
   }),
+  endpoint("PATCH", "/matches/{short}", "Correct a match's term; null clears the correction", s.matchPatch,
+    async (user, { short }, patch) => requireSuccess(await store.patchMatch(user, short, patch))),
   endpoint("GET", "/matches/{short}/job-description", "Read a saved job description", s.empty,
     (user, { short }) => store.getJobDescription(user, short)),
   endpoint("PUT", "/matches/{short}/job-description", "Save a job description", z.strictObject({ jdText: z.string().trim().min(1).max(20_000) }),

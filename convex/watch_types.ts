@@ -43,6 +43,12 @@ export type WatchPrefs = {
 /** A term the page may pin: "<Spring|Summer|Fall|Winter> <year>". */
 export const TERM_RE = /^(Spring|Summer|Fall|Winter) 20\d\d$/;
 
+/** "  summer 2027 " -> "Summer 2027"; null when it is not a term. */
+export function canonicalTerm(raw: string): string | null {
+  const m = /^\s*(spring|summer|fall|winter)\s+(20\d\d)\s*$/i.exec(raw);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}` : null;
+}
+
 /** Bounds the page and the mutation agree on. */
 export const LIMITS = {
   leadWeeks: [0, 12],

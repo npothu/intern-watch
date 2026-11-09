@@ -25,7 +25,7 @@ import copy
 import datetime as dt
 from pathlib import Path
 
-from . import ledger, terms
+from . import coverage, ledger, terms
 from .filters import DEFAULT_PRESET
 from .normalize import norm_company
 
@@ -172,4 +172,10 @@ def watch_report(cfg: dict, today: dt.date, now: dt.datetime,
             "timezone": email.get("timezone") or "UTC",
             "to": [a.strip() for a in to_raw.split(",") if a.strip()],
         },
+        # "ats:board" for every data/ats_boards.yaml row, so the web app can
+        # say "this employer isn't watched" when a URL is added by hand.
+        "watched_boards": coverage.watched_board_ids(),
+        # ATSes the ats-boards adapter can poll; a board on any other ATS
+        # can't be fixed by adding a row, only by a new adapter.
+        "supported_ats": coverage.supported_ats(),
     }

@@ -235,7 +235,9 @@ def classify(jobs: list[Job], definition: str, wanted_terms: list[str],
         "company": j.company,
         "title": j.raw_title or j.title,
         "locations": j.locations[:6],
-        "source_terms": j.terms,
+        # A JD-derived term is our own regex guess, and the LLM is here to
+        # second-guess it: don't present it as the source's data.
+        "source_terms": [] if j.terms_from_jd else j.terms,
         **({"description": j.description[:JD_EXCERPT_CHARS]}
            if j.description else {}),
     } for j in jobs]

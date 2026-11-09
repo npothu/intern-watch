@@ -1,0 +1,39 @@
+# Hand-check watchlist: employers whose career sites have no public JSON API
+# the watcher can poll (proprietary ATS, auth-gated search, or terms that
+# disallow automated access). Nothing here is fetched - the weekly
+# "coverage gaps" issue lists these with when you last looked, so they get
+# checked on a schedule instead of from memory.
+#
+# Copy to manual_watchlist.yaml at the root of your DATA repo (next to
+# users/ and state/) and edit. After each pass, bump `last_checked`.
+#
+#   company           shown in the issue; also matched (case-insensitive,
+#                     substring) against hand-added postings to show the
+#                     last manual add for this employer
+#   url               the search page to open, pre-filtered to internships
+#   aliases           extra names/hosts to match manual adds against
+#   check_every_days  how stale `last_checked` may get before it turns red
+#   last_checked      YYYY-MM-DD of your last look
+employers:
+  - company: Apple
+    url: https://jobs.apple.com/en-us/search?team=internships-STDNT-INTRN
+    check_every_days: 7
+    last_checked: ""
+  - company: Google
+    url: https://www.google.com/about/careers/applications/jobs/results/?employment_type=INTERN
+    check_every_days: 7
+    last_checked: ""
+  - company: Meta
+    url: https://www.metacareers.com/jobs?roles[0]=Internship
+    check_every_days: 7
+    last_checked: ""
+  - company: Microsoft
+    url: https://jobs.careers.microsoft.com/global/en/search?et=Internship
+    aliases: [careers.microsoft.com]
+    check_every_days: 7
+    last_checked: ""
+  - company: American Express
+    url: https://www.americanexpress.com/en-us/careers/
+    aliases: [americanexpress]
+    check_every_days: 14
+    last_checked: ""

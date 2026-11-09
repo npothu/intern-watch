@@ -44,7 +44,10 @@ log = logging.getLogger(__name__)
 
 PRUNE_AFTER_DAYS = 120
 HEALTH_ALERT_AFTER = 9  # consecutive failed runs (~18h at 2h cadence) before users hear about it
-CANON_VERSION = 3  # Greenhouse embedded applications and content API URLs
+# v3 Greenhouse embeds/content API; v4 Workday numeric/alpha-prefix reqids,
+# case-insensitive Workday fallback path, SmartRecruiters posting ids; v5
+# Oracle CX, Eightfold, Avature, Jibe and iCIMS posting ids.
+CANON_VERSION = 5
 
 
 def empty_state() -> dict:
@@ -98,6 +101,19 @@ def mark_notified(state: dict, key: str, user: str) -> None:
     e = _entry(state, key)
     if user not in e.setdefault("notified_for", []):
         e["notified_for"].append(user)
+
+
+def mark_delivered(state: dict, key: str, user: str, url: str | None) -> None:
+    """A successful send of `key` to `user`. Also marks the url_index owner of
+    the posting's canonical when that is a different key, so the cross-run
+    url-dupe gate (which checks the OWNER key) keeps suppressing new spellings
+    for this user after their dashboard row is pruned. That case arises when
+    a retry was pending on a key that lost a url_index collision."""
+    mark_notified(state, key, user)
+    canon = canonical_url(url or "") or canonical_url(apply_url_get(state, key) or "")
+    owner = url_index_get(state, canon) if canon else None
+    if owner and owner != key and owner in state["jobs"]:
+        mark_notified(state, owner, user)
 
 
 def was_notified(state: dict, key: str, user: str) -> bool:
@@ -160,11 +176,14 @@ def migrate_url_index(state: dict) -> int:
     token are left alone. Idempotent via _meta['url_index_version'].
 
     Order: group old entries by their new token, resolve each group's
-    collisions (delivered-first: lowest first_seen, then a non-jr: key, then
-    lexicographically smallest key; a pruned key with no job entry sorts
-    last), write the new index, refresh each survivor's canon back-reference
-    and clear stale ones, backfill jr: apply_urls into the index (first-wins),
-    then set the version flag.
+    collisions (delivered-first: a notified key, then one on a matches /
+    outbox list, then lowest first_seen, then a non-jr: key, then the
+    lexicographically smallest key; a pruned unlisted key sorts last), write
+    the new index (the survivor is marked notified for every user owning
+    any collider),
+    refresh each survivor's canon back-reference and clear stale ones,
+    backfill jr: apply_urls into the index (first-wins), then set the version
+    flag.
 
     Returns the number of changed entries: re-keyed + merged-away + backfilled.
     A second call returns 0 (the version flag is already current).
@@ -184,25 +203,65 @@ def migrate_url_index(state: dict) -> int:
     for canon, key in idx.items():
         groups.setdefault(group_for(canon), []).append((canon, key))
 
+    # Keys some user owns: notified, or still on a matches/outbox list.
+    listed_by: dict[str, list[str]] = {}
+    for bucket in ("matches", "outbox"):
+        for user, items in state.get(bucket, {}).items():
+            for item in items:
+                listers = listed_by.setdefault(item.get("key"), [])
+                if user not in listers:
+                    listers.append(user)
+    listed = set(listed_by)
+
     def job_rank(key: str) -> tuple:
-        # Delivered-first wins: lowest first_seen, then prefer a non-jr: key,
+        # Delivered-first wins: a notified key beats a key that is only on a
+        # matches/outbox list, which beats an unowned key, so the url-index
+        # gate keeps suppressing re-spellings of a delivered req after its
+        # match row is pruned. Then lowest first_seen, then a non-jr: key,
         # then the lexicographically smallest key. A key with no job entry
-        # (pruned from jobs) sorts last, after any key that still has one.
+        # (pruned from jobs) sorts after live keys of the same ownership.
         entry = state["jobs"].get(key)
+        owner = 2 if entry and entry.get("notified_for") else int(key in listed)
         if entry is None:
-            return (1, "", "", key)
-        return (0, entry.get("first_seen") or "", int(key.startswith("jr:")),
-                key)
+            return (-owner, 1, "", 0, key)
+        return (-owner, 0, entry.get("first_seen") or "",
+                int(key.startswith("jr:")), key)
 
     new_index: dict[str, str] = {}
     re_keyed = 0
     merged = 0
+    # Rank every group against the untouched notified_for before stamping
+    # anything, so one group's stamping cannot promote a key in another.
+    survivors = {token: min((k for _, k in members), key=job_rank)
+                 for token, members in groups.items()}
     for token, members in groups.items():
-        new_index[token] = min((k for _, k in members), key=job_rank)
+        survivor = survivors[token]
+        new_index[token] = survivor
         for canon, _ in members:
             if canon != token:
                 re_keyed += 1
         merged += len(members) - 1
+        if len(members) < 2 or survivor not in state["jobs"]:
+            continue
+        # The index keeps one key per req, and _drop_url_dupes suppresses
+        # only when THIS user owns it. So the survivor is marked notified for
+        # every user actually notified on a collider, and for a user who only
+        # has a collider on matches/outbox -- unless that user still has a
+        # retry pending on it or on the survivor (marking them notified would
+        # make the pending sweep drop the retry).
+        entry = state["jobs"][survivor]
+        users: list[str] = list(entry.get("notified_for", []))
+        for _, k in members:
+            other = state["jobs"].get(k, {})
+            add = list(other.get("notified_for", []))
+            add += [u for u in listed_by.get(k, [])
+                    if u not in other.get("pending", [])
+                    and u not in entry.get("pending", [])]
+            for u in add:
+                if u not in users:
+                    users.append(u)
+        if users:
+            entry["notified_for"] = users
     state["url_index"] = new_index
 
     # Back-reference refresh: every surviving (token, key) sets the job's

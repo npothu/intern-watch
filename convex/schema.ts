@@ -97,6 +97,14 @@ export default defineSchema({
         closedAt: v.optional(v.number()),
       }),
     ),
+    // Hand corrections (PATCH /matches/<short>), kept beside `item` because
+    // pushMatches replaces `item` wholesale on every watcher run. getMatches
+    // overlays them on the item. Extension point: match_overrides.ts lists
+    // the edits a new field (e.g. `url`) needs.
+    overrides: v.optional(v.object({
+      term: v.optional(v.string()),
+      updatedAt: v.number(),
+    })),
   })
     .index("by_user_short", ["user", "short"])
     .index("by_user", ["user"])
@@ -402,6 +410,14 @@ export default defineSchema({
     // "fetch_failed" (HTTP error, closed posting, network).
     errorCode: v.optional(v.string()),
     dedupKey: v.optional(v.string()),
+    // Coverage-gap facts (convex/ats_detect.ts): the ATS + board the URL
+    // lives on, whether the watcher polls that board (absent = unknown), and
+    // where the user found the link.
+    ats: v.optional(v.string()),
+    atsBoard: v.optional(v.string()),
+    boardWatched: v.optional(v.boolean()),
+    atsSupported: v.optional(v.boolean()),
+    foundVia: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

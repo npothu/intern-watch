@@ -86,6 +86,11 @@ Review these before your first run:
 The example uses Atlanta-specific rules outside summer.
 Adapt those rules and the [company lists](data/) to your search.
 
+Employer boards specific to your own search, such as companies you applied to, go in `data/ats_boards.local.yaml` in your data directory, not in the shared [ats_boards.yaml](data/ats_boards.yaml).
+The file has the same schema, is merged after the shared list, and is gitignored here so it stays out of the public template.
+`python scripts/discover_ats_boards.py --workday` writes the Workday career sites it finds from your applications there.
+In a single-repository setup, remove that line from `.gitignore` if you want the file committed to your private copy.
+
 ### 4. Validate locally
 
 From the repository root:
@@ -188,7 +193,7 @@ Repository years below are the configured names, not a restriction on the terms 
 | Jobright | Public 2026 Software Engineer, Engineer, Product Management, and Data Analysis README mirrors |
 | vanshb03 | `Summer2027-Internships`, including the offseason README |
 | speedyapply | `2026-SWE-College-Jobs` internship tables |
-| Employer boards | Public Greenhouse, Lever, and Ashby APIs listed in [ats_boards.yaml](data/ats_boards.yaml) |
+| Employer boards | Public Greenhouse, Lever, and Ashby APIs and Workday career sites listed in [ats_boards.yaml](data/ats_boards.yaml), plus an optional instance-only `data/ats_boards.local.yaml` |
 
 Adding a feed supported by an existing adapter is a configuration change.
 New formats need an adapter under [`src/adapters/`](src/adapters/).
@@ -197,6 +202,21 @@ The monthly [refresh-boards workflow](.github/workflows/refresh-boards.yml) prop
 Coverage depends on those sources.
 Public mirrors can omit postings, and a short-lived listing can disappear between polls.
 Repeated source failures trigger health warnings in email rather than clearing existing state.
+
+### Closing coverage gaps
+
+A posting you add by hand (web app **Add URL**) is one the watcher missed.
+The add records which ATS and board the link lives on. When the watcher doesn't poll that board, the result says so and offers the `ats_boards.yaml` row to copy.
+Add URL takes several links at once, one per line or pasted straight from a post. The optional **Found via** label (for example `instagram`) lets the report count where the misses come from.
+The watcher only reads public sources. It doesn't scrape social media; you paste the links yourself.
+
+The weekly [gap-report workflow](.github/workflows/gap-report.yml) runs [`scripts/gap_report.py`](scripts/gap_report.py) over your manual adds and keeps one issue titled **coverage gaps** current.
+The issue has three parts: rows ready to paste into `data/ats_boards.yaml`, employers whose ATS has no adapter yet (with miss counts), and a hand-check watchlist.
+To run it locally, use `python scripts/gap_report.py` (add `--format yaml` for only the rows).
+
+Some employers have no public API the watcher can use, either because the ATS is proprietary or the search needs a login. Keep a hand-check list for those.
+Copy [`data/manual_watchlist.example.yaml`](data/manual_watchlist.example.yaml) to `manual_watchlist.yaml` at the root of your data directory.
+The issue shows each employer with its `last_checked` date, turning red when a check is overdue, plus the last time you added one of its postings by hand.
 
 ## Hosted web app (optional)
 
@@ -346,7 +366,7 @@ npm --prefix web run build
 | `python -m src.main --dry-run --backfill` | Preview the current listings on an empty state file |
 | `python -m src.main --explain 'jr:<24-hex>' --user example` | Trace one job's filtering decision without notifying or saving state |
 | `python -m src.main --send-now` | Run the watcher and flush the email outbox immediately |
-| `python -m src.main --seed` | Mark current listings seen without notifying, such as after adding a source |
+| `python -m src.main --seed` | Mark current listings seen without notifying (a newly added source or ats board is already seeded automatically on its first run; `backfill: true` on its row delivers the backlog instead) |
 | `python -m src.webui` | Open the local Python application manager |
 
 The discovery cache expires entries not seen for 120 days.

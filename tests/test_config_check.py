@@ -274,3 +274,24 @@ def test_store_convex_requires_convex_wiring(tmp_path, monkeypatch):
     monkeypatch.setenv("CONVEX_URL", "https://x.convex.cloud")
     monkeypatch.setenv("CONVEX_SECRET", "s")
     assert cc.main([str(root)]) == 0
+
+
+def test_recheck_block_validated(tmp_path):
+    for block, ok in [({"daily_limit": None, "per_run": 700}, True),
+                      ({"daily_limit": 0, "per_run": 0}, True),
+                      ({"daily_limit": 40}, True),
+                      ({"daily_limit": -1}, False),
+                      ({"per_run": None}, False),
+                      ({"per_run": 5000}, False),
+                      ({"daily_limit": "40"}, False),
+                      ({"per_run": True}, False),
+                      ("700", False),
+                      ({"daily_limit": False}, False),
+                      ({"per_runs": 700}, False)]:
+        user = _valid_user()
+        user["recheck"] = block
+        rep = cc.validate_user(user, "u", root=ROOT,
+                               wired_env={"GMAIL_ADDRESS", "GMAIL_APP_PASSWORD",
+                                          "GEMINI_API_KEY"})
+        assert rep.ok is ok, (block, rep.render())
+        assert not any("unknown top-level key" in w for w in rep.warnings)

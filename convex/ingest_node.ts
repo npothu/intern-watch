@@ -4,7 +4,7 @@ import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { canonicalUrl, companyFromUrl, detectAts, extractForAts, inferTerm } from "./ingest_extract";
+import { canonicalUrl, companyFromUrl, detectAts, extractForAts, inferTermDetailed } from "./ingest_extract";
 import { manualArgs } from "./ingest";
 import {
   acquireJdFromUrl, atsApiUrl, llmExtractJd, oracleApiFromPage, pageFetchUrl, type AcquireResult,
@@ -249,13 +249,17 @@ export const runIngest = internalAction({
       const dedupKey = ingest.dedupKey || "";
       const short = ingest.short;
       const today = new Date().toISOString().slice(0, 10);
+      const termGuess = inferTermDetailed({
+        title: job.title, url: ingest.url, jd: job.jobDescription, today,
+      });
       const item = {
         key: dedupKey,
         short,
         company: job.company,
         title: job.title,
         location: job.location,
-        term: inferTerm(job.title, ingest.url),
+        term: termGuess.term,
+        termConfidence: termGuess.confidence,
         added: today,
         tag: "[MANUAL]",
         salary: "",
