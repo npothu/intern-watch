@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeMatchesHeading, isAddedOn, numberWord, utcDayIso } from "./headline";
+import { composeMatchesHeadline, isAddedOn, numberWord, utcDayIso } from "./headline";
 
 describe("numberWord", () => {
   it("spells out zero through twelve", () => {
@@ -41,65 +41,53 @@ describe("isAddedOn", () => {
 
 const base = { shown: 0, priority: 0, newToday: 0, newTodayPriority: 0 };
 
-describe("composeMatchesHeading", () => {
+describe("composeMatchesHeadline", () => {
   it("handles an empty table", () => {
-    expect(composeMatchesHeading(base)).toEqual({
-      label: "Matches · 0 shown",
-      headline: "No matches for these filters.",
-    });
+    expect(composeMatchesHeadline(base)).toBe("No matches for these filters.");
   });
 
   it("leads with new-today rows and their priority share", () => {
     expect(
-      composeMatchesHeading({ shown: 20, priority: 5, newToday: 9, newTodayPriority: 3 })
-    ).toEqual({
-      label: "Matches · 9 new today",
-      headline: "Nine new matches, three from priority companies.",
-    });
+      composeMatchesHeadline({ shown: 20, priority: 5, newToday: 9, newTodayPriority: 3 })
+    ).toBe("Nine new matches, three from priority companies.");
   });
 
   it("falls back to shown rows when nothing is new today", () => {
-    expect(composeMatchesHeading({ ...base, shown: 9, priority: 3 })).toEqual({
-      label: "Matches · 9 shown",
-      headline: "Nine matches, three from priority companies.",
-    });
+    expect(composeMatchesHeadline({ ...base, shown: 9, priority: 3 })).toBe(
+      "Nine matches, three from priority companies."
+    );
   });
 
   it("drops the priority clause when there are none", () => {
-    expect(composeMatchesHeading({ ...base, shown: 4, newToday: 2 }).headline).toBe(
-      "Two new matches."
-    );
-    expect(composeMatchesHeading({ ...base, shown: 1 }).headline).toBe("One match.");
+    expect(composeMatchesHeadline({ ...base, shown: 4, newToday: 2 })).toBe("Two new matches.");
+    expect(composeMatchesHeadline({ ...base, shown: 1 })).toBe("One match.");
   });
 
   it("singular priority and all-priority phrasing", () => {
-    expect(composeMatchesHeading({ ...base, shown: 5, priority: 1 }).headline).toBe(
+    expect(composeMatchesHeadline({ ...base, shown: 5, priority: 1 })).toBe(
       "Five matches, one from a priority company."
     );
-    expect(composeMatchesHeading({ ...base, shown: 3, priority: 3 }).headline).toBe(
+    expect(composeMatchesHeadline({ ...base, shown: 3, priority: 3 })).toBe(
       "Three matches, all from priority companies."
     );
-    expect(composeMatchesHeading({ ...base, shown: 1, priority: 1 }).headline).toBe(
+    expect(composeMatchesHeadline({ ...base, shown: 1, priority: 1 })).toBe(
       "One match, from a priority company."
     );
   });
 
   it("uses digits above twelve", () => {
-    expect(composeMatchesHeading({ ...base, shown: 48, priority: 13 }).headline).toBe(
+    expect(composeMatchesHeadline({ ...base, shown: 48, priority: 13 })).toBe(
       "48 matches, 13 from priority companies."
     );
   });
 
   it("does not call hidden rows new", () => {
     expect(
-      composeMatchesHeading({ shown: 2, priority: 1, newToday: 2, newTodayPriority: 1, hidden: true })
-    ).toEqual({ label: "Matches · 2 hidden", headline: "Two hidden matches." });
+      composeMatchesHeadline({ shown: 2, priority: 1, newToday: 2, newTodayPriority: 1, hidden: true })
+    ).toBe("Two hidden matches.");
   });
 
-  it("labels an empty hidden list as hidden, not as 0 shown", () => {
-    expect(composeMatchesHeading({ ...base, hidden: true })).toEqual({
-      label: "Matches · 0 hidden",
-      headline: "No hidden matches.",
-    });
+  it("an empty hidden list is still the hidden list", () => {
+    expect(composeMatchesHeadline({ ...base, hidden: true })).toBe("No hidden matches.");
   });
 });

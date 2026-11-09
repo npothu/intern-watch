@@ -72,7 +72,7 @@ import {
 } from "@/components/command-palette";
 import { SegmentedPills, type PillOption } from "@/components/filter-pills";
 import { usePublishViewCount } from "@/components/nav/view-counts";
-import { composeMatchesHeading, isAddedOn } from "@/lib/headline";
+import { composeMatchesHeadline, isAddedOn } from "@/lib/headline";
 import { PAGE_WITH_DOCK } from "@/lib/layout";
 import {
   ResumeReportDialog,
@@ -1235,11 +1235,11 @@ export function Triage({
   const emptyFilter = hasAnyRows && visible.length === 0;
   const today = todayLocal();
 
-  /* The page header's label and headline, from the rows the table shows. */
-  const heading = (() => {
-    if (!hasAnyRows) return { label: "Matches · 0 shown", headline: "No matches yet." };
+  /* The page headline, from the rows the table shows. */
+  const headline = (() => {
+    if (!hasAnyRows) return "No matches yet.";
     const fresh = visible.filter((r) => isAddedOn(r.added, todayIso));
-    return composeMatchesHeading({
+    return composeMatchesHeadline({
       shown: visible.length,
       priority: visible.filter((r) => r.priority).length,
       newToday: fresh.length,
@@ -1279,23 +1279,15 @@ export function Triage({
       ref={rootRef}
       className={PAGE_WITH_DOCK}
     >
-      {/* Page header: a mono label and a headline composed from the rows on
-          screen (lib/headline.ts), with the status and term groups on the
-          right. The header's search box opens the palette (jumps, Add URL, a
+      {/* Page header: a headline composed from the rows on screen
+          (lib/headline.ts), with the status and term groups on the right. The header's search box opens the palette (jumps, Add URL, a
           pasted link); the compact input here is the live table filter it
           cannot be, and `/` still focuses it. On phones each group scrolls
           in its own row. */}
       <div className="mb-[18px] flex flex-wrap items-end justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-2">
-          <div className="font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase">
-            {heading.label}
-          </div>
-          <h1
-            className="m-0 text-[28px] leading-[1.05] font-semibold tracking-[-0.03em] text-ink min-[700px]:text-[40px]"
-          >
-            {heading.headline}
-          </h1>
-        </div>
+        <h1 className="m-0 min-w-0 text-[28px] leading-[1.05] font-semibold tracking-[-0.03em] text-ink min-[700px]:text-[40px]">
+          {headline}
+        </h1>
         <div className="flex max-w-full min-w-0 flex-col items-stretch gap-2 min-[700px]:flex-row min-[700px]:flex-wrap min-[700px]:items-center">
           <input
             ref={searchRef}
@@ -1361,8 +1353,10 @@ export function Triage({
             empty={nothingHere}
           />
           <p
+            // Screen readers only: announces the visible count and sort as
+            // filters change; nothing shows on screen.
             aria-live="polite"
-            className="mt-2.5 font-mono text-[11px] tracking-[0.06em] text-ink-2 uppercase"
+            className="sr-only"
           >
             {visible.length} shown · {sortLabel(sort)}
           </p>
