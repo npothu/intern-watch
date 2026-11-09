@@ -418,6 +418,10 @@ def test_bootstrap_keeps_marking_later_runs_and_fixes_seed_day():
     ({"daily_limit": 0}, (None, 50)),                     # 0: no limit
     ({"daily_limit": "lots", "per_run": -1}, (40, 50)),   # malformed: default
     ({"daily_limit": True, "per_run": 3.5}, (40, 50)),
+    ({"daily_limit": False}, (40, 50)),    # yaml no/off/false: not "unlimited"
+    ({"daily_limit": 0.0}, (40, 50)),
+    ({"daily_limit": 5000, "per_run": 5000}, (40, 50)),  # over the bound
+    ({"per_run": 0}, (40, 0)),                            # pause
     ("garbage", (40, 50)),
 ])
 def test_limits_from_config(block, expected):

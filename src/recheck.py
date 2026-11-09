@@ -88,23 +88,29 @@ RECHECK_LIMIT_MAX = 2000   # config_check's sanity bound for both knobs
 def limits(cfg: dict) -> tuple[int | None, int]:
     """(daily delivery limit or None for unlimited, re-runs per run) for a
     user, from the yaml/overlaid config's optional `recheck:` block:
-    `daily_limit` (int; null or 0 = no daily limit) and `per_run` (int).
+    `daily_limit` (int; null or 0 = no daily limit) and `per_run` (int;
+    0 pauses pipeline rechecks, the free re-fingerprint pass and bootstrap
+    marking still run).
     Defaults are the module constants. A malformed value falls back to the
     default (config_check reports it) rather than taking the watcher down."""
     block = cfg.get("recheck")
     block = block if isinstance(block, dict) else {}
 
     def _int(value: object) -> int | None:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        """A real int in 0..RECHECK_LIMIT_MAX (bools and floats are not),
+        else None (malformed)."""
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or not 0 <= value <= RECHECK_LIMIT_MAX):
             return None
         return value
 
     daily: int | None = RECHECK_DAILY_DELIVERIES
     if "daily_limit" in block:
         raw = block["daily_limit"]
-        if raw is None or raw == 0:
+        v = _int(raw)
+        if raw is None or v == 0:       # null or a real 0: no daily limit
             daily = None
-        elif (v := _int(raw)) is not None:
+        elif v is not None:
             daily = v
     per_run = _int(block.get("per_run"))
     return daily, RECHECK_CAP if per_run is None else per_run

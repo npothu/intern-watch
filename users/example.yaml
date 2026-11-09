@@ -121,7 +121,9 @@ location:
 # the values shown are the defaults.
 # recheck:
 #   daily_limit: 40    # recheck deliveries per day; null or 0 = no limit
-#   per_run: 50        # rechecked jobs re-run through the pipeline per run
+#   per_run: 50        # rechecked jobs re-run through the pipeline per run;
+#                      # 0 pauses them (still-rejected jobs are re-hashed
+#                      # for free either way)
 #                      # (the llm.max_jobs_per_run cap still applies, with
 #                      # rechecks queued behind new jobs)
 

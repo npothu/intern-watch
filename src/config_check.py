@@ -225,7 +225,8 @@ def _validate_recheck(user: dict, rep: Report) -> None:
     from .recheck import RECHECK_LIMIT_MAX
     for key in block:
         if key not in ("daily_limit", "per_run"):
-            rep.warn(f"recheck.{key}: unknown key (have: daily_limit, per_run)")
+            rep.error(f"recheck.{key}: unknown key (have: daily_limit, "
+                      "per_run)")
     for key in ("daily_limit", "per_run"):
         if key not in block:
             continue

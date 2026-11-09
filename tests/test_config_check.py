@@ -285,7 +285,9 @@ def test_recheck_block_validated(tmp_path):
                       ({"per_run": 5000}, False),
                       ({"daily_limit": "40"}, False),
                       ({"per_run": True}, False),
-                      ("700", False)]:
+                      ("700", False),
+                      ({"daily_limit": False}, False),
+                      ({"per_runs": 700}, False)]:
         user = _valid_user()
         user["recheck"] = block
         rep = cc.validate_user(user, "u", root=ROOT,

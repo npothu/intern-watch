@@ -61,7 +61,8 @@ an accept is delivered tagged `[RECHECK]` via the digest (never the immediate
 priority email), at most `recheck.per_run` re-runs per run and
 `recheck.daily_limit` deliveries per day (user yaml `recheck:` block,
 defaults `RECHECK_CAP`=50 / `RECHECK_DAILY_DELIVERIES`=40, null/0 = no daily
-limit; validated by config_check), behind new jobs for the LLM
+limit, `per_run: 0` pauses re-runs while the free re-fingerprint pass and
+bootstrap keep going; validated by config_check), behind new jobs for the LLM
 cap. Jobs no longer listed, delivered, or `seeded` are never
 rechecked, and nothing is ever un-delivered. A matching-code change must bump
 its stage's version (`filters.ROLE_MATCH_VERSION`, `ELIM_MATCH_VERSION`) to
