@@ -273,18 +273,14 @@ export function Inbox({
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <p className="text-[12.5px] text-ink-2">
-          Ambiguous recruiter emails land here after each Gmail push - decisive
-          ones update the tracker automatically.
-        </p>
-        {health?.lastError && (
+      {health?.lastError && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-[color-mix(in_srgb,var(--color-amber)_12%,transparent)] px-2.5 py-0.5 text-[11.5px] font-medium text-amber">
             <Mail className="size-3" />
             mail sync failing: {health.lastError.slice(0, 48)}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {remaining.length === 0 ? (
         <div

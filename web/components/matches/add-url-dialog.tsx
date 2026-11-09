@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Loader2, Check, X, Info } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,10 +9,10 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { addJobUrl, getIngestStatusAction, type AddUrlResult } from "@/app/(app)/ingest-actions";
 import { useSyncRefresh } from "@/lib/sync-pulse";
+import { addUrlFieldOnOpen } from "@/lib/url";
 import { boardYamlRow, gapMessage, MAX_BULK_LINKS, parseLinks, type GapInfo } from "@/lib/bulk-links";
 
 const POLL_INTERVAL = 1500;
@@ -162,6 +162,38 @@ function LinkStatus({ row }: { row: LinkRow }) {
   );
 }
 
+/** Fired on `window` to open the Add URL dialog (see openAddUrl). */
+export const OPEN_ADD_URL_EVENT = "intern-baddie:open-add-url";
+
+/**
+ * Opens the one Add URL dialog the app shell mounts, optionally prefilled -
+ * the command palette calls this with a pasted URL, the empty-state button
+ * with none. An event rather than lifted state, same as the palette's own
+ * opener, so a trigger can live on any page without threading props.
+ */
+export function openAddUrl(url?: string) {
+  window.dispatchEvent(new CustomEvent<string | undefined>(OPEN_ADD_URL_EVENT, { detail: url }));
+}
+
+/** A pill button that opens the shell's Add URL dialog. */
+export function AddUrlButton() {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => openAddUrl()}
+      className="h-8 gap-1.5 rounded-full border-line-2 bg-surface px-3 text-[13px] font-medium"
+    >
+      <Plus className="h-3.5 w-3.5" />
+      Add URL
+    </Button>
+  );
+}
+
+/**
+ * The Add URL dialog itself, with no trigger of its own: mounted once in the
+ * app shell (site-header.tsx) and opened through `openAddUrl`.
+ */
 export function AddUrlDialog() {
   const syncRefresh = useSyncRefresh();
   const [open, setOpen] = useState(false);
@@ -170,6 +202,17 @@ export function AddUrlDialog() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [rows, setRows] = useState<LinkRow[] | null>(null);
+
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      setText(addUrlFieldOnOpen((e as CustomEvent<unknown>).detail));
+      setError(null);
+      setRows(null);
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_ADD_URL_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ADD_URL_EVENT, onOpen);
+  }, []);
 
   const links = parseLinks(text);
 
@@ -242,15 +285,15 @@ export function AddUrlDialog() {
     else await submitMany(links);
   }
 
+  // Closing by any route (Cancel, Escape, the overlay) drops the typed text,
+  // so the next open starts from its own prefill or empty.
   const handleOpenChange = (v: boolean) => {
     if (!v && submitting && rows) return; // a batch is running; keep its status visible
     setOpen(v);
     if (!v) {
       setError(null);
-      if (rows) {
-        setRows(null);
-        setText("");
-      }
+      setRows(null);
+      setText("");
     }
   };
 
@@ -258,16 +301,6 @@ export function AddUrlDialog() {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 rounded-full border-line-2 bg-surface px-3 text-[13px] font-medium"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add URL
-        </Button>
-      </DialogTrigger>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle className="text-[16px] font-semibold">Add job URLs</DialogTitle>
@@ -341,7 +374,7 @@ export function AddUrlDialog() {
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setOpen(false)}
+                onClick={() => handleOpenChange(false)}
                 disabled={submitting}
               >
                 Cancel

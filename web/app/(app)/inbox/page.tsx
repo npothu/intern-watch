@@ -1,7 +1,8 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { getInboxActions } from "@/lib/convex";
 import { Inbox } from "@/components/inbox/inbox";
-import { ViewSwitch } from "@/components/nav/view-switch";
+import { PAGE } from "@/lib/layout";
+import { LoadedAt } from "@/components/loaded-at";
 
 export const dynamic = "force-dynamic";
 
@@ -20,13 +21,8 @@ export default async function InboxPage() {
     health: null,
   }));
   return (
-    <div className="mx-auto w-full max-w-[1060px] px-5 pt-5 pb-24">
-      {/* The Inbox component owns everything below this - it has no header
-          row of its own to fold the switch into, so this is a standalone row
-          at the same y-offset the switch sits at on every other surface. */}
-      <div className="mb-3">
-        <ViewSwitch active="inbox" />
-      </div>
+    <div className={PAGE}>
+      <LoadedAt />
       <Inbox initialActions={actions} applications={applications} health={health} />
     </div>
   );

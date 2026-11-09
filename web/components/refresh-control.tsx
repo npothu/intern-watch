@@ -1,18 +1,27 @@
 "use client";
 
-import { useState, useSyncExternalStore, useTransition } from "react";
+import { useEffect, useSyncExternalStore, useTransition } from "react";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSyncRefresh } from "@/lib/sync-pulse";
 
 /**
- * "as of 10:39 AM ⟳ refresh" - the freshness readout and manual reload,
- * carried over from the Python webui (src/webui/static/index.html).
+ * "AS OF 10:39 AM ⟳" - the freshness readout and manual reload, carried over
+ * from the Python webui (src/webui/static/index.html). It lives in the app
+ * header; `useFreshness` reads it once so the desktop readout and the phone's
+ * user-chip menu agree.
  *
- * The page is a server component that reads Convex at request time, so a
- * refresh is `router.refresh()` inside a transition: the icon spins and the
- * button is disabled until the server component has re-rendered. It goes
- * through `useSyncRefresh`, which also pulses the header's sync sweep.
+ * The time is the data's, not the clock's: each data page renders
+ * <LoadedAt /> (components/loaded-at.tsx), a server-stamped `at` that
+ * `DataStamp` hands to the store below. So the readout moves only when a
+ * server payload lands - a fresh navigation, or a refresh once it resolves -
+ * and Back/Forward, which Next serves from its router cache, bring that
+ * page's original stamp back. A refresh that fails delivers no payload and
+ * the previous stamp stays.
+ *
+ * Refresh is `router.refresh()` inside a transition (via `useSyncRefresh`,
+ * which also pulses the header's sync sweep): the icon spins until the server
+ * components have re-rendered.
  *
  * The watcher cron runs every two hours, so data that outlives one cycle is
  * genuinely stale - past that the timestamp goes amber and carries a tooltip,
@@ -22,11 +31,51 @@ import { useSyncRefresh } from "@/lib/sync-pulse";
 const STALE_MS = 2 * 3600e3; // one watcher cron cycle
 const TICK_MS = 60e3;
 
+let stamp: number | null = null;
+const stampListeners = new Set<() => void>();
+
+function subscribeStamp(onChange: () => void): () => void {
+  stampListeners.add(onChange);
+  return () => {
+    stampListeners.delete(onChange);
+  };
+}
+
+function setStamp(next: number | null) {
+  if (stamp === next) return;
+  stamp = next;
+  stampListeners.forEach((cb) => cb());
+}
+
 /**
- * Minute-resolution clock. `null` on the server, which is also how this
- * component knows not to render a time during SSR: the server's clock and the
- * visitor's are different values for the same text node, and React reports
- * that as a hydration mismatch.
+ * Publishes the mounted page's server-read time to the header readout, and
+ * withdraws it on unmount, so a page without a stamp shows no time rather than
+ * the previous page's. (React runs the outgoing page's cleanup before the
+ * incoming page's effect in the same commit, and the equality guard keeps a
+ * late cleanup from erasing a newer stamp.)
+ */
+export function DataStamp({ at }: { at: number }) {
+  useEffect(() => {
+    setStamp(at);
+    return () => {
+      if (stamp === at) setStamp(null);
+    };
+  }, [at]);
+  return null;
+}
+
+/** The current data stamp; null on the server and until a page publishes. */
+function useDataStamp(): number | null {
+  return useSyncExternalStore(
+    subscribeStamp,
+    () => stamp,
+    () => null
+  );
+}
+
+/**
+ * Minute-resolution clock for the staleness check. `null` on the server, so
+ * nothing time-dependent renders during SSR and hydration agrees.
  */
 function useMinute(): number | null {
   return useSyncExternalStore(
@@ -46,46 +95,67 @@ function formatTime(ms: number): string {
   });
 }
 
-export function RefreshControl({ className }: { className?: string }) {
+export type Freshness = {
+  /** "as of 10:39 AM"; empty until a page has published its stamp. */
+  label: string;
+  stale: boolean;
+  pending: boolean;
+  refresh: () => void;
+};
+
+export function useFreshness(): Freshness {
   const syncRefresh = useSyncRefresh();
   const [pending, startTransition] = useTransition();
-  // When this page's data was last loaded on the client: mount, then every
-  // refresh. Stamped as the refresh starts rather than as it lands - the
-  // router gives no completion callback, and the gap is a few hundred ms.
-  const [loadedAt, setLoadedAt] = useState(() => Date.now());
+  const at = useDataStamp();
   const minute = useMinute();
-  const mounted = minute !== null;
-  // Staleness is measured off the minute clock rather than a fresh Date.now(),
-  // so the render stays pure and re-evaluates when the clock ticks.
-  const stale = mounted && minute * TICK_MS - loadedAt > STALE_MS;
+  const stale = at !== null && minute !== null && minute * TICK_MS - at > STALE_MS;
 
-  function refresh() {
-    setLoadedAt(Date.now());
-    startTransition(() => syncRefresh());
-  }
+  return {
+    label: at !== null && minute !== null ? `as of ${formatTime(at)}` : "",
+    stale,
+    pending,
+    refresh: () => startTransition(() => syncRefresh()),
+  };
+}
 
+/**
+ * The header's mono readout plus its refresh icon button. The text hides
+ * below 1200px to keep the header on one row; the button's tooltip and name
+ * still carry the time.
+ */
+export function FreshnessReadout({
+  freshness,
+  className,
+}: {
+  freshness: Freshness;
+  className?: string;
+}) {
+  const { label, stale, pending, refresh } = freshness;
+  const staleNote = stale ? " - older than one cron cycle" : "";
   return (
-    <div className={cn("flex items-center gap-2 text-[12.5px]", className)}>
+    <span className={cn("inline-flex items-center gap-1", className)}>
       <span
-        // Rendered empty until mount so SSR and hydration agree on the text.
         title={stale ? "data is older than one cron cycle - hit refresh" : undefined}
         className={cn(
-          "tabular-nums",
+          "hidden font-mono text-[11px] tracking-[0.06em] whitespace-nowrap uppercase tabular-nums min-[1200px]:inline",
           stale ? "font-medium text-amber" : "text-ink-2"
         )}
       >
-        {mounted ? `as of ${formatTime(loadedAt)}` : ""}
+        {label}
       </span>
       <button
         type="button"
         onClick={refresh}
         disabled={pending}
-        aria-label="Refresh data"
-        className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line-2 bg-surface px-2.5 py-1 text-ink-2 transition-colors hover:border-ink-2 hover:text-ink disabled:cursor-default disabled:opacity-70"
+        aria-label={label ? `Refresh data (${label}${staleNote})` : "Refresh data"}
+        title={label ? `Refresh data (${label}${staleNote})` : "Refresh data"}
+        className={cn(
+          "inline-flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-chip hover:text-ink disabled:cursor-default disabled:opacity-70",
+          stale ? "text-amber" : "text-ink-2"
+        )}
       >
         <RefreshCw className={cn("size-3.5", pending && "animate-spin")} />
-        refresh
       </button>
-    </div>
+    </span>
   );
 }

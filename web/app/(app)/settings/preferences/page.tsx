@@ -1,6 +1,7 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { getHealth, getWatchSettings } from "@/lib/convex";
-import { ViewSwitch } from "@/components/nav/view-switch";
+import { FORM_COLUMN } from "@/lib/layout";
+import { LoadedAt } from "@/components/loaded-at";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { Preferences } from "@/components/settings/preferences";
 
@@ -35,10 +36,10 @@ export default async function PreferencesPage() {
   const todayIso = new Date(nowMs).toISOString().slice(0, 10);
 
   return (
-    <div className="mx-auto w-full max-w-[640px] px-5 pb-24 pt-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+    <div className={FORM_COLUMN}>
+      <LoadedAt />
+      <div className="mb-4">
         <h1 className="text-[15px] font-semibold text-ink">Settings</h1>
-        <ViewSwitch active={null} />
       </div>
       <SettingsTabs active="preferences" />
       {settings.ok ? (

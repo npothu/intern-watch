@@ -4,7 +4,7 @@ import { useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Archive, Plus, Search, Users } from "lucide-react";
 import { toast } from "sonner";
-import { ViewSwitch } from "@/components/nav/view-switch";
+import { PAGE } from "@/lib/layout";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/command-palette";
 import { VIEWS } from "@/lib/view";
@@ -220,11 +220,10 @@ export function Referrals({
 
   return (
     <div
-      className="mx-auto w-full max-w-[1060px] px-5 pt-5 pb-24"
+      className={PAGE}
       aria-busy={pending}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <ViewSwitch active="referrals" count={activeContacts.length} />
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button onClick={add} disabled={pending} className="gap-1.5">
           <Plus className="size-4" />
           {view === "contacts" ? "Add contact" : "Log referral"}
@@ -519,7 +518,7 @@ export function Referrals({
         }}
         actions={VIEWS.map((v) => ({
           id: v.id,
-          label: "Go to " + v.label,
+          label: v.paletteLabel,
           icon: <v.icon className="size-4" />,
           run: () => router.push(v.href),
         }))}

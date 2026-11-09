@@ -5,7 +5,8 @@ import {
   getMailSyncStatus,
   getMailAccount,
 } from "@/lib/convex";
-import { ViewSwitch } from "@/components/nav/view-switch";
+import { FORM_COLUMN } from "@/lib/layout";
+import { LoadedAt } from "@/components/loaded-at";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import { ConnectionsList } from "@/components/settings/connections-list";
 
@@ -56,13 +57,10 @@ export default async function ConnectionsPage() {
     : rows;
 
   return (
-    <div className="mx-auto w-full max-w-[640px] px-5 pb-24 pt-5">
-      {/* Same header treatment as the other Settings pages: title left, the
-          surface switch right (Settings has no cell, so it renders
-          all-inactive purely as the way back to Matches, Tracker or Inbox). */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+    <div className={FORM_COLUMN}>
+      <LoadedAt />
+      <div className="mb-4">
         <h1 className="text-[15px] font-semibold text-ink">Settings</h1>
-        <ViewSwitch active={null} />
       </div>
       <SettingsTabs active="connections" />
 

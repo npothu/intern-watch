@@ -2,31 +2,29 @@ import { SettingsSection, SettingsRow } from "@/components/settings/settings-sec
 import { ThemeControl } from "@/components/settings/theme-control";
 import { MotionControl } from "@/components/settings/motion-control";
 import { PaletteControl } from "@/components/settings/palette-control";
-import { ViewSwitch } from "@/components/nav/view-switch";
+import { FORM_COLUMN } from "@/lib/layout";
+import { LoadedAt } from "@/components/loaded-at";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 
 export const metadata = { title: "Settings - intern-baddie" };
 
 /**
- * Settings, reachable from the user-profile dropdown rather than the top nav
- * - preferences you set once, not a surface you visit often.
+ * Settings, reachable from the header's Settings pill (and the phone's avatar
+ * menu) - preferences you set once, not a surface you visit often.
  *
- * Narrower than the app's usual max-w-[1060px]: that width suits the wide
- * triage tables elsewhere, but a column of label/control rows just reads as
- * a mostly-empty page at that width. 640px keeps rows dense and readable
+ * It sits in the app's shared 1360px column (so its left edge matches every
+ * other tab) but caps its content at 640px (FORM_COLUMN, shared by the three
+ * Settings pages): a column of label/control rows just reads as a
+ * mostly-empty page at full width. 640px keeps rows dense and readable
  * without forcing the label and control onto separate lines on a normal
  * window.
  */
 export default function SettingsPage() {
   return (
-    <div className="mx-auto w-full max-w-[640px] px-5 pb-24 pt-5">
-      {/* Same treatment as Resume: Settings has no cell of its own, so the
-          switch renders all-inactive purely as the way back to Matches,
-          Tracker or Inbox. The two cell-less surfaces have to agree, or the
-          way out of one is not the way out of the other. */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+    <div className={FORM_COLUMN}>
+      <LoadedAt />
+      <div className="mb-4">
         <h1 className="text-[15px] font-semibold text-ink">Settings</h1>
-        <ViewSwitch active={null} />
       </div>
       <SettingsTabs active="appearance" />
       <SettingsSection title="Appearance">

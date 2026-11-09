@@ -1,16 +1,9 @@
 import { resolveTrackerUser } from "@/lib/user";
-import {
-  getTrackerUserData,
-  getWatchSettings,
-  type MatchItem,
-  type ResumeMeta,
-} from "@/lib/convex";
-import { shortKey } from "@/lib/shortkey";
-import { normCompany } from "@/lib/company";
-import { resolvePreferences } from "@/lib/preferences";
-import { dayFromIso } from "@/lib/terms";
+import { getResumeUrls, type ResumeMeta } from "@/lib/convex";
+import { loadCore, toTriageRows } from "@/lib/app-data";
 import { buildTrackerRows } from "@/components/tracker/build-rows";
 import { AppViews } from "@/components/app-views";
+import { LoadedAt } from "@/components/loaded-at";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
 
 /**
@@ -18,9 +11,11 @@ import type { TrackerRow } from "@/components/tracker/tracker-lib";
  * says which one is showing (see lib/view.ts). One server render loads
  * everything both need, so switching views is client-side and instant.
  *
- * The two datasets cost nothing extra to load together: `getTrackerUserData`
- * already fetches matches, ticks, ledger and resume URLs in one parallel batch,
- * and that is a superset of what each surface used to fetch on its own.
+ * The two datasets cost nothing extra to load together: matches, ticks,
+ * ledger and resume URLs come in one parallel batch, a superset of what each
+ * surface used to fetch on its own. The first four go through lib/app-data's
+ * per-request cache, which the layout's header counts read too, so `/` still
+ * queries each of them once.
  *
  * The app layout already renders the "not provisioned" screen when
  * resolveTrackerUser() is null, so a null here shouldn't happen - guard anyway
@@ -54,67 +49,27 @@ export type TriageRow = {
   closed?: boolean;
 };
 
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
-
 export default async function AppPage() {
   const user = await resolveTrackerUser();
   if (!user) return null;
 
   // Preferences ride along so the surface reflects them on this render:
   // priority employers pin their rows now, and terms switched off stay out
-  // of the way. A failed read degrades to "no preferences known".
-  const [data, settings] = await Promise.all([
-    getTrackerUserData(user),
-    getWatchSettings(user).catch(() => null),
-  ]);
-  const todayIso = new Date().toISOString().slice(0, 10); // request time; force-dynamic
-  const prefs = resolvePreferences(settings, dayFromIso(todayIso));
+  // of the way. A failed preferences read degrades to "no preferences known".
+  const [core, resumes] = await Promise.all([loadCore(user), getResumeUrls(user)]);
 
-  const ticksByShort = new Map(data.ticks.map((t) => [t.short, t]));
-
-  const matches: TriageRow[] = data.matches.map((m: MatchItem) => {
-    const short =
-      typeof m.short === "string" && m.short ? m.short : shortKey(m.key);
-    const tick = ticksByShort.get(short);
-    const applied = tick?.applied ?? m.applied ?? false;
-    return {
-      key: str(m.key),
-      short,
-      company: str(m.company),
-      title: str(m.title),
-      location: str(m.location),
-      term: str(m.term),
-      added: str(m.added),
-      tag: str(m.tag),
-      // Stamped by the watcher at match time, or on the current list now.
-      priority: m.priority === true || prefs.priorityNames.has(normCompany(str(m.company))),
-      salary: str(m.salary),
-      url: str(m.url),
-      // Only an actually-resolved external URL counts as "built"; a
-      // repo-relative path or storage id from the source item is not a
-      // linkable resume and is deliberately dropped.
-      resumeUrl: data.resumes[short]?.url ?? null,
-      resumeMeta: data.resumes[short] ?? null,
-      applied,
-      saved: tick?.saved ?? m.saved ?? false,
-      dismissed: tick?.dismissed ?? m.dismissed ?? false,
-      hasJobDescription: m.hasJobDescription ?? false,
-      // An applied row is the user's call, not a dead link to warn about.
-      closed: m.closed === true && !applied,
-    };
-  });
-
-  const applications: TrackerRow[] = buildTrackerRows(
-    data.ledger,
-    data.matches,
-    data.resumes
-  );
+  const matches: TriageRow[] = toTriageRows(core, resumes);
+  const applications: TrackerRow[] = buildTrackerRows(core.ledger, core.matches, resumes);
 
   return (
-    <AppViews
-      matches={matches}
-      applications={applications}
-      wantedTerms={prefs.wantedTerms}
-    />
+    <>
+      <LoadedAt />
+      <AppViews
+        matches={matches}
+        applications={applications}
+        wantedTerms={core.prefs.wantedTerms}
+        todayIso={core.todayIso}
+      />
+    </>
   );
 }

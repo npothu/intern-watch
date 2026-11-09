@@ -82,3 +82,71 @@ export function FilterPills({
     </div>
   );
 }
+
+/**
+ * The Matches page's segmented variant: one bordered rounded container
+ * holding 30px pills with a 2px gap, the active pill filled - `tone="ink"`
+ * for the status group, `tone="accent"` for the term group - and counts in
+ * mono at 0.8 opacity. The container is desktop only: below 700px it
+ * dissolves into a horizontally scrolling row (no visible bar) of separate
+ * bordered pills, as in MobileCards.dc.html.
+ */
+export function SegmentedPills({
+  options,
+  value,
+  onChange,
+  label,
+  tone,
+  className,
+}: {
+  options: PillOption[];
+  value: string;
+  onChange: (key: string) => void;
+  label: string;
+  tone: "ink" | "accent";
+  className?: string;
+}) {
+  if (options.length <= 1) return null;
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={cn(
+        "no-scrollbar flex max-w-full items-center gap-1.5 overflow-x-auto",
+        "min-[700px]:gap-0.5 min-[700px]:rounded-full min-[700px]:border min-[700px]:border-line min-[700px]:bg-surface min-[700px]:p-[3px]",
+        className
+      )}
+    >
+      {options.map((o) => {
+        const active = o.key === value;
+        const empty = o.count === 0 && !active;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(o.key)}
+            className={cn(
+              "inline-flex min-h-[30px] shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-[11px] py-1.5 text-[13px] leading-none whitespace-nowrap transition-colors min-[700px]:border-0 min-[700px]:px-3",
+              "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+              active
+                ? tone === "ink"
+                  ? "border-ink bg-ink font-medium text-bg"
+                  : "border-accent bg-accent font-medium text-accent-ink"
+                : cn(
+                    "border-line bg-surface hover:bg-chip min-[700px]:bg-transparent min-[700px]:hover:bg-chip",
+                    empty ? "text-ink-2/60 hover:text-ink-2" : "text-ink"
+                  )
+            )}
+          >
+            {o.icon}
+            {o.label}
+            {o.count !== undefined && (
+              <span className="font-mono text-[11px] tabular-nums opacity-80">{o.count}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
