@@ -346,7 +346,7 @@ npm --prefix web run build
 | `python -m src.main --dry-run --backfill` | Preview the current listings on an empty state file |
 | `python -m src.main --explain 'jr:<24-hex>' --user example` | Trace one job's filtering decision without notifying or saving state |
 | `python -m src.main --send-now` | Run the watcher and flush the email outbox immediately |
-| `python -m src.main --seed` | Mark current listings seen without notifying, such as after adding a source |
+| `python -m src.main --seed` | Mark current listings seen without notifying (a newly added source or ats board is already seeded automatically on its first run; `backfill: true` on its row delivers the backlog instead) |
 | `python -m src.webui` | Open the local Python application manager |
 
 The discovery cache expires entries not seen for 120 days.

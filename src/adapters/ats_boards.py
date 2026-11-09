@@ -59,6 +59,21 @@ def _iso_date(value: str | None) -> dt.date | None:
         return None
 
 
+def board_id(board: dict) -> str:
+    """Identity of an ats_boards.yaml row for first-sight seeding:
+    "<ats>:<slug>", slug lower-cased so a case-only edit is not a new board.
+    parse() stamps it on every Job (so every lister routed through parse gets
+    it), and fetch() records each board that answered in fetched_boards. An
+    adapter outside this class that serves several boards must do both:
+    `job.board = board_id(row)` and
+    `self.fetched_boards[board_id(row)] = bool(row.get("backfill"))`.
+    A board's rows must be its COMPLETE listing: a lister whose page fails
+    or hits its page cap short of the end must raise (no rows for that board
+    this run), never return what it has. A partial first answer would be
+    seeded as the whole backlog and its tail delivered later as news."""
+    return f"{board['ats']}:{str(board['slug']).lower()}"
+
+
 class AtsBoardsAdapter(Adapter):
     def fetch(self, client: httpx.Client, today: dt.date) -> list[Job]:
         boards_path = ROOT / (self.cfg.boards_file or "data/ats_boards.yaml")
@@ -77,6 +92,7 @@ class AtsBoardsAdapter(Adapter):
                 log.warning("ats board %s/%s failed: %s",
                             board["ats"], board["slug"], exc)
                 continue
+            self.fetched_boards[board_id(board)] = bool(board.get("backfill"))
             jobs.extend(parsed)
         log.info("source %s: %d intern postings from %d boards (%d failed)",
                  self.cfg.name, len(jobs), len(boards), failures)
@@ -145,5 +161,6 @@ class AtsBoardsAdapter(Adapter):
                 description=description[:JD_MAX_CHARS] if description else None,
                 jd_url=jd_url,
                 source=self.cfg.name,
+                board=board_id({"ats": ats, "slug": slug}),
             ))
         return jobs

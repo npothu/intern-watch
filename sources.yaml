@@ -3,6 +3,10 @@
 #
 # default_terms: per-file hint applied (confidence "inferred") when a row's
 # title carries no term signal of its own.
+#
+# A source's (or ats board's) first successful fetch seeds its current
+# listings instead of delivering them (src/seeding.py); `backfill: true` on
+# the row delivers that backlog instead.
 
 sources:
   - name: simplify

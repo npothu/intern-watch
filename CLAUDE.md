@@ -57,7 +57,22 @@ jobright-ai GitHub README mirrors (SWE / Engineer / PM / **Data-Analysis** —
 Data Scientist roles appear ONLY in Data-Analysis), SimplifyJobs, vanshb03,
 speedyapply, and `ats-boards` (direct Greenhouse/Lever/Ashby JSON APIs for
 ~90 boards in `data/ats_boards.yaml`, refreshed monthly by
-`refresh-boards.yml`). Known coverage limits:
+`refresh-boards.yml`).
+
+**First sight seeds, it does not deliver** (`src/seeding.py`). The first time
+a source (by `name`) or an ats board (by `<ats>:<slug>`, recorded in
+`_meta.known_sources` / `known_boards`) answers, the jobs it lists that are
+new this run are marked seen, tagged `seeded: <date>`, and never evaluated --
+unless the same job also arrived from an already-known source/board. Put
+`backfill: true` on a sources.yaml or ats_boards.yaml row to deliver its
+backlog instead. Renaming a source or changing a board's slug therefore
+seeds its current listings once. A multi-board adapter must stamp
+`Job.board` and fill `Adapter.fetched_boards` (ats-boards `parse()` and its
+fetch loop do both for every lister). A board's rows must be its complete
+listing: a lister whose page fails or is capped short must raise for that
+board, never return a partial list (it would be seeded as the whole backlog
+and the tail delivered later). `--seed` and the first run tag `seeded` too.
+Known coverage limits:
 - jobright's GitHub mirrors are a SUBSET of jobright.ai; some postings never
   appear in any repo. The full feed is auth-only and jobright's ToS
   disallows crawling — the template never crawls it: it reads the public

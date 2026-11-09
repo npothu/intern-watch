@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from . import content_dedup, dashboard, ledger
+from . import content_dedup, dashboard, ledger, seeding
 from . import prefs as prefs_mod
 from . import state as st
 from .adapters import make_adapter
@@ -58,7 +58,10 @@ def load_sources(path: Path) -> list[SourceConfig]:
     return [SourceConfig(**s) for s in raw["sources"]]
 
 
-def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date) -> list[Job]:
+def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date,
+              report: seeding.FetchReport | None = None) -> list[Job]:
+    """Fetch every source. `report`, when given, collects the sources and
+    boards that answered (for first-sight seeding)."""
     from .adapters.base import GitHubTokenAuth
     headers = {"User-Agent": "intern-baddie (job alert bot)"}
     token = os.environ.get("GITHUB_TOKEN")
@@ -68,7 +71,8 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date) -> list[
                       auth=GitHubTokenAuth(token) if token else None) as client:
         for cfg in sources:
             try:
-                jobs = make_adapter(cfg).fetch(client, today)
+                adapter = make_adapter(cfg)
+                jobs = adapter.fetch(client, today)
             except Exception as exc:  # noqa: BLE001 - one source never kills the run
                 fails = st.record_source_failure(state, cfg.name, str(exc), today)
                 log.warning("source %s failed (%s) -- skipping, run continues "
@@ -85,6 +89,13 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date) -> list[
             st.record_source_success(state, cfg.name)
             prev_counts[cfg.name] = len(jobs)
             all_jobs.extend(jobs)
+            if report is not None:
+                if jobs:
+                    report.sources[cfg.name] = cfg.backfill
+                report.boards.update(getattr(adapter, "fetched_boards", {}))
+                for job in jobs:
+                    if job.board:
+                        report.boards.setdefault(job.board, False)
     return all_jobs
 
 
@@ -1207,7 +1218,8 @@ def main(argv: list[str] | None = None) -> int:
     first_run = not state["jobs"]
 
     sources = load_sources(ROOT / "sources.yaml")
-    all_jobs = fetch_all(sources, state, today)
+    report = seeding.FetchReport()
+    all_jobs = fetch_all(sources, state, today, report)
     if not all_jobs:
         log.error("every source failed or was empty -- aborting without "
                   "touching state")
@@ -1215,9 +1227,21 @@ def main(argv: list[str] | None = None) -> int:
     merged = dedupe(all_jobs)
     log.info("fetched %d rows -> %d unique jobs", len(all_jobs), len(merged))
 
+    # First sight of a source/board: its backlog is marked seen, not
+    # evaluated (src/seeding.py). Computed before touch -- it reads last
+    # run's state. A first run / --seed seeds everything anyway, and
+    # --backfill on a first run evaluates everything, so neither applies it.
+    to_seed = ({} if first_run or args.seed
+               else seeding.first_sight(state, all_jobs, report))
+    seeding.record_known(state, report)
+
     new_jobs = [job for job in merged
                 if st.touch(state, job.dedup_key, job.sources, today)]
-    log.info("%d new job(s) since last run", len(new_jobs))
+    seeding.mark_seeded(state, to_seed, today)
+    new_jobs = [job for job in new_jobs if job.dedup_key not in to_seed]
+    log.info("%d new job(s) since last run%s", len(new_jobs),
+             f" ({len(to_seed)} more seeded on first sight)" if to_seed
+             else "")
 
     # Register every job whose url is already an employer link (all ATS/Simplify
     # rows, plus vanshb03 jr:-keyed rows). Free -- no auth -- and first-wins, so
@@ -1231,6 +1255,10 @@ def main(argv: list[str] | None = None) -> int:
         log.info("%s: seeding state with %d jobs, no notifications%s",
                  "--seed" if args.seed else "first run", len(merged),
                  "" if args.seed else " (use --backfill to notify instead)")
+        # Tagged like a first-sight seed, so nothing later (a recheck of
+        # rejections) mistakes them for evaluated jobs.
+        for job in new_jobs:
+            state["jobs"][job.dedup_key]["seeded"] = today.isoformat()
         if not args.dry_run:
             st.save_state(state, state_path)
         return 0

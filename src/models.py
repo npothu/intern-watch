@@ -40,6 +40,9 @@ class Job(BaseModel):
     jd_url: str | None = None         # per-job content API (Greenhouse), fetched
                                       # lazily in main.enrich_jds for new jobs only
     source: str                       # e.g. "jobright-swe"
+    board: str | None = None          # "<ats>:<slug>" for rows from a multi-board
+                                      # source (ats-boards); first-sight seeding
+                                      # keys on it (src/seeding.py)
     sources: list[str] = Field(default_factory=list)  # union after dedup merge
     raw_title: str = ""               # untouched, for LLM context
 
@@ -57,6 +60,8 @@ class SourceConfig(BaseModel):
     branch: str = ""
     files: list[str] = Field(default_factory=list)
     boards_file: str | None = None    # ats_boards adapter only
+    backfill: bool = False            # first sight: deliver the backlog
+                                      # instead of seeding it (src/seeding.py)
     default_terms: dict[str, list[str]] = Field(default_factory=dict)
 
     def raw_url(self, path: str) -> str:
