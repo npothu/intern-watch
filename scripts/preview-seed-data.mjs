@@ -155,5 +155,14 @@ export function buildPreviewSeed(sha1Hex, { matches = 36, today = "2026-11-01", 
     ...items.filter((_, i) => i % 9 === 3).map((it) => ({ short: it.short, field: "saved", value: true })),
     ...items.filter((_, i) => i % 11 === 5).map((it) => ({ short: it.short, field: "dismissed", value: true })),
   ];
-  return { items, applications, ticks, watchRuns: buildWatchRuns(now) };
+  // A watcher report naming a few fictional watched boards, so the add-URL
+  // dialog's "board isn't watched" hint has something to compare against:
+  // https://job-boards.greenhouse.io/previewwatched/jobs/1 reads as watched,
+  // any other board as not.
+  const watchReport = {
+    reported_at: `${today}T12:00:00+00:00`,
+    watched_boards: ["ashby:previewwatched", "greenhouse:previewwatched", "lever:previewwatched"],
+    supported_ats: ["ashby", "greenhouse", "lever", "smartrecruiters"],
+  };
+  return { items, applications, ticks, watchRuns: buildWatchRuns(now), watchReport };
 }

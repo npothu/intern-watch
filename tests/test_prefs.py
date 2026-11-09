@@ -97,6 +97,8 @@ def test_watch_report_shape():
                                "remote_counts": True}
     assert rep["email"] == {"send_at_local": [8],
                             "timezone": "America/New_York", "to": ["a@x.com"]}
+    assert rep["watched_boards"] and all(":" in b for b in rep["watched_boards"])
+    assert "greenhouse" in rep["supported_ats"]
 
 
 def test_watch_report_legacy_terms():

@@ -4,6 +4,7 @@ import { resolveTrackerUser } from "@/lib/user";
 import {
   requestIngest as convexRequestIngest,
   getIngestStatus as convexGetIngestStatus,
+  type IngestGap,
   type IngestRow,
 } from "@/lib/convex";
 import { withBackedShort } from "@/lib/ingest-short";
@@ -11,7 +12,7 @@ import { withBackedShort } from "@/lib/ingest-short";
 // `short` only once a match backs it (lib/ingest-short.ts): an ingest that is
 // still fetching, or failed, has no match to point at.
 export type AddUrlResult =
-  | { ok: true; ingestId: string; short?: string; status: string }
+  | ({ ok: true; ingestId: string; short?: string; status: string } & IngestGap)
   | { ok: false; error: string };
 
 function validateUrlInput(raw: string): string | null {
@@ -38,17 +39,23 @@ function validateUrlInput(raw: string): string | null {
   return null;
 }
 
-export async function addJobUrl(url: string): Promise<AddUrlResult> {
+export async function addJobUrl(url: string, foundVia?: string): Promise<AddUrlResult> {
   const err = validateUrlInput(url);
   if (err) return { ok: false, error: err };
   const user = await resolveTrackerUser();
   if (!user) return { ok: false, error: "This account isn't provisioned — no tracker user to write to." };
   try {
-    const res = await convexRequestIngest(user, url.trim());
+    const via = foundVia?.trim(); // normalized server-side
+    const res = await convexRequestIngest(user, url.trim(), via ? { foundVia: via } : {});
     if (!res || typeof res.ingestId !== "string") {
       return { ok: false, error: "Couldn't start ingest — unexpected response." };
     }
-    return { ok: true, ...withBackedShort({ ingestId: res.ingestId, short: res.short, status: res.status }) };
+    // The gap facts ride on the fetching response, so the dialog can say
+    // "isn't watched" before polling - even if the fetch later fails.
+    const gap: IngestGap = res.status === "fetching"
+      ? { ats: res.ats, atsBoard: res.atsBoard, boardWatched: res.boardWatched, atsSupported: res.atsSupported }
+      : {};
+    return { ok: true, ...withBackedShort({ ingestId: res.ingestId, short: res.short, status: res.status }), ...gap };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     // Surface rate-limit and validation errors directly
