@@ -14,6 +14,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -51,6 +52,83 @@ _LISTERS: dict[str, Callable[[httpx.Client, dict], list[str]]] = {
     "ibm": ibm.fetch_pages,
     "jibe": jibe.fetch_pages,
 }
+
+LISTER_WORKERS = 4   # hosts polled at once; each host stays sequential
+
+
+def lister_host(board: dict) -> str:
+    """The host a lister board's requests go to: the unit of concurrency.
+    Boards sharing a host run back to back in one worker, so no host ever
+    sees two requests at once."""
+    ats, slug = board["ats"], str(board["slug"])
+    if ats in ("oracle", "eightfold"):
+        return (oracle.split_slug(slug) if ats == "oracle"
+                else eightfold.split_slug(slug))[0].lower()
+    if ats == "jibe":
+        return slug.lower()
+    if ats == "smartrecruiters":
+        return "api.smartrecruiters.com"
+    if ats == "ibm":
+        return "www-api.ibm.com"
+    raise ValueError(f"not a paged lister: {ats}")
+
+
+def _host_gap(host: str) -> float:
+    """Pause between two boards on one host: its crawl-delay, else the
+    usual request spacing (the same gap a board's own pages keep)."""
+    return max(jibe.CRAWL_DELAY.get(host, 0.0), listing_http.REQUEST_DELAY)
+
+
+def prefetch_listers(client: httpx.Client, boards: list[dict],
+                     workers: int = LISTER_WORKERS,
+                     ) -> dict[int, tuple[list[str] | Exception, float]]:
+    """Fetch every paged-lister board, LISTER_WORKERS hosts at a time.
+
+    Returns {board index: (raw pages, or the exception it raised; seconds)}.
+    Each lister's own contract is untouched -- page_through, the distinct-id
+    checks, Eightfold's shifted pass, Oracle's slack, the 429 backoff and the
+    per-board time budget all run inside the lister as before. Only the
+    scheduling changes: boards are grouped by host, a group runs
+    sequentially in one worker (pausing _host_gap between boards), and
+    groups run in parallel. A failure is returned, never raised, so one
+    board still fails alone. The caller consumes results in board order, so
+    rows, Job.board stamps and fetched_boards come out exactly as a
+    sequential run would produce them. `client` is shared: httpx.Client is
+    thread-safe, and its auth (#94) only ever adds the GitHub token for
+    GitHub hosts."""
+    results: dict[int, tuple[list[str] | Exception, float]] = {}
+    groups: dict[str, list[int]] = {}
+    for i, board in enumerate(boards):
+        lister = _LISTERS.get(str(board.get("ats")))
+        if lister is None:
+            continue
+        try:
+            host = lister_host(board)
+        except Exception as exc:  # noqa: BLE001 - a malformed row fails alone
+            results[i] = (exc, 0.0)
+            continue
+        groups.setdefault(host, []).append(i)
+
+    def run(host: str, idxs: list[int]) -> list[tuple[int, list[str] | Exception, float]]:
+        out: list[tuple[int, list[str] | Exception, float]] = []
+        for n, i in enumerate(idxs):
+            if n:
+                listing_http.sleep(_host_gap(host))
+            started = time.monotonic()
+            try:
+                pages: list[str] | Exception = _LISTERS[boards[i]["ats"]](
+                    client, boards[i])
+            except Exception as exc:  # noqa: BLE001 - reported per board by the caller
+                pages = exc
+            out.append((i, pages, time.monotonic() - started))
+        return out
+
+    if groups:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            for batch in pool.map(lambda item: run(*item), groups.items()):
+                for i, pages, secs in batch:
+                    results[i] = (pages, secs)
+    return results
 
 
 def _lever_jd(j: dict) -> str | None:
@@ -147,15 +225,21 @@ class AtsBoardsAdapter(Adapter):
         failures = 0
         wd_raw = wd.fetch_listings(str(b.get("slug")) for b in boards
                                    if b.get("ats") == "workday")
-        for board in boards:
+        # Paged listers: prefetched LISTER_WORKERS hosts at a time, consumed
+        # below in board order (identical output to a sequential run).
+        lister_raw = prefetch_listers(client, boards, LISTER_WORKERS)
+        for idx, board in enumerate(boards):
             started = time.monotonic()
+            took: float | None = None
             try:
                 path = f"{board['ats']}:{board['slug']}:{board['company']}"
-                lister = _LISTERS.get(board["ats"])
                 if board["ats"] == "workday":   # prefetched, 4 tenants at a time
                     pages = [wd.listing(wd_raw, str(board["slug"]))]
-                elif lister:
-                    pages = lister(client, board)
+                elif idx in lister_raw:
+                    got, took = lister_raw[idx]
+                    if isinstance(got, Exception):
+                        raise got
+                    pages = got
                 else:
                     pages = [fetch_text(
                         client, _API[board["ats"]].format(slug=board["slug"]))]
@@ -165,9 +249,10 @@ class AtsBoardsAdapter(Adapter):
                 failures += 1
                 log.warning("ats board %s/%s failed after %.1fs: %s",
                             board.get("ats"), board.get("slug"),
-                            time.monotonic() - started, exc)
+                            took if took is not None
+                            else time.monotonic() - started, exc)
                 continue
-            elapsed = time.monotonic() - started
+            elapsed = took if took is not None else time.monotonic() - started
             if board["ats"] in _LISTERS:
                 log.info("ats board %s/%s: %d intern posting(s) in %.1fs",
                          board["ats"], board["slug"], len(parsed), elapsed)
