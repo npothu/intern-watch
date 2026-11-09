@@ -484,3 +484,31 @@ def test_llm_capped_recheck_stays_stale_not_rejected(monkeypatch):
     for j in jobs:
         assert recheck.get(state, j.dedup_key, "example") == ("legacy", "")
     assert st.pending_keys(state, "example") == set()
+
+
+def test_llm_configured_but_keyless_run_skips_rechecks(monkeypatch):
+    # Without the key, an unknown term would read as "keep" and be delivered,
+    # and a top-company rule would hard-reject and be re-hashed for good.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    cfg = _cfg(unknown_term_policy="llm",
+               llm={"enabled": True, "provider": "gemini",
+                    "tasks": ["term_inference"]},
+               recheck={"daily_limit": None, "per_run": 700})
+    job = _job(1)
+    job.terms, job.term_confidence = [], "unknown"
+    state = _state(job)
+    state["jobs"][job.dedup_key]["rj"] = {"example": "legacy:"}
+    _run(cfg, state, [job])
+    assert st.outbox_items(state, "example") == []
+    assert recheck.get(state, job.dedup_key, "example") == ("legacy", "")
+
+
+def test_turning_the_llm_on_rechecks_rules_rejects():
+    state = st.empty_state()
+    job = _job(1, company="Obscure")
+    off = UserFilter(_cfg(llm={"enabled": False}), ROOT, today=TODAY)
+    on = UserFilter(_cfg(llm={"enabled": True,
+                              "tasks": ["top_company_judgment"]}),
+                    ROOT, today=TODAY)
+    assert (recheck.fingerprint(off, "rules", job, state)
+            != recheck.fingerprint(on, "rules", job, state))

@@ -16,8 +16,13 @@ Stages, in pipeline order (filters.UserFilter.evaluate, then the LLM):
   else its cached LLM term) are wanted now, so a rolling window only touches
   jobs whose season just entered it.
 - ``rules`` the rule conditions that apply to this job's terms, whether its
-  company is a priority company, and whether it is on each company list the
-  rules name (so adding one tracker company only touches that employer).
+  company is a priority company, whether it is on each company list the
+  rules name (so adding one tracker company only touches that employer), and
+  the configured LLM flag and tasks (turning the model on rechecks these).
+
+A run whose configured LLM is unavailable (API key missing) skips rechecks:
+without the model an unknown term reads as accepted and a top-company rule
+hard-rejects, and either verdict would be committed for good.
 - ``llm``   the rules and term fingerprints plus the prose top-company
   definition and the CACHED per-employer verdict for this company.
 
@@ -152,7 +157,7 @@ def _elim_fp(uf: UserFilter, job: Job, state: dict) -> str:
               uf.elim_max_age_days, sorted(uf.elim_countries or ()))
 
 
-def _llm_configured(uf: UserFilter) -> bool:
+def llm_configured(uf: UserFilter) -> bool:
     # The config, not uf.llm_enabled: process_user switches that off when the
     # API key is missing, and a local run without a key must not look like a
     # config change.
@@ -174,7 +179,7 @@ def _term_fp(uf: UserFilter, job: Job, state: dict) -> str:
     terms = _terms(job, state)
     if terms:
         return _h("term", sorted(set(terms) & uf.terms_wanted))
-    return _h("term", "unknown", uf.unknown_term_policy, _llm_configured(uf),
+    return _h("term", "unknown", uf.unknown_term_policy, llm_configured(uf),
               "term_inference" in uf.llm_tasks)
 
 
@@ -188,7 +193,10 @@ def _rules_fp(uf: UserFilter, job: Job, state: dict) -> str:
             conds.extend(rule.get("accept_if_any", []))
     lists = sorted({c["company_in_file"] for c in conds if "company_in_file" in c})
     on_lists = [uf._company_list(p).match(job.company) for p in lists]
-    return _h("rules", conds, uf.is_priority(job.company), lists, on_lists)
+    # The configured LLM (the yaml flag and tasks, never "is the key set"):
+    # turning top-company / metro judgment on must recheck rules rejects.
+    return _h("rules", conds, uf.is_priority(job.company), lists, on_lists,
+              llm_configured(uf), sorted(uf.llm_tasks))
 
 
 def _llm_fp(uf: UserFilter, job: Job, state: dict) -> str:

@@ -692,8 +692,16 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     # Rechecks run after this run's new/pending jobs: they queue behind them
     # for the LLM cap and are never parked as pending (a deferred recheck
     # keeps its stale fingerprint and is picked up again next run).
+    # The yaml wants the LLM but this run cannot call it (key missing): skip
+    # rechecks entirely. Without the model an unknown term reads as "keep"
+    # (accepted) and a top-company rule hard-rejects; either verdict would
+    # be committed (delivered, or re-hashed as rejected) and never revisited.
+    llm_down = recheck.llm_configured(uf) and not uf.llm_enabled
+    if llm_down and listed is not None:
+        log.warning("user %s: llm configured but unavailable this run -- "
+                    "rechecks skipped until it is back", name)
     rechecks = (_rechecks(uf, state, listed, candidates, today)
-                if listed is not None else [])
+                if listed is not None and not llm_down else [])
     recheck_keys = {job.dedup_key for job in rechecks}
 
     def _accept(job: Job, reasons: list[str]) -> None:

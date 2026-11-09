@@ -63,8 +63,9 @@ priority email), at most `recheck.per_run` re-runs per run and
 defaults `RECHECK_CAP`=50 / `RECHECK_DAILY_DELIVERIES`=40, null/0 = no daily
 limit, `per_run: 0` pauses re-runs while the free re-fingerprint pass and
 bootstrap keep going; validated by config_check), behind new jobs for the LLM
-cap. Jobs no longer listed, delivered, or `seeded` are never
-rechecked, and nothing is ever un-delivered. A matching-code change must bump
+cap. A run whose configured LLM is unavailable (key missing) skips rechecks
+entirely, so a degraded verdict is never committed. Jobs no longer listed,
+delivered, or `seeded` are never rechecked, and nothing is ever un-delivered. A matching-code change must bump
 its stage's version (`filters.ROLE_MATCH_VERSION`, `ELIM_MATCH_VERSION`) to
 recheck. An instant Discord webhook, if configured, still sends recheck
 accepts right away (only the priority email is suppressed).
