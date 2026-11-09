@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 /**
  * The small switch at the top of the Settings pages. Appearance, Preferences and
  * Connections live on sibling routes, so this is plain next/link navigation
- * (no in-place switching like the app's ViewSwitch).
+ * (no in-place switching like the header nav's Matches/Tracker pills).
  */
 
 const TABS = [

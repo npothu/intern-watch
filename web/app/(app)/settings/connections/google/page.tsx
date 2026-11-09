@@ -1,6 +1,7 @@
 import { resolveTrackerUser } from "@/lib/user";
 import { getMailAccount, getOAuthConfig } from "@/lib/convex";
 import { GoogleConnection } from "@/components/settings/google-connection";
+import { LoadedAt } from "@/components/loaded-at";
 
 export const metadata = { title: "Connect Gmail - intern-baddie" };
 
@@ -66,13 +67,16 @@ export default async function ConnectGmailPage({
   const callbackConfirmed = Boolean(connected && account?.email === connected);
 
   return (
-    <GoogleConnection
-      available={available}
-      // Only show callback success when the authoritative stored mailbox
-      // agrees with the query parameter.
-      connectedEmail={callbackConfirmed ? account?.email : undefined}
-      alreadyConnectedEmail={account?.email}
-      oauthError={googleError}
-    />
+    <>
+      <LoadedAt />
+      <GoogleConnection
+        available={available}
+        // Only show callback success when the authoritative stored mailbox
+        // agrees with the query parameter.
+        connectedEmail={callbackConfirmed ? account?.email : undefined}
+        alreadyConnectedEmail={account?.email}
+        oauthError={googleError}
+      />
+    </>
   );
 }

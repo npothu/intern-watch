@@ -335,3 +335,11 @@ html[data-reduce-motion] *::after {
   transition-delay: 0ms !important;
   scroll-behavior: auto !important;
 }
+
+/* Horizontal scroll rows (phone nav and filter groups) with no visible bar. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
