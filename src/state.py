@@ -102,6 +102,19 @@ def mark_notified(state: dict, key: str, user: str) -> None:
         e["notified_for"].append(user)
 
 
+def mark_delivered(state: dict, key: str, user: str, url: str | None) -> None:
+    """A successful send of `key` to `user`. Also marks the url_index owner of
+    the posting's canonical when that is a different key, so the cross-run
+    url-dupe gate (which checks the OWNER key) keeps suppressing new spellings
+    for this user after their dashboard row is pruned. That case arises when
+    a retry was pending on a key that lost a url_index collision."""
+    mark_notified(state, key, user)
+    canon = canonical_url(url or "") or canonical_url(apply_url_get(state, key) or "")
+    owner = url_index_get(state, canon) if canon else None
+    if owner and owner != key and owner in state["jobs"]:
+        mark_notified(state, owner, user)
+
+
 def was_notified(state: dict, key: str, user: str) -> bool:
     return user in state["jobs"].get(key, {}).get("notified_for", [])
 

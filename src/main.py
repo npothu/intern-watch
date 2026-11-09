@@ -855,7 +855,7 @@ def _notify_discord(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
         ok = send_discord(webhook_url, chunks)
     for job, _ in accepted:
         if ok:
-            st.mark_notified(state, job.dedup_key, name)
+            st.mark_delivered(state, job.dedup_key, name, job.url)
             st.clear_pending(state, job.dedup_key, name)
         else:
             st.set_pending(state, job.dedup_key, name)
@@ -955,7 +955,7 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
     if send_email(smtp_user, smtp_pass, to_addr, subject, html_body, text_body,
                   attachments=attachments, user=name):
         for item in items:
-            st.mark_notified(state, item["key"], name)
+            st.mark_delivered(state, item["key"], name, item.get("url"))
         st.outbox_clear(state, name)
         st.set_last_email(state, name, now)
         st.mark_health_alerted(state, name)
@@ -1000,7 +1000,7 @@ def _send_priority_alert(name: str, email_cfg: dict, alerts: list[dict],
     if send_email(smtp_user, smtp_pass, to_addr, subject, html_body, text_body,
                   user=name):
         for item in alerts:
-            st.mark_notified(state, item["key"], name)
+            st.mark_delivered(state, item["key"], name, item.get("url"))
         st.outbox_remove(state, name, {it["key"] for it in alerts})
         log.info("user %s: priority alert emailed %d match(es) to %s", name,
                  len(alerts), to_addr)

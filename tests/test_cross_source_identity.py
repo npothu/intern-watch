@@ -332,3 +332,63 @@ def test_same_canon_twins_share_degrees_before_evaluation():
     for j in jobs:
         assert j.degrees == ["Master's"]
         assert uf.evaluate(j, today=TODAY).reasons == ["eliminated:grad-only-degrees"]
+
+
+# ------------------------------------- a retry that succeeds on a losing key
+
+WD_THIRD = ("https://acme.wd1.myworkdayjobs.com/en-US/Acme_Careers/job/X/"
+            "Widget-Systems-Intern_2026798-1")
+WD_LATE = ("https://acme.wd1.myworkdayjobs.com/Acme_Careers/job/X/"
+           "Widget-Systems-Intern_2026798")
+
+
+def _pending_on_loser():
+    s = st.empty_state()
+    _two_spellings_v3(s, "url:early", "url:late")
+    st.mark_notified(s, "url:early", "alice")
+    s["matches"] = {"dave": [{"key": "url:late", "url": WD_LATE}]}
+    st.set_pending(s, "url:late", "dave")
+    st.migrate_url_index(s)
+    assert s["url_index"]["ats:wd:acme:2026798"] == "url:early"
+    return s
+
+
+def test_successful_discord_retry_on_losing_key_also_marks_the_owner(monkeypatch):
+    s = _pending_on_loser()
+    monkeypatch.setenv("DAVE_HOOK", "https://discord.invalid/hook")
+    monkeypatch.setattr(main, "send_discord", lambda url, chunks: True)
+    retry = _job(WD_LATE, "zshah-2027")
+    retry.dedup_key = "url:late"
+    main._notify_discord({"name": "dave",
+                          "notify": {"discord_webhook_env": "DAVE_HOOK"}},
+                         [(retry, ["always"])], s, False,
+                         dt.datetime(2026, 11, 9, 12, tzinfo=dt.UTC),
+                         ["Summer 2027"])
+    assert st.was_notified(s, "url:late", "dave")
+    assert st.was_notified(s, "url:early", "dave")      # the index owner too
+    assert "pending" not in s["jobs"]["url:late"]
+    # Dashboard row pruned later; a new spelling must still be suppressed.
+    s["matches"] = {}
+    kept = main._drop_url_dupes(s, "dave", [(_third_spelling("url:d4"), ["always"])],
+                                ["Summer 2027"], TODAY)
+    assert kept == []
+
+
+def test_email_digest_send_marks_the_index_owner(monkeypatch):
+    s = _pending_on_loser()
+    st.clear_pending(s, "url:late", "dave")
+    s["outbox"] = {"dave": [{"key": "url:late", "url": WD_LATE, "company": "Acme",
+                             "title": "Widget Systems Intern", "term": "Summer 2027",
+                             "tag": "", "location": "Austin, TX"}]}
+    monkeypatch.setattr(main, "send_email", lambda *a, **k: True)
+    monkeypatch.setenv("SMTP_U", "u@example.invalid")
+    monkeypatch.setenv("SMTP_P", "pass")
+    main._notify_email({"name": "dave", "notify": {"email": {
+        "smtp_user_env": "SMTP_U", "smtp_pass_env": "SMTP_P"}}},
+        [], s, False, dt.datetime(2026, 11, 9, 12, tzinfo=dt.UTC),
+        ["Summer 2027"], send_now=True)
+    assert st.was_notified(s, "url:early", "dave")
+    s["matches"] = {}
+    kept = main._drop_url_dupes(s, "dave", [(_third_spelling("url:d5"), ["always"])],
+                                ["Summer 2027"], TODAY)
+    assert kept == []
