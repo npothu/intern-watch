@@ -171,6 +171,20 @@ _LEVER_PATH_RE = re.compile(
 # repost counters (_JR2026520976-1) are dropped by requiring the match to end
 # on the digit run, so reposts of one requisition share a token.
 _WD_REQID_RE = re.compile(r"_(R[-\w]*\d{3,}|JR[-\w]*\d{3,})", re.I)
+# Other reqid shapes: numeric-only (.../Title_2642004) or a short alpha
+# prefix (_UNI4670, _HR102443, _JobReq-2615965), each with an optional repost
+# counter (-1). Only tried when _WD_REQID_RE finds nothing, so existing R/JR
+# tokens are unchanged.
+_WD_OTHER_REQID_RE = re.compile(r"_((?:[a-z]{1,6}-?)?\d{4,})(?:-\d{1,2})?$", re.I)
+# ..._2027, ..._Summer-2027, ..._Intern2027 are a calendar year (optionally
+# after a word), not a reqid: two different postings would share the token.
+_WD_YEAR_ONLY_RE = re.compile(r"(?:[a-z]{1,6}-?)?(?:19|20)\d{2}", re.I)
+# jobs.smartrecruiters.com/<Company>/<postingId>[-slug]; the id is numeric
+# or (older postings) a UUID. The UUID branch is tried first: a UUID whose
+# first group is all digits must not be read as an 8-digit id plus a slug.
+_SR_PATH_RE = re.compile(
+    r"^/([^/]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{6,})"
+    r"(?:-[^/]*)?$", re.I)
 _WORKABLE_PATH_RE = re.compile(r"^/([^/]+)/j/([^/]+)")
 # Bare /en/ style locales are NOT stripped by _LOCALE_SEG_RE (only xx-XX is),
 # so this pattern carries its own optional two-letter locale segment.
@@ -228,10 +242,21 @@ def canonical_url(url: str) -> str | None:
     # must fall through to the fallback: there the tenant is not the first
     # host label, and a wrong tenant would merge two different companies.
     if host.endswith(".myworkdayjobs.com"):
-        m = _WD_REQID_RE.search(path.rsplit("/", 1)[-1])
+        slug = path.rsplit("/", 1)[-1]
+        m = _WD_REQID_RE.search(slug)
+        if not m:
+            m = _WD_OTHER_REQID_RE.search(slug)
+            if m and _WD_YEAR_ONLY_RE.fullmatch(m.group(1)):
+                m = None
         if m:
             tenant = host.split(".", 1)[0]
             return f"ats:wd:{tenant}:{m.group(1).upper()}"
+        # Workday site paths are case-insensitive (/Search/ == /search/).
+        path = path.lower()
+    if host == "jobs.smartrecruiters.com":
+        m = _SR_PATH_RE.match(path)
+        if m:
+            return f"ats:sr:{m.group(1).lower()}:{m.group(2).lower()}"
     if host == "apply.workable.com":
         m = _WORKABLE_PATH_RE.match(path)
         if m:
