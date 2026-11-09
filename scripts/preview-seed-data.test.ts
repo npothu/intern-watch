@@ -23,16 +23,45 @@ test("seed is deterministic, fictional, and shorts match the watcher's sha1(key)
   );
 });
 
+test("seed facts cover every detail-panel shape", () => {
+  const { items, watchRuns } = buildPreviewSeed(sha1HexSync, { nowMs: Date.UTC(2026, 10, 9, 12) });
+  const facts = items.map((i) => i.facts);
+  expect(facts.every((f) => typeof f.source === "string" && f.acceptedBy)).toBe(true);
+  const modes = new Set(facts.map((f) => f.delivery?.mode).filter(Boolean));
+  expect(modes).toEqual(new Set(["immediate", "digest"]));
+  expect(facts.some((f) => !f.delivery)).toBe(true);
+  expect(facts.some((f) => f.termSource === "llm")).toBe(true);
+  expect(facts.some((f) => f.metro?.source === "llm")).toBe(true);
+  expect(facts.some((f) => f.topCompany?.source === "llm" && f.topCompany.judgedAt)).toBe(true);
+  expect(facts.filter((f) => f.clearanceObtainable)).toHaveLength(1);
+  const unresolved = items.filter((i) => i.facts.termSource === "unresolved");
+  expect(unresolved).toHaveLength(1);
+  expect(unresolved[0].term).toBeNull();
+  expect(unresolved[0].facts.acceptedBy).toBe("unresolved-all-terms");
+  expect(watchRuns).toHaveLength(12);
+  const now = Date.UTC(2026, 10, 9, 12);
+  expect(watchRuns.every((r) => r.at <= now && r.at > now - 24 * 60 * 60 * 1000)).toBe(true);
+  expect(watchRuns.map((r) => r.at)).toEqual([...watchRuns.map((r) => r.at)].sort((x, y) => x - y));
+});
+
 test("seed goes through the real tracker mutations", async () => {
   process.env.TRACKER_SECRET = SECRET;
   const t = convexTest(schema);
-  const { items, applications, ticks } = buildPreviewSeed(sha1HexSync);
+  const nowMs = Date.now();
+  const { items, applications, ticks, watchRuns } = buildPreviewSeed(sha1HexSync, { nowMs });
   const user = "nathan";
   await t.mutation(api.tracker.pushMatches, { user, items, secret: SECRET });
   for (const x of applications) {
     await t.mutation(api.tracker.recordStatus, { user, short: x.short, status: x.status, note: x.note, snapshot: x.snapshot, secret: SECRET });
   }
   await t.mutation(api.tracker.setTicks, { user, writes: ticks, secret: SECRET });
+  for (const run of watchRuns) {
+    await t.mutation(api.watchRuns.record, { user, ...run, secret: SECRET });
+  }
+  const recent = await t.query(api.watchRuns.recent, { user, secret: SECRET });
+  expect(recent).toHaveLength(watchRuns.length);
+  const pushed = await t.query(api.tracker.getMatches, { user, secret: SECRET });
+  expect(pushed.every((m: { facts?: { source?: string } }) => typeof m.facts?.source === "string")).toBe(true);
 
   const counts = await t.run(async (ctx) => ({
     matches: (await ctx.db.query("matches").collect()).length,
