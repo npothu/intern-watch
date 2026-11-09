@@ -17,6 +17,12 @@ import { LayoutList, ListChecks, Mail, Users, type LucideIcon } from "lucide-rea
  *     /?filter=hidden   matches, opened on the hidden list
  *     /?view=tracker    tracker
  *
+ * Matches carries more of its view the same way, so a link reproduces it:
+ * `?term=su27` (term pill), `?sort=found.desc` (company|term|found, asc|desc)
+ * and `?open=<short>` (the row whose details are open), next to `?filter=`.
+ * Parsing and formatting live in components/matches/matches-lib.ts; the
+ * matches surface replaces (never pushes) the entry as they change.
+ *
  * The switch itself goes through the native History API. Next keeps
  * `useSearchParams()` in sync with `history.pushState` without re-running the
  * server render, so a view change costs no round trip and no refetch, while the
@@ -81,8 +87,6 @@ export function nextViewId(current: ViewId | null): ViewId {
 export type AppViewState = {
   view: AppView;
   job: string | undefined;
-  /** The matches filter a deep link asked for (`?filter=hidden`), if any. */
-  filter: string | undefined;
   /** Show a view, optionally opening matches on a filter. */
   show: (view: AppView, filter?: string) => void;
 };
@@ -93,7 +97,6 @@ export function useAppView(): AppViewState {
   const router = useRouter();
 
   const view: AppView = params.get(VIEW_PARAM) === "tracker" ? "tracker" : "matches";
-  const filter = params.get(FILTER_PARAM) ?? undefined;
 
   const show = useCallback(
     (next: AppView, nextFilter?: string) => {
@@ -110,5 +113,5 @@ export function useAppView(): AppViewState {
     [pathname, router]
   );
 
-  return { view, filter, show, job: params.get("job") ?? undefined };
+  return { view, show, job: params.get("job") ?? undefined };
 }
