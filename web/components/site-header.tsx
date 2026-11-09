@@ -24,6 +24,8 @@ import { cn } from "@/lib/utils";
 import { UserChip } from "@/components/user-chip";
 import { AppNav } from "@/components/nav/app-nav";
 import { FreshnessReadout, useFreshness } from "@/components/refresh-control";
+import { WatcherPulse } from "@/components/watcher-pulse";
+import type { PulseRun } from "@/lib/watcher-pulse";
 import {
   CommandPalette,
   openCommandPalette,
@@ -283,9 +285,15 @@ function SweepRule({ pulse, className }: { pulse: number; className?: string }) 
 export function SiteHeader({
   trackerUser,
   health = null,
+  runs,
+  renderedAt,
 }: {
   trackerUser: string;
   health?: TrackerHealth | null;
+  /** The watcher's last day of runs for the sparkline, streamed (never rejects). */
+  runs?: Promise<PulseRun[]>;
+  /** The layout's server render time: the end of the sparkline's window. */
+  renderedAt?: number;
 }) {
   const syncPulse = useSyncPulse();
   const freshness = useFreshness();
@@ -308,6 +316,7 @@ export function SiteHeader({
         <SearchButton className="col-span-3 row-start-2" />
         <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-2 justify-self-end min-[1024px]:ml-auto">
           <HealthDot health={health} />
+          {runs && renderedAt !== undefined && <WatcherPulse runs={runs} now={renderedAt} className="mr-1" />}
           <FreshnessReadout freshness={freshness} className="min-[1200px]:mr-1.5" />
           <ThemeToggle />
           <Link

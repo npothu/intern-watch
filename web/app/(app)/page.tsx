@@ -1,5 +1,5 @@
 import { resolveTrackerUser } from "@/lib/user";
-import { getResumeUrls, type ResumeMeta } from "@/lib/convex";
+import { getResumeUrls, type MatchFacts, type ResumeMeta } from "@/lib/convex";
 import { loadCore, toTriageRows } from "@/lib/app-data";
 import { buildTrackerRows } from "@/components/tracker/build-rows";
 import { AppViews } from "@/components/app-views";
@@ -47,6 +47,8 @@ export type TriageRow = {
   /** The liveness probe marked the posting closed (convex/liveness_probe.ts);
    *  always false on applied rows. */
   closed?: boolean;
+  /** How the watcher decided and delivered the match; absent on older rows. */
+  facts?: MatchFacts;
 };
 
 export default async function AppPage() {

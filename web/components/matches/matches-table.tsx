@@ -1,25 +1,27 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import { Fragment, useMemo, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { AlertTriangle, Download, FileSearch, Loader2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useReplay, TICK_POP, TICK_POP_OPTS, CHECK_DRAW, CHECK_DRAW_OPTS } from "@/lib/motion";
-import type { Day } from "@/lib/terms";
+import { dayFromIso } from "@/lib/terms";
 import type { ResumeMeta } from "@/lib/convex";
 import type { TriageRow } from "@/app/(app)/page";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import { DenseTable, type DenseColumn, type DenseSlot } from "./dense-table";
 import { ClosedBadge, CollapseShell, FOCUS_RING, blurOnPointerActivate } from "./row-primitives";
 import {
-  UNKNOWN_TERM,
   absoluteDate,
   foundAge,
   isClosed,
   isPrimaryTerm,
+  TIME_SLOT,
+  clockTime,
+  dateTime,
+  dayPart,
+  panelFacts,
   reportSummary,
   rowStatus,
-  tagIsInformative,
-  tagLabel,
   termLabel,
   termOf,
   termShort,
@@ -67,7 +69,7 @@ export function MatchesTable({
   openShort,
   cursor,
   wantedTerms,
-  today,
+  todayIso,
   hiding,
   entering,
   rowStyle,
@@ -86,7 +88,8 @@ export function MatchesTable({
   openShort: string | null;
   cursor: string | null;
   wantedTerms: string[] | null;
-  today: Day;
+  /** The server's UTC day ("YYYY-MM-DD"), the one the headline uses. */
+  todayIso: string;
   hiding: ReadonlySet<string>;
   entering: ReadonlySet<string>;
   rowStyle: (index: number) => CSSProperties;
@@ -99,6 +102,7 @@ export function MatchesTable({
   handlers: MatchHandlers;
   empty: ReactNode;
 }) {
+  const today = useMemo(() => dayFromIso(todayIso), [todayIso]);
   const columns: DenseColumn<TriageRow, SortKey>[] = [
     {
       id: "company",
@@ -173,7 +177,13 @@ export function MatchesTable({
           <span
             className={cn(
               MONO_CAPS,
-              s === "applied" ? "text-accent" : s === "saved" ? "text-amber" : "text-ink-2"
+              s === "applied"
+                ? "text-accent"
+                : s === "saved"
+                  ? "text-amber"
+                  : s === "emailed"
+                    ? "text-ink"
+                    : "text-ink-2"
             )}
           >
             {s}
@@ -238,7 +248,7 @@ export function MatchesTable({
         </CollapseShell>
       )}
       renderPanel={(r) => (
-        <MatchPanel row={r} state={buildStateFor(r)} meta={metaFor(r)} handlers={handlers} />
+        <MatchPanel row={r} todayIso={todayIso} state={buildStateFor(r)} meta={metaFor(r)} handlers={handlers} />
       )}
       empty={empty}
     />
@@ -425,48 +435,45 @@ function ResumeCell({
 /** The open row: facts, worth knowing, actions. */
 function MatchPanel({
   row,
+  todayIso,
   state,
   meta,
   handlers,
 }: {
   row: TriageRow;
+  todayIso: string;
   state: BuildState;
   meta: ResumeMeta | null;
   handlers: MatchHandlers;
 }) {
   const report = state === "built" ? meta?.report ?? null : null;
   const notes = worthKnowing(row, report);
+  const facts = panelFacts(row, todayIso);
   const resumeUrl = state === "built" ? row.resumeUrl : null;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_232px] gap-6 text-[13px] text-ink">
       <dl className="m-0 grid grid-cols-[auto_1fr] content-start gap-x-3.5 gap-y-2">
-        <dt className={DT}>Added</dt>
-        <dd className="m-0">{absoluteDate(row.added) || "—"}</dd>
-        <dt className={DT}>Term</dt>
-        <dd className="m-0">{row.term || termLabel(UNKNOWN_TERM)}</dd>
-        {row.salary && (
-          <>
-            <dt className={DT}>Salary</dt>
-            <dd className="m-0">{row.salary}</dd>
-          </>
-        )}
-        {tagIsInformative(row.tag) && (
-          <>
-            <dt className={DT}>Tag</dt>
-            <dd className="m-0">{tagLabel(row.tag)}</dd>
-          </>
-        )}
-        <dt className={DT}>Key</dt>
-        <dd className="m-0 font-mono text-[12px]">{row.short}</dd>
+        {facts.map((f) => (
+          <Fragment key={f.label}>
+            <dt className={DT}>{f.label}</dt>
+            <dd className={cn("m-0", f.mono && "font-mono text-[12px]")}>
+              {f.time ? <FactWithTime value={f.value} time={f.time} /> : f.value}
+            </dd>
+          </Fragment>
+        ))}
       </dl>
 
       <div className="flex flex-col gap-2.5">
         <div className={DT}>{notes.length ? "Worth knowing" : "Nothing to flag"}</div>
         {notes.length > 0 && (
-          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+          <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
             {notes.map((n) => (
-              <li key={n} className="leading-[1.4]">
-                {n}
+              <li key={n.title} className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-2.5 leading-[1.4]">
+                <span className="pt-0.5 font-mono text-[10px] tracking-[0.08em] text-ink-2 uppercase">{n.tag}</span>
+                <span className="min-w-0">
+                  <span className="block">{n.title}</span>
+                  {n.sub && <span className="block text-[12px] text-ink-2">{n.sub}</span>}
+                </span>
               </li>
             ))}
           </ul>
@@ -584,5 +591,50 @@ function MatchPanel({
         )}
       </div>
     </div>
+  );
+}
+
+const noSubscribe = () => () => {};
+
+/** False on the server and during hydration, true once the client has taken over. */
+function useHydrated(): boolean {
+  return useSyncExternalStore(
+    noSubscribe,
+    () => true,
+    () => false
+  );
+}
+
+/** A fact value with its time spliced in where TIME_SLOT sits. */
+function FactWithTime({ value, time }: { value: string; time: { iso: string; withDate: boolean } }) {
+  const [before, after = ""] = value.split(TIME_SLOT);
+  return (
+    <>
+      {before}
+      <LocalTime iso={time.iso} withDate={time.withDate} />
+      {after}
+    </>
+  );
+}
+
+/**
+ * A time in the viewer's zone. The server cannot know that zone, so it (and
+ * the hydration pass) renders the UTC day alone with a blank of the clock's
+ * width; the client then fills in its own day and clock. The UTC instant
+ * stays in the title either way.
+ */
+function LocalTime({ iso, withDate }: { iso: string; withDate: boolean }) {
+  const hydrated = useHydrated();
+  return (
+    <time dateTime={iso} title={iso} className="tabular-nums">
+      {hydrated ? (
+        withDate ? dateTime(iso) : clockTime(iso)
+      ) : (
+        <>
+          {withDate ? `${dayPart(iso, "UTC")}, ` : ""}
+          <span className="invisible">00:00</span>
+        </>
+      )}
+    </time>
   );
 }

@@ -1,5 +1,5 @@
 import { resolveTrackerUser } from "@/lib/user";
-import { getHealth } from "@/lib/convex";
+import { getHealth, getWatcherRuns } from "@/lib/convex";
 import { loadViewCounts } from "@/lib/app-data";
 import { SiteHeader } from "@/components/site-header";
 import { NotProvisioned } from "@/components/not-provisioned";
@@ -31,13 +31,21 @@ export default async function AppLayout({
   // Not awaited: the counts stream into the header (ViewCountsProvider), so
   // their reads never hold up the shell or the page.
   const counts = loadViewCounts(trackerUser).catch(() => null);
+  // Same for the watcher sparkline's runs (getWatcherRuns never rejects; an
+  // absent query or a failed read is [] and the sparkline does not draw).
+  // `renderedAt` is this request's server time, the same instant the page's
+  // <LoadedAt /> stamps for the "as of" readout: the sparkline's 24h window
+  // ends there and its "since" caption measures from it on first paint.
+  // eslint-disable-next-line react-hooks/purity
+  const renderedAt = Date.now();
+  const runs = getWatcherRuns(trackerUser, renderedAt - 24 * 3600e3);
   const health = await getHealth(trackerUser).catch(() => null);
   return (
     <ViewCountsProvider inboxPending={health?.pendingInbox ?? 0} seed={counts}>
       {/* Global `t` view-cycle - see components/nav/view-cycle.tsx for why
           this can't live inside any one surface. */}
       <ViewCycle />
-      <SiteHeader trackerUser={trackerUser} health={health} />
+      <SiteHeader trackerUser={trackerUser} health={health} runs={runs} renderedAt={renderedAt} />
       <main className="flex-1">{children}</main>
     </ViewCountsProvider>
   );

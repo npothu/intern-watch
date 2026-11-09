@@ -84,7 +84,7 @@ import { useRouter } from "next/navigation";
 import { useAppView } from "@/lib/view";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import type { TriageRow } from "@/app/(app)/page";
-import { sortTerms, todayLocal } from "@/lib/terms";
+import { sortTerms } from "@/lib/terms";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
 import { MatchesTable, type BuildState, type MatchHandlers } from "./matches-table";
 import {
@@ -1233,7 +1233,6 @@ export function Triage({
 
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && visible.length === 0;
-  const today = todayLocal();
 
   /* The page headline, from the rows the table shows. */
   const headline = (() => {
@@ -1340,7 +1339,7 @@ export function Triage({
             openShort={activeOpen}
             cursor={cursor}
             wantedTerms={wantedTerms}
-            today={today}
+            todayIso={todayIso}
             hiding={hiding}
             entering={entering}
             rowStyle={cascadeStyle}

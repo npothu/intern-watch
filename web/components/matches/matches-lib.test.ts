@@ -30,6 +30,13 @@ import {
   termShort,
   termSlug,
   worthKnowing,
+  TIME_SLOT,
+  clockTime,
+  dateTime,
+  dayPart,
+  isoDate,
+  panelFacts,
+  sanitizeFacts,
   type MatchesUrlState,
 } from "./matches-lib";
 
@@ -53,6 +60,7 @@ const row = (short: string, extra: Partial<TriageRow> = {}): TriageRow => ({
 });
 
 const shorts = (rows: TriageRow[]) => rows.map((r) => r.short);
+const titles = (notes: { title: string }[]) => notes.map((n) => n.title);
 
 describe("termShort", () => {
   test("season initials and a two-digit year", () => {
@@ -245,6 +253,21 @@ describe("row facts", () => {
     expect(rowStatus({ applied: false, saved: true })).toBe("saved");
     expect(rowStatus({ applied: false, saved: false })).toBe("new");
   });
+  test("status: delivery facts say how an unmarked row was sent", () => {
+    const immediate = { source: "s", delivery: { mode: "immediate" as const, at: "2026-11-08T06:14:00Z" } };
+    const digest = { source: "s", delivery: { mode: "digest" as const, at: "2026-11-08T20:00:00Z" } };
+    expect(rowStatus({ applied: false, saved: false, facts: immediate })).toBe("emailed");
+    expect(rowStatus({ applied: false, saved: false, facts: digest })).toBe("digest");
+    // The user's marks win over delivery.
+    expect(rowStatus({ applied: true, saved: false, facts: immediate })).toBe("applied");
+    expect(rowStatus({ applied: false, saved: true, facts: digest })).toBe("saved");
+    // Facts without a delivery (or no facts at all) read "new".
+    expect(rowStatus({ applied: false, saved: false, facts: { source: "s" } })).toBe("new");
+    expect(rowStatus({ applied: false, saved: false, facts: undefined })).toBe("new");
+    // An unknown mode (a newer producer, or junk) is not a delivery we can name.
+    const weird = { source: "s", delivery: { mode: "carrier-pigeon", at: "2026-11-08T06:14:00Z" } } as unknown as TriageRow["facts"];
+    expect(rowStatus({ applied: false, saved: false, facts: weird })).toBe("new");
+  });
   test("tags", () => {
     expect(tagText("[TOP*]")).toBe("top");
     expect(tagText(" [PRIORITY] ")).toBe("priority");
@@ -256,22 +279,20 @@ describe("row facts", () => {
     expect(tagIsInformative("")).toBe(false);
     expect(tagIsInformative("[TOP*]")).toBe(true);
   });
-  test("worth knowing states plain facts only", () => {
+  test("worth knowing without facts states plain facts only", () => {
     expect(worthKnowing(row("a"))).toEqual([]);
     expect(
-      worthKnowing(row("b", { priority: true, tag: "[TOP*]", term: "", hasJobDescription: false }))
-    ).toEqual([
-      "Priority employer on your list.",
-      "Term not stated in the posting.",
-      "Tagged as a top company.",
-      "No job description found.",
-    ]);
+      titles(worthKnowing(row("b", { priority: true, tag: "[TOP*]", term: "", hasJobDescription: false })))
+    ).toEqual(["Priority employer", "No term stated", "Tagged as a top company", "No job description found"]);
+    // Without the fact, nothing claims why a no-term row was shown.
+    expect(worthKnowing(row("b2", { term: "" }))).toEqual([{ tag: "Term", title: "No term stated" }]);
+    expect(worthKnowing(row("b3", { priority: true }))[0].sub).toBe("On your priority list.");
     expect(worthKnowing(row("c", { tag: "[atl]" }))).toEqual([]);
   });
   test("worth knowing: a stub-built resume is a separate fact", () => {
-    expect(worthKnowing(row("d", { hasJobDescription: false }), { jdSource: "stub" })).toEqual([
-      "No job description found.",
-      "This resume was built from the title, company and location only.",
+    expect(titles(worthKnowing(row("d", { hasJobDescription: false }), { jdSource: "stub" }))).toEqual([
+      "No job description found",
+      "Resume built without a job description",
     ]);
     expect(worthKnowing(row("e"), { jdSource: "fetched" })).toEqual([]);
     expect(worthKnowing(row("f"), null)).toEqual([]);
@@ -475,7 +496,259 @@ describe("closed postings", () => {
   });
   test("worth knowing states the closed fact", () => {
     expect(worthKnowing(row("c", { closed: true }))).toEqual([
-      "The job board no longer lists this posting.",
+      { tag: "Note", title: "Posting no longer listed", sub: "The job board no longer lists this posting." },
     ]);
+  });
+});
+
+describe("match facts", () => {
+  const todayIso = "2026-11-08";
+  const tz = "UTC";
+  const labels = (r: TriageRow) => panelFacts(r, todayIso).map((f) => f.label);
+  const fact = (r: TriageRow, label: string) => panelFacts(r, todayIso).find((f) => f.label === label);
+  const value = (r: TriageRow, label: string) => fact(r, label)?.value;
+  const full: TriageRow["facts"] = {
+    source: "jobright-data",
+    sources: ["jobright-data", "simplify"],
+    postedAt: "2026-11-08T04:30:00Z",
+    delivery: { mode: "immediate", at: "2026-11-08T06:14:00Z" },
+    termSource: "llm",
+    metro: { name: "SF Bay Area", verdict: true, source: "llm" },
+    topCompany: { verdict: true, judgedAt: "2026-09-21", source: "llm" },
+    clearanceObtainable: true,
+    acceptedBy: "priority",
+  };
+
+  test("formatters", () => {
+    expect(clockTime("2026-11-08T06:14:00Z", tz)).toBe("06:14");
+    expect(dateTime("2026-11-08T06:14:00Z", tz)).toBe("Nov 8, 06:14");
+    expect(dayPart("2026-11-08T01:14:00Z", "UTC")).toBe("Nov 8");
+    // The viewer's zone, not the server's: 01:14 UTC is the evening before in New York.
+    expect(dateTime("2026-11-08T01:14:00Z", "America/New_York")).toBe("Nov 7, 20:14");
+    expect(isoDate("2026-09-21")).toBe("Sep 21, 2026");
+    expect(isoDate("2026-09-21T23:00:00Z")).toBe("Sep 21, 2026");
+    for (const bad of [undefined, "", "nope"]) {
+      expect(clockTime(bad, tz)).toBe("");
+      expect(dateTime(bad, tz)).toBe("");
+      expect(dayPart(bad, tz)).toBe("");
+      expect(isoDate(bad)).toBe("");
+    }
+  });
+
+  test("panel facts without facts: today's list", () => {
+    expect(labels(row("a"))).toEqual(["Added", "Term", "Key"]);
+    expect(labels(row("b", { salary: "$50/hr", tag: "[ATL]" }))).toEqual(["Added", "Term", "Salary", "Tag", "Key"]);
+    expect(value(row("c", { term: "" }), "Term")).toBe("Unknown");
+    expect(fact(row("d"), "Key")).toEqual({ label: "Key", value: "d", mono: true });
+  });
+
+  test("panel facts with full facts", () => {
+    const r = row("a", { added: "2026-11-05", facts: full });
+    expect(labels(r)).toEqual(["Source", "Posted", "Metro", "Sent", "Added", "Term", "Key"]);
+    expect(value(r, "Source")).toBe("jobright-data (also simplify) · found 3d ago");
+    // Times are slots the client fills in the viewer's zone; the UTC instant rides along.
+    expect(fact(r, "Posted")).toEqual({
+      label: "Posted",
+      value: TIME_SLOT,
+      time: { iso: "2026-11-08T04:30:00.000Z", withDate: true },
+    });
+    expect(value(r, "Metro")).toBe("SF Bay Area · in metro · by LLM");
+    expect(fact(r, "Sent")).toEqual({
+      label: "Sent",
+      value: `Emailed ${TIME_SLOT}, on the run that found it`,
+      time: { iso: "2026-11-08T06:14:00.000Z", withDate: false },
+    });
+    expect(panelFacts(r, todayIso).filter((f) => f.time).map((f) => f.label)).toEqual(["Posted", "Sent"]);
+  });
+
+  test("panel facts with partial facts", () => {
+    const only = row("b", { added: "2026-11-08", facts: { source: "simplify" } });
+    expect(labels(only)).toEqual(["Source", "Added", "Term", "Key"]);
+    expect(value(only, "Source")).toBe("simplify · found today");
+    // An unparseable added date drops the age, not the source.
+    expect(value(row("b2", { added: "", facts: { source: "simplify" } }), "Source")).toBe("simplify");
+    const digest = row("c", {
+      facts: {
+        source: "s",
+        sources: ["s"],
+        metro: { name: "Atlanta", verdict: false, source: "rules" },
+        delivery: { mode: "digest", at: "2026-11-07T20:05:00Z" },
+        postedAt: "garbage",
+      },
+    });
+    expect(labels(digest)).toEqual(["Source", "Metro", "Sent", "Added", "Term", "Key"]);
+    expect(value(digest, "Source")).toBe("s · found 7d ago");
+    expect(value(digest, "Metro")).toBe("Atlanta · outside metro");
+    expect(fact(digest, "Sent")).toEqual({
+      label: "Sent",
+      value: `Digest, ${TIME_SLOT}`,
+      time: { iso: "2026-11-07T20:05:00.000Z", withDate: true },
+    });
+    // A bad delivery time keeps the mode.
+    const badAt = (mode: "immediate" | "digest") =>
+      value(row("d", { facts: { source: "s", delivery: { mode, at: "x" } } }), "Sent");
+    expect(badAt("immediate")).toBe("Emailed on the run that found it");
+    expect(badAt("digest")).toBe("Digest");
+    // A metro with no name is not shown.
+    expect(labels(row("e", { facts: { source: "s", metro: { name: "", verdict: true, source: "llm" } } }))).not.toContain("Metro");
+  });
+
+  test("worth knowing with full facts, in order", () => {
+    expect(worthKnowing(row("a", { priority: true, tag: "[TOP*]", facts: full }))).toEqual([
+      { tag: "Note", title: "Priority employer", sub: "Accepted for any wanted term before the rules ran." },
+      { tag: "LLM", title: "Term inferred from the description", sub: "No term in the title." },
+      {
+        tag: "LLM",
+        title: "Counted as a top company by verdict",
+        sub: "Judged Sep 21, 2026; verdicts stick for about 120 days.",
+      },
+      { tag: "LLM", title: "Metro judged by the LLM", sub: "SF Bay Area: in." },
+      {
+        tag: "Note",
+        title: "Needs a clearance you can obtain",
+        sub: "Kept because the posting says it is obtainable, not required.",
+      },
+    ]);
+  });
+
+  test("worth knowing: each fact branch on its own", () => {
+    const f = (facts: NonNullable<TriageRow["facts"]>, extra: Partial<TriageRow> = {}) =>
+      worthKnowing(row("x", { ...extra, facts }));
+    expect(f({ source: "s" })).toEqual([]);
+    expect(f({ source: "s", termSource: "title" })).toEqual([]);
+    expect(f({ source: "s", termSource: "unresolved" }, { term: "" })).toEqual([
+      { tag: "Term", title: "No term stated", sub: "Shown because it passes under every wanted term." },
+    ]);
+    // A list-sourced or negative verdict is not news, and it replaces the tag fallback.
+    expect(f({ source: "s", topCompany: { verdict: true, judgedAt: "2026-09-21", source: "list" } }, { tag: "[TOP]" })).toEqual([]);
+    expect(f({ source: "s", topCompany: { verdict: false, judgedAt: "2026-09-21", source: "llm" } })).toEqual([]);
+    expect(f({ source: "s", topCompany: { verdict: true, judgedAt: "bad", source: "llm" } })[0].sub).toBe(
+      "Verdicts stick for about 120 days."
+    );
+    expect(f({ source: "s", metro: { name: "Austin", verdict: false, source: "llm" } })).toEqual([
+      { tag: "LLM", title: "Metro judged by the LLM", sub: "Austin: outside." },
+    ]);
+    expect(f({ source: "s", metro: { name: "Austin", verdict: true, source: "rules" } })).toEqual([]);
+    expect(f({ source: "s", clearanceObtainable: false })).toEqual([]);
+    expect(titles(f({ source: "s", clearanceObtainable: true }))).toEqual(["Needs a clearance you can obtain"]);
+    // Accepted by a rule but on the priority list now: the plain priority line,
+    // then the rule that actually accepted it.
+    expect(f({ source: "s", acceptedBy: "rule", acceptedRule: "metro" }, { priority: true })).toEqual([
+      { tag: "Note", title: "Priority employer", sub: "On your priority list." },
+      { tag: "Note", title: "Accepted by rule", sub: "metro" },
+    ]);
+    // No rule name, nothing to say; a rule name without acceptedBy "rule" is ignored.
+    expect(f({ source: "s", acceptedBy: "rule" })).toEqual([]);
+    expect(f({ source: "s", acceptedBy: "priority", acceptedRule: "metro" }).map((n) => n.title)).toEqual([
+      "Priority employer",
+    ]);
+    expect(f({ source: "s", acceptedBy: "priority" })[0].sub).toBe("Accepted for any wanted term before the rules ran.");
+    // The closed and no-JD facts stay alongside the new ones.
+    expect(titles(f({ source: "s", termSource: "llm" }, { closed: true, hasJobDescription: false }))).toEqual([
+      "Posting no longer listed",
+      "Term inferred from the description",
+      "No job description found",
+    ]);
+  });
+
+  test("panel facts: shape the sanitizer would reject still renders safely", () => {
+    // A string `sources` (not an array) must not throw.
+    const strSources = { source: "s", sources: "simplify" } as unknown as TriageRow["facts"];
+    expect(value(row("a", { added: "2026-11-08", facts: strSources }), "Source")).toBe("s · found today");
+    // A metro without a boolean verdict names the metro only, and says nothing in Worth knowing.
+    const noVerdict = { source: "s", metro: { name: "Austin", source: "llm" } } as unknown as TriageRow["facts"];
+    expect(value(row("b", { facts: noVerdict }), "Metro")).toBe("Austin · by LLM");
+    expect(worthKnowing(row("b", { facts: noVerdict }))).toEqual([]);
+    // An unknown delivery mode draws no Sent row.
+    const weird = { source: "s", delivery: { mode: "fax", at: "2026-11-08T06:14:00Z" } } as unknown as TriageRow["facts"];
+    expect(labels(row("c", { facts: weird }))).not.toContain("Sent");
+  });
+
+  test("panel facts: rules metro, in", () => {
+    const r = row("a", { facts: { source: "s", metro: { name: "Atlanta", verdict: true, source: "rules" } } });
+    expect(value(r, "Metro")).toBe("Atlanta · in metro");
+    expect(worthKnowing(r)).toEqual([]);
+  });
+
+  test("found age follows the server's UTC day, not the viewer's clock", () => {
+    const r = row("a", { added: "2026-11-07", facts: { source: "s" } });
+    expect(value(r, "Source")).toBe("s · found 1d ago");
+    expect(panelFacts(r, "2026-11-07").find((f) => f.label === "Source")?.value).toBe("s · found today");
+  });
+
+  test("worth knowing: unresolved term", () => {
+    const sub = "Shown because it passes under every wanted term.";
+    // acceptedBy unresolved-all-terms alone says the same as termSource unresolved.
+    expect(worthKnowing(row("a", { term: "", facts: { source: "s", acceptedBy: "unresolved-all-terms" } }))).toEqual([
+      { tag: "Term", title: "No term stated", sub },
+    ]);
+    // With a term on the row, it was not resolved rather than not stated.
+    expect(worthKnowing(row("b", { term: "Summer 2027", facts: { source: "s", termSource: "unresolved" } }))).toEqual([
+      { tag: "Term", title: "Term not resolved", sub },
+    ]);
+  });
+
+  test("worth knowing: a partial topCompany, once sanitized, falls back to the tag", () => {
+    const facts = sanitizeFacts({ source: "s", topCompany: { verdict: true } });
+    expect(facts).toEqual({ source: "s" });
+    expect(worthKnowing(row("a", { tag: "[TOP]", facts }))).toEqual([{ tag: "Note", title: "Tagged as a top company" }]);
+  });
+});
+
+describe("sanitizeFacts", () => {
+  test("non-objects and empty objects are no facts", () => {
+    for (const raw of [undefined, null, "facts", 3, true, [], [{ source: "s" }], {}, { bogus: 1 }]) {
+      expect(sanitizeFacts(raw)).toBeUndefined();
+    }
+  });
+
+  test("keeps a fully valid object as is", () => {
+    const full = {
+      source: "jobright-data",
+      sources: ["jobright-data", "simplify"],
+      postedAt: "2026-11-08T04:30:00Z",
+      delivery: { mode: "immediate", at: "2026-11-08T06:14:00Z" },
+      termSource: "llm",
+      metro: { name: "SF Bay Area", verdict: true, source: "llm" },
+      topCompany: { verdict: true, judgedAt: "2026-09-21", source: "llm" },
+      clearanceObtainable: false,
+      acceptedBy: "rule",
+      acceptedRule: "metro",
+    };
+    expect(sanitizeFacts(full)).toEqual(full);
+  });
+
+  test("drops each malformed member and keeps the rest", () => {
+    expect(
+      sanitizeFacts({
+        source: 7,
+        sources: "simplify",
+        postedAt: 123,
+        delivery: { mode: "fax", at: "2026-11-08" },
+        termSource: "guess",
+        metro: { name: "Austin", verdict: "yes", source: "llm" },
+        topCompany: { verdict: true, judgedAt: "2026-09-21", source: "vibes" },
+        clearanceObtainable: "true",
+        acceptedBy: "magic",
+        acceptedRule: ["metro"],
+        clearance: true,
+      })
+    ).toBeUndefined();
+    // Arrays keep their string members only.
+    expect(sanitizeFacts({ sources: ["a", 1, null, "", "b"] })).toEqual({ sources: ["a", "b"] });
+    expect(sanitizeFacts({ source: "s", sources: [1, 2] })).toEqual({ source: "s" });
+    // A delivery with a valid mode survives a bad time; the time is dropped.
+    expect(sanitizeFacts({ delivery: { mode: "digest", at: 5 } })).toEqual({ delivery: { mode: "digest" } });
+    expect(sanitizeFacts({ delivery: "immediate" })).toBeUndefined();
+    // Metro needs a name and a boolean verdict; a bad source is dropped alone.
+    expect(sanitizeFacts({ metro: { name: "Austin", verdict: false, source: "x" } })).toEqual({
+      metro: { name: "Austin", verdict: false },
+    });
+    expect(sanitizeFacts({ metro: { name: "Austin", source: "llm" } })).toBeUndefined();
+    expect(sanitizeFacts({ metro: { name: "", verdict: true } })).toBeUndefined();
+    // topCompany is all or nothing.
+    expect(sanitizeFacts({ topCompany: { verdict: true, judgedAt: "2026-09-21" } })).toBeUndefined();
+    expect(sanitizeFacts({ topCompany: { verdict: "true", judgedAt: "2026-09-21", source: "llm" } })).toBeUndefined();
+    expect(sanitizeFacts({ topCompany: [true] })).toBeUndefined();
   });
 });
