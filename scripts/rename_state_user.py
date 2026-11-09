@@ -68,6 +68,11 @@ def rename_seen(seen: dict, src: str, dst: str) -> dict[str, int]:
             before = len(report)
             _move_key(c["top"], src, dst, "companies.*.top", report)
             counts["companies.*.top"] = counts.get("companies.*.top", 0) + (len(report) - before)
+        if isinstance(c, dict) and isinstance(c.get("judged_by"), dict):
+            before = len(report)
+            _move_key(c["judged_by"], src, dst, "companies.*.judged_by", report)
+            counts["companies.*.judged_by"] = (counts.get("companies.*.judged_by", 0)
+                                               + (len(report) - before))
     for j in seen.get("jobs", {}).values():
         if not isinstance(j, dict):
             continue
@@ -78,7 +83,7 @@ def rename_seen(seen: dict, src: str, dst: str) -> dict[str, int]:
             _move_key(j["llm_top"], src, dst, "jobs.*.llm_top", report)
             counts["jobs.*.llm_top"] = counts.get("jobs.*.llm_top", 0) + (len(report) - before)
     for r in report:
-        if not r.endswith(".top") and not r.endswith("llm_top"):
+        if not r.endswith((".top", "llm_top", ".judged_by")):
             counts[r] = counts.get(r, 0) + 1
     return counts
 
@@ -112,6 +117,9 @@ def delete_user(seen: dict, apps: dict, user: str) -> dict[str, int]:
         if isinstance(c, dict) and isinstance(c.get("top"), dict) and user in c["top"]:
             del c["top"][user]
             bump("companies.*.top")
+        if isinstance(c, dict) and isinstance(c.get("judged_by"), dict) and user in c["judged_by"]:
+            del c["judged_by"][user]
+            bump("companies.*.judged_by")
     for j in seen.get("jobs", {}).values():
         if not isinstance(j, dict):
             continue

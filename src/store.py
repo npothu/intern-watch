@@ -141,6 +141,12 @@ class TrackerStore(Protocol):
         so the settings page can show them. Best-effort: never raises."""
         ...
 
+    def put_watch_run(self, user: str, run: dict) -> None:
+        """Record one watcher run ({at: ms epoch, newMatches, scanned?,
+        source?}) for the web app's run-history sparkline. Best-effort:
+        never raises."""
+        ...
+
     @property
     def writable(self) -> bool:
         """Whether a write can reach the store (issue + creds present for
@@ -406,6 +412,9 @@ class GitHubStore:
 
     def put_watch_report(self, user: str, report: dict) -> None:
         """Nothing reads a report here."""
+
+    def put_watch_run(self, user: str, run: dict) -> None:
+        """No run history without a hosted store."""
 
     # -- mail sync (not served by this driver) ------------------------------
 
@@ -747,6 +756,21 @@ class ConvexStore:
                        module="settings")
         except ApiError as exc:
             log.warning("watch report push failed for %s (%s)", user, exc)
+
+    def put_watch_run(self, user: str, run: dict) -> None:
+        """Best-effort, like put_watch_report: a lost sparkline point must
+        never fail the run."""
+        args: dict = {"user": user, "at": int(run["at"]),
+                      "newMatches": int(run.get("newMatches", 0)),
+                      "secret": self.secret}
+        if run.get("scanned") is not None:
+            args["scanned"] = int(run["scanned"])
+        if run.get("source"):
+            args["source"] = str(run["source"])
+        try:
+            self._post("mutation", "record", args, module="watchRuns")
+        except ApiError as exc:
+            log.warning("watch run push failed for %s (%s)", user, exc)
 
 
 def make_store(root: Path, user_cfg: dict | None = None) -> TrackerStore:

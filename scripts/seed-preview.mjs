@@ -28,8 +28,9 @@ if (!CONVEX_URL || !CONVEX_SECRET) {
 }
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
-const { items, applications, ticks, watchReport } = buildPreviewSeed(sha1, {
+const { items, applications, ticks, watchRuns, watchReport } = buildPreviewSeed(sha1, {
   today: new Date().toISOString().slice(0, 10),
+  nowMs: Date.now(),
 });
 const client = new ConvexHttpClient(CONVEX_URL);
 const secret = CONVEX_SECRET;
@@ -39,5 +40,8 @@ for (const a of applications) {
   await client.mutation(anyApi.tracker.recordStatus, { user, short: a.short, status: a.status, note: a.note, snapshot: a.snapshot, secret });
 }
 await client.mutation(anyApi.tracker.setTicks, { user, writes: ticks, secret });
+for (const run of watchRuns) {
+  await client.mutation(anyApi.watchRuns.record, { user, ...run, secret });
+}
 await client.mutation(anyApi.settings.putWatchReport, { user, report: watchReport, secret });
-console.log(`seed-preview: ${items.length} matches, ${applications.length} applications, ${ticks.length} ticks for '${user}'`);
+console.log(`seed-preview: ${items.length} matches, ${applications.length} applications, ${ticks.length} ticks, ${watchRuns.length} watcher runs for '${user}'`);

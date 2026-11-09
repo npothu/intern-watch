@@ -40,6 +40,7 @@ class FakeStore:
         # record of every resolved-config report the watcher pushed back
         self.watch_prefs: dict[str, dict | None] = {}
         self.watch_reports: list[tuple[str, dict]] = []
+        self.watch_runs: list[tuple[str, dict]] = []
 
     @property
     def writable(self) -> bool:
@@ -89,6 +90,9 @@ class FakeStore:
 
     def put_watch_report(self, user: str, report: dict) -> None:
         self.watch_reports.append((user, report))
+
+    def put_watch_run(self, user: str, run: dict) -> None:
+        self.watch_runs.append((user, run))
 
     def get_actions(self, user: str) -> dict | None:
         """The configured inbox, or None when mail sync is unavailable."""

@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from . import content_dedup, dashboard, ledger, recheck, seeding
+from . import content_dedup, dashboard, ledger, match_facts, recheck, seeding
 from . import prefs as prefs_mod
 from . import state as st
 from .adapters import make_adapter
@@ -536,7 +536,8 @@ def _jd_term_unwanted(uf: UserFilter, job: Job) -> bool:
     return job.terms_from_jd and not set(job.terms) & uf.terms_wanted
 
 
-def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
+def _finalize(uf: UserFilter, job: Job, facts: dict,
+              llm_termed: set[str] | None = None) -> tuple[Verdict, Job]:
     """Re-run the rule engine with LLM facts; returns the verdict and the Job
     it judged (what the caller should deliver).
 
@@ -547,7 +548,12 @@ def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
     a deep per-user copy, so another user who does want the JD term still
     accepts on it, whatever order users run in. A wanted JD term stands:
     the facts were asked for the company or metro, and a term cached from
-    another user's question must not move the job to a different season."""
+    another user's question must not move the job to a different season.
+
+    `llm_termed`, when given, collects the keys whose shared term was written
+    here from the LLM (display-only match facts; the Job object is shared
+    across users, so the set is run-scoped). The per-user copy is not
+    recorded there: a caller sees it as a returned Job that is not `job`."""
     if facts.get("term") and _jd_term_unwanted(uf, job):
         job = job.model_copy(deep=True, update={"terms": [facts["term"]],
                                                 "term_confidence": "inferred",
@@ -555,6 +561,8 @@ def _finalize(uf: UserFilter, job: Job, facts: dict) -> tuple[Verdict, Job]:
                                                 "terms_inferred": False})
     elif facts.get("term") and not job.terms:
         job.terms, job.term_confidence = [facts["term"]], "inferred"
+        if llm_termed is not None:
+            llm_termed.add(job.dedup_key)
     return uf.evaluate(job, llm_facts=facts), job
 
 
@@ -801,14 +809,19 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                  enricher: _JobrightEnricher | None = None,
                  resolver=None, store: TrackerStore | None = None,
                  listed: dict[str, Job] | None = None,
-                 held_canons: set[str] | None = None) -> None:
+                 held_canons: set[str] | None = None,
+                 llm_termed: set[str] | None = None) -> None:
     """`listed` (this run's deduped jobs by key) enables the recheck of
     still-listed rejected jobs; without it only `candidates` are judged.
     held_canons: canonical URLs of rows deferred over the JD cap this run.
     An accepted twin of one (e.g. the same posting via an aggregator, with no
     JD) is held pending too, so both spellings are decided together on the
-    run that has the JD instead of the twin racing ahead."""
+    run that has the JD instead of the twin racing ahead.
+    llm_termed: run-scoped keys whose shared term the LLM wrote (display-only
+    match facts)."""
     today = now.date()
+    if llm_termed is None:
+        llm_termed = set()
     # Settings > Watch (hosted store) overlays the yaml: terms window,
     # per-season presets, priority companies, remote, digest time/recipients.
     if store is None:
@@ -841,6 +854,11 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
     accepted: list[tuple[Job, list[str]]] = []
     llm_queue: list[Job] = []
     recheck_keys: set[str] = set()
+    # The LLM facts each accept's final evaluation ran with, and the keys
+    # whose term the LLM replaced on this user's own copy (display-only match
+    # facts; read after the decision, never fed back into it).
+    used_facts: dict[str, dict] = {}
+    user_llm_termed: set[str] = set()
 
     def _accept(job: Job, reasons: list[str]) -> None:
         if job.dedup_key in recheck_keys:
@@ -859,9 +877,12 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         else:  # ambiguous
             cached = _cached_facts(state, job, name)
             if _cache_covers(verdict.needs, cached):
-                final, judged = _finalize(uf, job, cached)
+                final, judged = _finalize(uf, job, cached, llm_termed)
                 if final.status == "accept":
                     _accept(_delivered(uf, judged), final.reasons)
+                    used_facts[job.dedup_key] = cached
+                    if judged is not job:
+                        user_llm_termed.add(job.dedup_key)
                 else:
                     recheck.record(state, uf, judged,
                                    recheck.stage_of(final, after_llm=True))
@@ -938,9 +959,12 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
                 continue
             st.llm_cache_put(state, job.dedup_key, facts)
             merged_facts = _cached_facts(state, job, name)
-            final, judged = _finalize(uf, job, merged_facts)
+            final, judged = _finalize(uf, job, merged_facts, llm_termed)
             if final.status == "accept":
                 _accept(_delivered(uf, judged), final.reasons)
+                used_facts[job.dedup_key] = merged_facts
+                if judged is not job:
+                    user_llm_termed.add(job.dedup_key)
             else:
                 recheck.record(state, uf, judged,
                                recheck.stage_of(final, after_llm=True))
@@ -1001,6 +1025,12 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             item = match_item(job, reasons, terms_order)
             if job.dedup_key in resume_paths:
                 item["resume"] = resume_paths[job.dedup_key]
+            item["facts"] = match_facts.build(
+                job, reasons, user=name, state=state, today=today,
+                llm_facts=used_facts.get(job.dedup_key),
+                llm_termed=(job.dedup_key in llm_termed
+                            or job.dedup_key in user_llm_termed),
+                elim_active_clearance=uf.elim_active_clearance)
             st.matches_add(state, name,
                            {**item, "added": now.date().isoformat(),
                             "applied": False})
@@ -1023,6 +1053,18 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
         store.put_watch_report(name, prefs_mod.watch_report(
             user_cfg, today, now, tracker, uf.legacy_rules,
             resolved=uf.priority_names))
+    if store is not None and not dry_run and user_cfg.get("dashboard"):
+        # One row per run for the header sparkline, gated like push_matches:
+        # its counts describe the matches table. Best-effort: a lost sparkline
+        # point never fails the run (state is saved by the caller either way).
+        run_row = {
+            "at": int(now.timestamp() * 1000),
+            "newMatches": len(accepted), "scanned": len(candidates),
+            "source": os.environ.get("GITHUB_EVENT_NAME") or "local"}
+        try:
+            store.put_watch_run(name, run_row)
+        except Exception:  # noqa: BLE001 - display-only history
+            log.exception("user %s: watch run record failed", name)
 
 
 MATCH_JD_CAP = 12    # watch-time JD acquisitions per run; backlog drains on cron
@@ -1143,8 +1185,8 @@ def _sync_dashboard(name: str, state: dict, dry_run: bool, now: dt.datetime,
                 saved = ledger.load_ledger(lpath)
                 saved[name] = book
                 ledger.save_ledger(saved, lpath)
-        store.push_matches(name, _matches_with_jds(store, state, name,
-                                                    user_cfg, resolver))
+        store.push_matches(name, match_facts.for_push(
+            state, _matches_with_jds(store, state, name, user_cfg, resolver)))
     except Exception:  # noqa: BLE001 - dashboard trouble never blocks delivery
         log.exception("user %s: dashboard update failed", name)
 
@@ -1276,6 +1318,8 @@ def _notify_email(user_cfg: dict, accepted: list[tuple[Job, list[str]]],
                   attachments=attachments, user=name):
         for item in items:
             st.mark_delivered(state, item["key"], name, item.get("url"))
+        st.matches_set_delivery(state, name, {it["key"] for it in items},
+                                "digest", now)
         st.outbox_clear(state, name)
         st.set_last_email(state, name, now)
         st.mark_health_alerted(state, name)
@@ -1321,6 +1365,8 @@ def _send_priority_alert(name: str, email_cfg: dict, alerts: list[dict],
                   user=name):
         for item in alerts:
             st.mark_delivered(state, item["key"], name, item.get("url"))
+        st.matches_set_delivery(state, name, {it["key"] for it in alerts},
+                                "immediate", now)
         st.outbox_remove(state, name, {it["key"] for it in alerts})
         log.info("user %s: priority alert emailed %d match(es) to %s", name,
                  len(alerts), to_addr)
@@ -1602,6 +1648,7 @@ def main(argv: list[str] | None = None) -> int:
     from .adapters.jobright_auth import JobrightSession
     resolver = JobrightSession.from_env()
     enricher = _JobrightEnricher(session=resolver)
+    llm_termed: set[str] = set()   # run-scoped: Job objects are shared
     for user_cfg in users:
         name = user_cfg["name"]
         candidates = list(new_jobs)
@@ -1638,7 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
             process_user(user_cfg, candidates, state, args.dry_run, now,
                          send_now=args.send_now, enricher=enricher,
                          resolver=resolver, listed=merged_by_key,
-                         held_canons=held)
+                         held_canons=held, llm_termed=llm_termed)
         except Exception:  # noqa: BLE001 - one user never blocks the others
             log.exception("user %s: processing failed", name)
     enricher.close()

@@ -13,7 +13,8 @@ Shape:
     }
   },
   "companies": {
-    "<norm_company>": {"top": {"example": true}, "judged": "2026-06-12"}
+    "<norm_company>": {"top": {"example": true}, "judged": "2026-06-12",
+                       "judged_by": {"example": "2026-06-12"}}
   },
   "url_index": {"<canonical_url>": "<dedup_key>"}   # cross-source identity join
 }
@@ -29,6 +30,11 @@ per-job judgments let the same employer flip verdicts between postings
 (Universal Creative true / Universal Orlando Resort false on the same day).
 Job entries from before this change may still carry a legacy "llm_top" key;
 it is no longer read or written.
+
+"judged" is employer-wide (the last write by ANY user) and drives pruning;
+"judged_by" holds the date each user's own verdict was written (display-only
+match facts read it via company_judged_get). Entries written before
+"judged_by" existed have no per-user date.
 """
 
 from __future__ import annotations
@@ -357,6 +363,17 @@ def company_top_put(state: dict, company: str, user: str, verdict: bool,
     e = state.setdefault("companies", {}).setdefault(norm, {"top": {}})
     e.setdefault("top", {})[user] = bool(verdict)
     e["judged"] = today.isoformat()
+    e.setdefault("judged_by", {})[user] = today.isoformat()
+
+
+def company_judged_get(state: dict, company: str, user: str) -> str | None:
+    """ISO date THIS user's verdict on the employer was written, or None.
+    Never falls back to the employer-wide "judged" date, which another
+    user's verdict may have set (entries from before "judged_by" -> None)."""
+    by = state.get("companies", {}).get(norm_company(company), {}) \
+        .get("judged_by")
+    judged = by.get(user) if isinstance(by, dict) else None
+    return judged if isinstance(judged, str) else None
 
 
 # Source health: consecutive-failure counters so a silently-broken source
@@ -496,6 +513,24 @@ def matches_set_dismissed(state: dict, user: str, hidden: set[str],
             item.pop("restored", None)
         elif item.pop("dismissed", None):
             item["restored"] = True
+
+
+def matches_set_delivery(state: dict, user: str, keys: set[str], mode: str,
+                         at: dt.datetime) -> int:
+    """Record on the user's match items how and when they were emailed
+    (`facts.delivery`, display-only). First delivery wins: a later send never
+    overwrites it. Returns how many items were stamped."""
+    stamp = at.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    n = 0
+    for item in state["matches"].get(user, []):
+        if item.get("key") not in keys:
+            continue
+        facts = item.setdefault("facts", {})
+        if "delivery" in facts:
+            continue
+        facts["delivery"] = {"mode": mode, "at": stamp}
+        n += 1
+    return n
 
 
 # Content-duplicate suppression: a per-user map of content signature ->
