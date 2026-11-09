@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import time
 from collections.abc import Callable
 
 import httpx
@@ -93,6 +94,7 @@ class AtsBoardsAdapter(Adapter):
         failures = 0
         for board in boards:
             path = f"{board['ats']}:{board['slug']}:{board['company']}"
+            started = time.monotonic()
             try:
                 lister = _LISTERS.get(board["ats"])
                 pages = (lister(client, board) if lister else
@@ -102,9 +104,14 @@ class AtsBoardsAdapter(Adapter):
                           for job in self.parse(raw, path, today)]
             except Exception as exc:  # noqa: BLE001 - one board never kills the source
                 failures += 1
-                log.warning("ats board %s/%s failed: %s",
-                            board["ats"], board["slug"], exc)
+                log.warning("ats board %s/%s failed after %.1fs: %s",
+                            board["ats"], board["slug"],
+                            time.monotonic() - started, exc)
                 continue
+            elapsed = time.monotonic() - started
+            if board["ats"] in _LISTERS:
+                log.info("ats board %s/%s: %d intern posting(s) in %.1fs",
+                         board["ats"], board["slug"], len(parsed), elapsed)
             self.fetched_boards[board_id(board)] = bool(board.get("backfill"))
             jobs.extend(parsed)
         log.info("source %s: %d intern postings from %d boards (%d failed)",

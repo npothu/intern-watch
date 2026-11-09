@@ -14,6 +14,7 @@ import datetime as dt
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -70,14 +71,18 @@ def fetch_all(sources: list[SourceConfig], state: dict, today: dt.date,
     with httpx.Client(headers=headers,
                       auth=GitHubTokenAuth(token) if token else None) as client:
         for cfg in sources:
+            started = time.monotonic()
             try:
                 adapter = make_adapter(cfg)
                 jobs = adapter.fetch(client, today)
             except Exception as exc:  # noqa: BLE001 - one source never kills the run
                 fails = st.record_source_failure(state, cfg.name, str(exc), today)
-                log.warning("source %s failed (%s) -- skipping, run continues "
-                            "(%d consecutive)", cfg.name, exc, fails)
+                log.warning("source %s failed after %.1fs (%s) -- skipping, run "
+                            "continues (%d consecutive)", cfg.name,
+                            time.monotonic() - started, exc, fails)
                 continue
+            log.info("source %s: %d row(s) in %.1fs", cfg.name, len(jobs),
+                     time.monotonic() - started)
             if not jobs and prev_counts.get(cfg.name, 0) > 0:
                 fails = st.record_source_failure(
                     state, cfg.name,
