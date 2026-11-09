@@ -1,0 +1,227 @@
+{
+ "status": 200,
+ "error": {
+  "message": "",
+  "body": ""
+ },
+ "data": {
+  "positions": [
+   {
+    "id": 1970393557053024,
+    "displayJobId": "200065202",
+    "name": "Research Intern - Coding Agents & Post-Training Optimization",
+    "locations": [
+     "United States, Washington, Redmond"
+    ],
+    "standardizedLocations": [
+     "Redmond, WA, US"
+    ],
+    "postedTs": 1793653203,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1793650950,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200065202",
+    "positionUrl": "/careers/job/1970393557053024"
+   },
+   {
+    "id": 1970393557039243,
+    "displayJobId": "200061531",
+    "name": "Research Intern - Agentic Graph Learning",
+    "locations": [
+     "United States, Washington, Redmond"
+    ],
+    "standardizedLocations": [
+     "Redmond, WA, US"
+    ],
+    "postedTs": 1791842452,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1791840705,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200061531",
+    "positionUrl": "/careers/job/1970393557039243"
+   },
+   {
+    "id": 1970393557051409,
+    "displayJobId": "200064977",
+    "name": "Research Intern - Office of Applied Research",
+    "locations": [
+     "United States, Washington, Redmond",
+     "United States, New York, New York"
+    ],
+    "standardizedLocations": [
+     "Redmond, WA, US",
+     "New York, NY, US"
+    ],
+    "postedTs": 1793396404,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1793394780,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200064977",
+    "positionUrl": "/careers/job/1970393557051409"
+   },
+   {
+    "id": 1970393556983221,
+    "displayJobId": "200052631",
+    "name": "Software Engineering Intern - CTJ - TS",
+    "locations": [
+     "United States, Washington, Redmond"
+    ],
+    "standardizedLocations": [
+     "Redmond, WA, US"
+    ],
+    "postedTs": 1789151907,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Software Engineering",
+    "creationTs": 1787942549,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200052631",
+    "positionUrl": "/careers/job/1970393556983221"
+   },
+   {
+    "id": 1970393556983223,
+    "displayJobId": "200052634",
+    "name": "Software Engineering Intern - CTJ - TS",
+    "locations": [
+     "United States, Virginia, Reston"
+    ],
+    "standardizedLocations": [
+     "Reston, VA, US"
+    ],
+    "postedTs": 1789151972,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Software Engineering",
+    "creationTs": 1787943004,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200052634",
+    "positionUrl": "/careers/job/1970393556983223"
+   },
+   {
+    "id": 1970393557040333,
+    "displayJobId": "200061710",
+    "name": "Research Intern - Machine Learning for Biology and Healthcare",
+    "locations": [
+     "United States, Massachusetts, Cambridge"
+    ],
+    "standardizedLocations": [
+     "Cambridge, MA, US"
+    ],
+    "postedTs": 1791917916,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1791915925,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200061710",
+    "positionUrl": "/careers/job/1970393557040333"
+   },
+   {
+    "id": 1970393557040502,
+    "displayJobId": "200061780",
+    "name": "Research Intern - Machine Learning and Statistics",
+    "locations": [
+     "United States, Massachusetts, Cambridge",
+     "United States, Washington, Redmond"
+    ],
+    "standardizedLocations": [
+     "Cambridge, MA, US",
+     "Redmond, WA, US"
+    ],
+    "postedTs": 1791935104,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1791933540,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200061780",
+    "positionUrl": "/careers/job/1970393557040502"
+   },
+   {
+    "id": 1970393557043754,
+    "displayJobId": "200062675",
+    "name": "Research Intern - Extended Perception Interaction Cognition (EPIC)",
+    "locations": [
+     "United States, Washington, Redmond"
+    ],
+    "standardizedLocations": [
+     "Redmond, WA, US"
+    ],
+    "postedTs": 1792446614,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1792445448,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200062675",
+    "positionUrl": "/careers/job/1970393557043754"
+   },
+   {
+    "id": 1970393557044765,
+    "displayJobId": "200063141",
+    "name": "Software Engineer: Security & Identity Intern Opportunities for University Students, Cambridge",
+    "locations": [
+     "United States, Massachusetts, Cambridge"
+    ],
+    "standardizedLocations": [
+     "Cambridge, MA, US"
+    ],
+    "postedTs": 1792622205,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Software Engineering",
+    "creationTs": 1792619693,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200063141",
+    "positionUrl": "/careers/job/1970393557044765"
+   },
+   {
+    "id": 1970393557043740,
+    "displayJobId": "200062674",
+    "name": "Senior Software Engineer",
+    "locations": [
+     "United States, Washington, Redmond"
+    ],
+    "standardizedLocations": [
+     "Redmond, WA, US"
+    ],
+    "postedTs": 1792446696,
+    "solrScore": null,
+    "stars": 0,
+    "department": "Research Sciences",
+    "creationTs": 1792444978,
+    "isHot": 0,
+    "workLocationOption": "onsite",
+    "locationFlexibility": null,
+    "atsJobId": "200062674",
+    "positionUrl": "/careers/job/1970393557043740"
+   }
+  ],
+  "count": 42
+ },
+ "metadata": null
+}

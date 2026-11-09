@@ -192,3 +192,25 @@ def test_classify_retries_transient_then_succeeds(monkeypatch):
     out = llm.classify([_job(key)], "", ["Fall 2026"], {"provider": "gemini"})
     assert state["n"] == 2
     assert out[key]["is_top_company"] is True
+
+
+def test_jd_derived_terms_are_not_sent_as_source_terms(monkeypatch):
+    """A term read from the JD is our own guess, which the LLM is asked to
+    second-guess: it must not reach the prompt as the source's data."""
+    import json as json_mod
+    prompts = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        prompts.append(json["contents"][0]["parts"][0]["text"])
+        body = {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]}
+        return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    from_jd, from_source = _job("jr:" + "c" * 24), _job("jr:" + "d" * 24)
+    from_jd.terms, from_jd.terms_from_jd = ["Fall 2027"], True
+    from_source.terms = ["Summer 2027"]
+    llm.classify([from_jd, from_source], "", ["Summer 2027"], {"provider": "gemini"})
+    jobs = json_mod.loads(prompts[0][prompts[0].index("["):prompts[0].rindex("]") + 1])
+    assert {j["dedup_key"]: j["source_terms"] for j in jobs} == {
+        from_jd.dedup_key: [], from_source.dedup_key: ["Summer 2027"]}

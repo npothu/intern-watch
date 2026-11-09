@@ -21,6 +21,7 @@ import httpx
 
 from .models import Job
 from .normalize import extract_jobright_id
+from .recheck import RECHECK_REASON
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,22 @@ def primary_term(job: Job, terms_order: list[str]) -> str:
     return job.terms[0] if job.terms else _UNKNOWN
 
 
+def display_term(job: Job, terms_order: list[str]) -> str:
+    """The term a snapshot or digest shows: primary_term, or "Unknown term"
+    for a job accepted while its JD-derived term was not wanted."""
+    return _UNKNOWN if job.term_display_unknown else primary_term(job, terms_order)
+
+
 def _tag(reasons: list[str]) -> str:
+    """Display tag. A re-evaluated rejection (recheck.RECHECK_REASON) adds
+    [RECHECK] after the regular tag, so delivery order is unchanged."""
+    base = _base_tag(reasons)
+    if RECHECK_REASON in reasons:
+        return f"{base}[RECHECK] "
+    return base
+
+
+def _base_tag(reasons: list[str]) -> str:
     if "company:priority" in reasons:
         return "[PRIORITY] "
     for r in reasons:
@@ -78,7 +94,7 @@ def build_digest(matches: list[tuple[Job, list[str]]], terms_order: list[str],
 
     groups: dict[str, list[tuple[Job, list[str]]]] = {}
     for job, reasons in matches:
-        groups.setdefault(primary_term(job, terms_order), []).append((job, reasons))
+        groups.setdefault(display_term(job, terms_order), []).append((job, reasons))
 
     order = [t for t in terms_order if t in groups] \
         + sorted(t for t in groups if t not in terms_order and t != _UNKNOWN) \
@@ -119,10 +135,12 @@ def outbox_item(job: Job, reasons: list[str], terms_order: list[str]) -> dict:
     item: dict = {
         "key": job.dedup_key, "company": job.company, "title": job.title,
         "location": loc, "salary": job.salary, "url": job.url,
-        "tag": _tag(reasons).strip(), "term": primary_term(job, terms_order)}
+        "tag": _tag(reasons).strip(), "term": display_term(job, terms_order)}
     if "company:priority" in reasons:
         # Only ever True; absent otherwise so older snapshots read the same.
         item["priority"] = True
+    if RECHECK_REASON in reasons:
+        item["recheck"] = True       # same convention as "priority"
     return item
 
 

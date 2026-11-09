@@ -46,7 +46,7 @@ from .paths import ROOT as ROOT
 KNOWN_TOP_LEVEL = {
     "name", "notify", "dashboard", "eliminate", "role_filter",
     "terms_wanted", "unknown_term_policy", "rules", "llm", "resume_llm",
-    "resume_build", "terms", "term_rules", "priority", "location",
+    "resume_build", "terms", "term_rules", "priority", "location", "recheck",
 }
 
 LLM_PROVIDERS = {"gemini", "anthropic"}
@@ -184,6 +184,7 @@ def validate_user(user: dict, label: str, *, root: Path,
 
     # 1b'. Rolling terms / per-season presets / priority block.
     _validate_watch_blocks(user, rep)
+    _validate_recheck(user, rep)
 
     # 1c. company_in_file paths under data/ must exist.
     for cif in _iter_company_in_file(user.get("rules")):
@@ -211,6 +212,34 @@ def validate_user(user: dict, label: str, *, root: Path,
                 f"             {name}: ${{{{ secrets.{name} }}}}")
 
     return rep
+
+
+def _validate_recheck(user: dict, rep: Report) -> None:
+    """`recheck: {daily_limit: int|null, per_run: int}` (src/recheck.py).
+    daily_limit null = unlimited, 0 = no recheck deliveries; per_run 0 =
+    no re-runs (both pause, the free re-fingerprint pass still runs)."""
+    if "recheck" not in user:
+        return
+    block = user["recheck"]
+    if not isinstance(block, dict):
+        rep.error("recheck must be a mapping {daily_limit, per_run}")
+        return
+    from .recheck import RECHECK_LIMIT_MAX
+    for key in block:
+        if key not in ("daily_limit", "per_run"):
+            rep.error(f"recheck.{key}: unknown key (have: daily_limit, "
+                      "per_run)")
+    for key in ("daily_limit", "per_run"):
+        if key not in block:
+            continue
+        value = block[key]
+        if value is None and key == "daily_limit":
+            continue   # null: no daily limit
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or not 0 <= value <= RECHECK_LIMIT_MAX):
+            rep.error(f"recheck.{key} must be an integer 0..{RECHECK_LIMIT_MAX}"
+                      + (" or null" if key == "daily_limit" else "")
+                      + f", got {value!r}")
 
 
 def _validate_watch_blocks(user: dict, rep: Report) -> None:
@@ -545,6 +574,24 @@ def env_store_report(watch_yml: Path) -> Report | None:
     return None
 
 
+def boards_report(code_root: Path, data_dir: Path) -> Report:
+    """data/ats_boards.yaml plus the instance overlay: every row pollable."""
+    from .adapters.ats_boards import board_problems, load_boards
+    rep = Report("data/ats_boards.yaml (+ data/ats_boards.local.yaml)")
+    if not (code_root / "data" / "ats_boards.yaml").exists():
+        rep.warn("no data/ats_boards.yaml: the ats-boards source has no boards")
+        return rep
+    try:
+        boards = load_boards("data/ats_boards.yaml", root=code_root,
+                             data_root=data_dir)
+    except (OSError, yaml.YAMLError, KeyError, TypeError) as exc:
+        rep.error(f"cannot load boards: {exc}")
+        return rep
+    for problem in board_problems(boards):
+        rep.error(problem)
+    return rep
+
+
 def check_configs(users_dir: Path, watch_yml: Path, *,
                   root: Path) -> tuple[list[Report], bool]:
     """Validate every watcher users/*.yaml. Returns (reports, all_passed)."""
@@ -588,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(env_path)
 
     reports, ok = check_configs(users_dir, watch_yml, root=code_root)
+    boards_rep = boards_report(code_root, data_dir)
+    ok = ok and boards_rep.ok
     store_rep = env_store_report(watch_yml)
     if store_rep is not None:
         ok = ok and store_rep.ok
@@ -595,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
         print(rep.render())
     if store_rep is not None:
         print(store_rep.render())
+    print(boards_rep.render())
     print()
     feats = check_features(users_dir, watch_yml, root=code_root)
     print(render_features(feats))
@@ -602,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
     if ok:
         print(f"config-check: PASS ({len(reports)} user(s))")
         return 0
-    checked = reports + ([store_rep] if store_rep is not None else [])
+    checked = reports + ([store_rep] if store_rep is not None else []) + [boards_rep]
     n_fail = sum(1 for r in checked if not r.ok)
     print(f"config-check: FAIL ({n_fail}/{len(checked)} check(s) failed)")
     return 1

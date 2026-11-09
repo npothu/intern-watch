@@ -118,6 +118,10 @@ export type MatchItem = {
   title: string;
   location: string;
   term: string;
+  /** How `term` was found: "explicit" / "inferred" from the posting,
+   *  "manual" when corrected through PATCH /matches/<short>. Absent on
+   *  rows written before it existed. */
+  termConfidence?: "explicit" | "inferred" | "unknown" | "manual";
   added: string;
   tag: string;
   salary: string;
@@ -218,6 +222,19 @@ export type TrackerUserData = {
 export async function getMatches(user: string): Promise<MatchItem[]> {
   const value = await post("query", "getMatches", { user });
   return (value as MatchItem[] | null) ?? [];
+}
+
+/** Fields PATCH /matches/<short> may correct (see convex/tracker.ts patchMatch). */
+export type MatchPatch = { term?: string | null };
+
+/** Store hand corrections for one match; the item comes back with them applied. */
+export async function patchMatch(
+  user: string,
+  short: string,
+  patch: MatchPatch
+): Promise<{ ok: boolean; reason?: string; error?: string; item?: MatchItem }> {
+  const value = await post("mutation", "patchMatch", { user, short, patch });
+  return value as { ok: boolean; reason?: string; error?: string; item?: MatchItem };
 }
 
 /** The user's applied/saved/hidden tick rows. */
@@ -452,15 +469,31 @@ export async function fetchBuildStatus(
   return value as BuildStatus;
 }
 
+/** Coverage-gap facts a manual add records (convex/ats_detect.ts). */
+export type IngestGap = {
+  ats?: string;
+  atsBoard?: string;
+  boardWatched?: boolean;
+  atsSupported?: boolean;
+  foundVia?: string;
+};
+
 /** Manual ingest: request a URL ingest. */
 export type IngestResponse =
-  | { ingestId: string; status: "fetching"; short: string }
+  | ({ ingestId: string; status: "fetching"; short: string } & IngestGap)
   | { ingestId: string; status: "already_exists"; short: string }
   // An earlier ingest of the same job is still running; follow it.
   | { ingestId: string; status: "in_progress"; short: string };
 
-/** Caller-supplied posting fields; see convex/ingest.ts requestIngest. */
-export type IngestManualFields = { jdText?: string; title?: string; company?: string; location?: string };
+/** Caller-supplied posting fields; see convex/ingest.ts requestIngest.
+ * `foundVia` is where the user found the link, for the coverage-gap report. */
+export type IngestManualFields = {
+  jdText?: string;
+  title?: string;
+  company?: string;
+  location?: string;
+  foundVia?: string;
+};
 
 export async function requestIngest(user: string, url: string, manual: IngestManualFields = {}): Promise<IngestResponse> {
   const value = await post("mutation", "requestIngest", { user, url, ...manual }, "ingest");
@@ -480,7 +513,7 @@ export type IngestRow = {
   dedupKey?: string;
   createdAt: number;
   updatedAt: number;
-};
+} & IngestGap;
 
 export async function getIngestStatus(user: string, ingestId: string, signal?: AbortSignal): Promise<IngestRow | null> {
   const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest", signal);

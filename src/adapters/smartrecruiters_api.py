@@ -2,7 +2,7 @@
 
 SmartRecruiters exposes an official, public, no-auth JSON API:
 
-  list:   https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset=0
+  list:   https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset=0&q=intern
   detail: https://api.smartrecruiters.com/v1/companies/{slug}/postings/{postingId}
 
 The list envelope is paged ({offset, limit, totalFound, content: [...]}); each
@@ -16,12 +16,43 @@ and Job construction stay in ats_boards.py.
 
 from __future__ import annotations
 
-from ..normalize import strip_html
+import json
+from urllib.parse import quote
 
+import httpx
+
+from ..normalize import strip_html
+from .listing_http import Pacer, page_cap, page_through, request_text
+
+PAGE_SIZE = 100
 LIST_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}/postings"
-            "?limit=100&offset=0")
+            "?limit=100&offset={offset}&q={query}")
+# Full-text queries (fuzzy, title + body). A big board (thousands of
+# postings) buries its interns past the first page of an unfiltered list, so
+# the board is searched once per query instead; the title-level INTERN_RE in
+# ats_boards still decides what is an internship.
+QUERIES = ("intern", "co-op")
 DETAIL_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}"
               "/postings/{posting_id}")
+
+
+def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
+    """Every page of each query, complete or IncompleteListing (a short
+    page before totalFound, repeated rows, or the board's page cap)."""
+    pacer = Pacer()
+    pages: list[str] = []
+    for query in QUERIES:
+        def fetch(offset: int, query: str = query) -> tuple[str, list[str], int]:
+            raw = request_text(client, pacer, LIST_URL.format(
+                slug=board["slug"], offset=offset, query=quote(query)))
+            data = json.loads(raw)
+            rows = data.get("content") or []
+            return (raw, [str(r.get("id") or "") for r in rows],
+                    int(data.get("totalFound") or 0))
+        pages += page_through(
+            fetch, page_size=PAGE_SIZE, cap=page_cap(board),
+            what=f"smartrecruiters/{board['slug']} q={query}").pages
+    return pages
 
 
 def posting_url(posting: dict, slug: str) -> str | None:
