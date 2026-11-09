@@ -51,7 +51,9 @@ async function post(
   kind: "query" | "mutation" | "action",
   fn: string,
   args: Record<string, unknown>,
-  module: string = "tracker"
+  module: string = "tracker",
+  // Aborts the request and its body read (callers with a deadline).
+  signal?: AbortSignal,
 ): Promise<unknown> {
   if (!CONVEX_URL) {
     throw new ConvexError("CONVEX_URL is not set (see web/.env.example)");
@@ -71,6 +73,7 @@ async function post(
         format: "json",
       }),
       cache: "no-store",
+      ...(signal ? { signal } : {}),
     });
   } catch (err) {
     throw new ConvexError(
@@ -127,6 +130,10 @@ export type MatchItem = {
   /** Set (only ever true) when the employer was on the user's priority
    *  list at match time; pins the row to the top of its term group. */
   priority?: boolean;
+  /** Set (only ever true) once the liveness probe has seen the posting gone
+   *  twice in a row. The probe never marks an applied row, but a row applied
+   *  after its mark keeps the flag - mask it with the applied state. */
+  closed?: boolean;
 };
 
 export type JobDescription = {
@@ -448,10 +455,15 @@ export async function fetchBuildStatus(
 /** Manual ingest: request a URL ingest. */
 export type IngestResponse =
   | { ingestId: string; status: "fetching"; short: string }
-  | { ingestId: string; status: "already_exists"; short: string };
+  | { ingestId: string; status: "already_exists"; short: string }
+  // An earlier ingest of the same job is still running; follow it.
+  | { ingestId: string; status: "in_progress"; short: string };
 
-export async function requestIngest(user: string, url: string): Promise<IngestResponse> {
-  const value = await post("mutation", "requestIngest", { user, url }, "ingest");
+/** Caller-supplied posting fields; see convex/ingest.ts requestIngest. */
+export type IngestManualFields = { jdText?: string; title?: string; company?: string; location?: string };
+
+export async function requestIngest(user: string, url: string, manual: IngestManualFields = {}): Promise<IngestResponse> {
+  const value = await post("mutation", "requestIngest", { user, url, ...manual }, "ingest");
   return value as IngestResponse;
 }
 
@@ -463,13 +475,15 @@ export type IngestRow = {
   canonicalUrl?: string;
   status: string;
   error?: string;
+  /** set on failed rows: "blocked" | "fetch_failed" */
+  errorCode?: string;
   dedupKey?: string;
   createdAt: number;
   updatedAt: number;
 };
 
-export async function getIngestStatus(user: string, ingestId: string): Promise<IngestRow | null> {
-  const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest");
+export async function getIngestStatus(user: string, ingestId: string, signal?: AbortSignal): Promise<IngestRow | null> {
+  const value = await post("query", "getIngestStatus", { user, ingestId }, "ingest", signal);
   return value as IngestRow | null;
 }
 

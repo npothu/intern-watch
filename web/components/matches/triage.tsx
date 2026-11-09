@@ -90,6 +90,7 @@ import type { ResumeMeta, TickWrite } from "@/lib/convex";
 import { MatchesTable, type BuildState, type MatchHandlers } from "./matches-table";
 import {
   COLLAPSE_MS,
+  ClosedBadge,
   CollapseShell,
   FOCUS_RING,
   blurOnPointerActivate,
@@ -100,6 +101,8 @@ import {
   STATUS_FILTERS,
   UNKNOWN_TERM,
   absoluteDate,
+  closedLast,
+  isClosed,
   composeFilters,
   cycleSort,
   defaultCompare,
@@ -179,7 +182,7 @@ function groupRows(rows: TriageRow[]): Group[] {
     groups.get(t)!.push(r);
   }
   for (const arr of groups.values()) {
-    arr.sort((a, b) => tierOf(a) - tierOf(b) || defaultCompare(a, b));
+    arr.sort((a, b) => closedLast(a, b) || tierOf(a) - tierOf(b) || defaultCompare(a, b));
   }
   const order = orderTerms(groups.keys());
   return [
@@ -1831,6 +1834,7 @@ function MobileCard({
                 pinnedTerm={pinned ? row.term : undefined}
                 wantedTerms={wantedTerms}
               />
+              {isClosed(row) && <ClosedBadge />}
               {saved && (
                 <Star
                   className="size-3 shrink-0 self-center text-amber"

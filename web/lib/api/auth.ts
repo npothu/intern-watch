@@ -12,7 +12,8 @@ const keysSchema = z.array(z.strictObject({
 export type ApiPrincipal = { user: string; access: "read" | "write" };
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  /** `details` ride along in the error body next to code and message. */
+  constructor(public status: number, public code: string, message: string, public details?: Record<string, unknown>) {
     super(message);
   }
 }

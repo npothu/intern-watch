@@ -1,0 +1,12 @@
+{
+ "url": "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-MO-St-Louis/Performance-Engineer-Intern--Systems-Software---Fall-2026_JR2015779",
+ "expect": "unknown",
+ "calls": [
+  {
+   "url": "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/job/US-MO-St-Louis/Performance-Engineer-Intern--Systems-Software---Fall-2026_JR2015779",
+   "status": 403,
+   "body": "{\"errorCode\":\"S22\",\"errorCaseId\":\"6356A5MW872CM0\",\"httpStatus\":403,\"message\":\"permission denied\",\"messageParams\":{}}"
+  }
+ ],
+ "recorded": "2026-11-08"
+}

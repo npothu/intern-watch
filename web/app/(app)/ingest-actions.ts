@@ -6,9 +6,12 @@ import {
   getIngestStatus as convexGetIngestStatus,
   type IngestRow,
 } from "@/lib/convex";
+import { withBackedShort } from "@/lib/ingest-short";
 
+// `short` only once a match backs it (lib/ingest-short.ts): an ingest that is
+// still fetching, or failed, has no match to point at.
 export type AddUrlResult =
-  | { ok: true; ingestId: string; short: string; status: string }
+  | { ok: true; ingestId: string; short?: string; status: string }
   | { ok: false; error: string };
 
 function validateUrlInput(raw: string): string | null {
@@ -45,7 +48,7 @@ export async function addJobUrl(url: string): Promise<AddUrlResult> {
     if (!res || typeof res.ingestId !== "string") {
       return { ok: false, error: "Couldn't start ingest — unexpected response." };
     }
-    return { ok: true, ingestId: res.ingestId, short: res.short, status: res.status };
+    return { ok: true, ...withBackedShort({ ingestId: res.ingestId, short: res.short, status: res.status }) };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     // Surface rate-limit and validation errors directly
@@ -56,12 +59,15 @@ export async function addJobUrl(url: string): Promise<AddUrlResult> {
   }
 }
 
-export async function getIngestStatusAction(ingestId: string): Promise<IngestRow | null> {
+export async function getIngestStatusAction(
+  ingestId: string,
+): Promise<(Omit<IngestRow, "short"> & { short?: string }) | null> {
   if (!ingestId || typeof ingestId !== "string") return null;
   const user = await resolveTrackerUser();
   if (!user) return null;
   try {
-    return await convexGetIngestStatus(user, ingestId);
+    const row = await convexGetIngestStatus(user, ingestId);
+    return row ? withBackedShort(row) : null;
   } catch {
     return null;
   }

@@ -1,0 +1,18 @@
+{
+ "url": "https://job-boards.greenhouse.io/robinhood/jobs/8142961",
+ "expect": "closed",
+ "calls": [
+  {
+   "url": "https://boards-api.greenhouse.io/v1/boards/robinhood/jobs/8142961",
+   "status": 404,
+   "body": "{\"status\":404,\"error\":\"Job not found\"}"
+  },
+  {
+   "url": "https://job-boards.greenhouse.io/robinhood/jobs/8142961",
+   "status": 200,
+   "finalUrl": "https://careers.robinhood.com/",
+   "body": "<!DOCTYPE html>\n<html >\n\n<head>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <meta name=\"format-detection\" content=\"telephone=no\">\n  <meta http-equiv=\"last-modified\" content=\"Tue, 18 Aug 2026 20:21:54 GMT\" />\n\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\" />\n<meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\" />\n<meta name=\"description\" content=\"At Robinhood, we believe that our financial markets should be accessible to everyone. We\u2019re leveling the playing field by making trading more intuitive, more affordable, and more inclusive-all to fulfill our mission of democratizing finance for all. \n\nAre you ready to be a part of it?\" />\n<meta name=\"keywords\" content=\"robinhood careers, robinhood jobs, fintech robinhood, robinhood hiring, robin hood job, robin hood jobs, work for robinhood\" />\n\n<link rel=\"canonical\" href=\"careers.robinhood.com\">\n\n<link rel=\"icon\" href=\"//v.fastcdn.co/u/62ba1c13/65631118-0-RH-Favicon---Neon.jpg\" type=\"image/jpeg\">\n<title>Robinhood Careers - Transform the Future of Finance</title>\n\n    <meta property=\"og:locale\" content=\"en_US\">\n<meta property=\"og:type\" content=\"article\">\n<meta property=\"og:title\" content=\"Robinhood is hiring! Join our team and help us democratize finance for all.\">\n<meta property=\"og:description\" content=\"Robinhood is hiring! Join our team and help us democratize finance for all.\">\n<meta property=\"og:site_name\" content=\"Robinhood is hiring! Join our team and help us democratize finance for all.\">\n<meta property=\"og:url\" content=\"https://careers.robinhood.com\">\n<meta property=\"og:image\" content=\"https://v.fastcdn.co/u/62ba1c13/65631119-0-Meta-Thumbnail-Icon.jpg\">\n<meta name=\"twitter:card\" content=\"summary\">\n<meta name=\"twitter:title\" content=\"Robinhood is hiring! Join our team and help us democratize finance for\">\n<meta name=\"twitter:description\" content=\"Robinhood is hiring! Join our team and help us democratize finance for all.\">\n<meta name=\"twitter:image\" content=\"https://v.fastcdn.co/u/62ba1c13/65631119-0-Meta-Thumbnail-Icon.jpg\">\n\n    \n\n    <link rel=\"preload\" as=\"script\" href=\"//g.fastcdn.co/js/utils.042e52fdda9ffe03e12f1.js\"></link>\n    <link rel=\"preload\" as=\"script\" href=\"//g.fastcdn.co/js/Cradle.f1224c5aaa5468ef89a11.js\"></link>\n    <link rel=\"preload\" as=\"script\" href=\"//g.fastcdn.co/js/UserConsent.7c79c2b93a2bbb59bb7a1.js\"></link>\n    <link rel=\"preload\" as=\"script\" href=\"//g.fastcdn.co/js/Popup.e2e360fa373b5a93e32a1.js\"></link>\n    <link rel=\"preconnect dns-prefetch\" href=\"https://fonts.gstatic.com\" crossorigin></link>\n    <link rel=\"preconnect dns-prefetch\" href=\"https://ec.instapagemetrics.com\" crossorigin></link>\n\n\n\n\n\n\n    <link rel=\"preload\" as=\"style\" href=\"https://fonts.googleapis.com/css?family=Open+Sans:300italic,400italic,600italic,700italic,800italic,400,300,600,700,800&display=swap\"/><link media=\"print\" onload=\"this.media='all'\" type=\"text/css\" rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Open+Sans:30"
+  }
+ ],
+ "recorded": "2026-11-08"
+}

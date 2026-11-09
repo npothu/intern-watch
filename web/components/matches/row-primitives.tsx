@@ -7,6 +7,23 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 
 export const COLLAPSE_MS = 300;
 
+/**
+ * The liveness probe saw this posting gone twice in a row (Workday/Greenhouse
+ * 404, Oracle empty, a "no longer accepting" page). The row stays - it may be
+ * a probe miss - but it reads as closed and sinks below the live rows. Used
+ * by the table's Company cell and the phone card.
+ */
+export function ClosedBadge() {
+  return (
+    <span
+      title="This posting looks closed: the job board no longer lists it."
+      className="ml-1.5 inline-block flex-none rounded-full bg-[color-mix(in_srgb,var(--color-amber)_13%,transparent)] px-1.5 py-[1px] align-[2px] text-[10.5px] font-medium leading-none text-amber"
+    >
+      closed
+    </span>
+  );
+}
+
 /* Ring that only a keyboard focus can earn, in the house accent. It replaces
    Chrome's UA `:focus-visible { outline: auto }`, which the base layer's
    `outline-ring/50` tints accent - that pairing is what painted the stuck

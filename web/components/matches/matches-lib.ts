@@ -214,9 +214,21 @@ export type Sort = { key: SortKey; dir: SortDir } | null;
 const companyOrder = (a: TriageRow, b: TriageRow) =>
   a.company.localeCompare(b.company, undefined, { sensitivity: "base" });
 
-/** Priority rows first, then newest `added`, then company name, then key. */
+/** The posting reads as closed: the liveness probe saw it gone twice, and
+ *  the row is not applied (an application outlives its posting). */
+export function isClosed(row: Pick<TriageRow, "closed" | "applied">): boolean {
+  return Boolean(row.closed) && !row.applied;
+}
+
+/** Closed rows sort after every live one. */
+export function closedLast(a: TriageRow, b: TriageRow): number {
+  return Number(isClosed(a)) - Number(isClosed(b));
+}
+
+/** Live before closed, then priority rows, newest `added`, company name, key. */
 export function defaultCompare(a: TriageRow, b: TriageRow): number {
   return (
+    closedLast(a, b) ||
     Number(Boolean(b.priority)) - Number(Boolean(a.priority)) ||
     (b.added || "").localeCompare(a.added || "") ||
     companyOrder(a, b) ||
@@ -351,6 +363,7 @@ export function worthKnowing(
   report?: Pick<ResumeReport, "jdSource"> | null
 ): string[] {
   const out: string[] = [];
+  if (isClosed(row)) out.push("The job board no longer lists this posting.");
   if (row.priority) out.push("Priority employer on your list.");
   if (!row.term) out.push("Term not stated in the posting.");
   if (tagText(row.tag) === "top") out.push("Tagged as a top company.");

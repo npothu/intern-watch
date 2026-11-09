@@ -3,10 +3,17 @@
 // Tier order (first hit wins), mirroring src/resume/jd_source.py — keep the
 // two in lockstep when adding an ATS or changing thresholds:
 //   1. ATS public JSON APIs (greenhouse / lever / ashby / smartrecruiters /
-//      workday CXS / workable) resolved from the URL shape — full-fidelity
-//      JD straight from the source, no scraping.
+//      workday CXS / workable / oracle CX / eightfold / apple) resolved from
+//      the URL shape — full-fidelity JD straight from the source, no
+//      scraping. Each is the unauthenticated endpoint the employer's own
+//      career page calls.
+//   1b. Oracle CX behind a custom domain (careers.<employer>.com/en/sites/
+//      <site>/job/<id>): the fetched page names its oraclecloud pod, which
+//      then answers the same REST feed.
 //   2. Embedded structured data on the fetched page (__NEXT_DATA__ / JSON-LD
-//      "description"), which carries the JD without nav/footer chrome.
+//      "description" / Phenom's phApp.ddo), which carries the JD without
+//      nav/footer chrome. iCIMS pages are fetched as their `?in_iframe=1`
+//      variant (pageFetchUrl), the frame that carries the JSON-LD.
 //   3. The stripped page body, gated by a plausibility check so JS debris
 //      never masquerades as a JD.
 // The LLM extraction tier (last resort) lives with the callers that have
@@ -22,14 +29,27 @@ export const JD_MAX_CHARS = 20_000; // full JD; tailor excerpts separately
 
 // -- text helpers -----------------------------------------------------------
 
+// Named entities seen in board payloads (Oracle/Eightfold JDs are full of
+// typographic ones). jd_source.py _JD_ENTITIES is the twin - keep the two
+// tables identical, they are what makes the TS and Python JD text match.
+const JD_ENTITIES: Record<string, string> = {
+  nbsp: " ", lt: "<", gt: ">", amp: "&", quot: '"', apos: "'",
+  rsquo: "\u2019", lsquo: "\u2018", rdquo: "\u201d", ldquo: "\u201c",
+  ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", bull: "\u2022",
+  middot: "\u00b7", copy: "\u00a9", reg: "\u00ae", trade: "\u2122",
+};
+
+// One pass: `&amp;lt;` becomes `&lt;`, which the caller's second pass
+// (double-escaped payloads) turns into `<`.
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, '"')
-    .replace(/&amp;/gi, "&"); // last: unlocks double-escaped payloads
+  return s.replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (whole, body: string) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return whole;
+      return code === 0xa0 ? " " : String.fromCodePoint(code);
+    }
+    return JD_ENTITIES[body.toLowerCase()] ?? whole;
+  });
 }
 
 export function stripJdHtml(s: string): string {
@@ -53,10 +73,11 @@ export function stripJdHtml(s: string): string {
     // means truncation, so drop from there to end-of-text.
     .replace(/<(script|style|noscript|svg)\b[\s\S]*$/gi, " ")
     .replace(/<[^>]*$/, " ")
-    .replace(/<(br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)>/gi, "\n")
+    .replace(/<(?:br|\/p|\/li|\/div|\/h[1-6]|\/ul|\/ol|\/tr)\s*\/?>/gi, "\n")
     .replace(/<li[^>]*>/gi, "\n- ")
     .replace(/<[^>]+>/g, " ")
     .replace(/[ \t]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -75,13 +96,70 @@ export function looksLikeJd(text: string): boolean {
 
 function ok(text: string | null | undefined): string | null {
   if (!text) return null;
-  const t = text.replace(/[ \t]+/g, " ").trim().slice(0, JD_MAX_CHARS);
+  // Spaces collapse; line breaks survive (jd_source.py _ok twin).
+  const t = text.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n")
+    .trim().slice(0, JD_MAX_CHARS);
   return t.length >= JD_MIN_CHARS ? t : null;
 }
 
 // -- tier 1: ATS public APIs ------------------------------------------------
 
-export type AtsApi = { kind: string; api: string };
+/** `company` when the host alone names the employer and the payload does not. */
+export type AtsApi = { kind: string; api: string; company?: string };
+
+/** Posting fields an ATS payload names outright. Ingest prefers these over
+ * page scraping: a JS-rendered shell's <title> is often the employer name. */
+export type JobMeta = { title?: string; company?: string; location?: string };
+
+// <pod>.fa.<dc>.oraclecloud.com and fa-<x>-saasfaprod1.fa.ocs.oraclecloud.com
+const ORACLE_HOST_RE = /^[a-z0-9-]+\.fa(?:\.[a-z0-9-]+)*\.oraclecloud\.com$/;
+// [/hcmUI/CandidateExperience]/<lang>[/sites/<site>]/job/<id>
+const ORACLE_PATH_RE =
+  /^(\/hcmUI\/CandidateExperience)?\/[a-z]{2}(?:[-_][A-Za-z]{2})?\/(?:sites\/([A-Za-z0-9_]+)\/)?(?:requisitions\/preview|job)\/(\d+)(?:\/|$)/;
+
+/** Oracle Recruiting Cloud's public requisition-detail feed. siteNumber is
+ * optional (the feed answers without it); only the quotes are escaped -
+ * the finder's `;` `,` `=` must stay literal. */
+export function oracleApiUrl(host: string, site: string | undefined, id: string): string {
+  const finder = `ById;Id=%22${id}%22${site ? `,siteNumber=${site}` : ""}`;
+  return `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails?expand=all&onlyData=true&finder=${finder}`;
+}
+
+/** Oracle CX served from a custom domain (careers.<employer>.com/en/sites/
+ * CX_1/job/<id>): the URL has the Oracle shape but not the pod host, which
+ * the fetched page names. Null unless both are present. */
+export function oracleApiFromPage(rawUrl: string, html: string): AtsApi | null {
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const m = u.pathname.match(ORACLE_PATH_RE);
+  if (!m || !m[2]) return null; // a custom domain always carries /sites/<site>/
+  const pod = html.match(/\b([a-z0-9-]+\.fa(?:\.[a-z0-9-]+)*\.oraclecloud\.com)\b/i)?.[1]?.toLowerCase();
+  if (!pod || !ORACLE_HOST_RE.test(pod)) return null;
+  return { kind: "oracle", api: oracleApiUrl(pod, m[2], m[3]) };
+}
+
+/** The URL whose HTML carries the posting. iCIMS wraps the JD in an iframe;
+ * the outer page is a ~0.5MB shell (past the fetch cap) without it, while
+ * `?in_iframe=1` is the small frame with the JSON-LD JobPosting. */
+export function pageFetchUrl(rawUrl: string): string {
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+  const host = u.hostname.toLowerCase();
+  if (host.endsWith(".icims.com") && /^\/jobs\/\d+(?:\/|$)/.test(u.pathname)
+      && u.searchParams.get("in_iframe") !== "1") {
+    u.searchParams.set("in_iframe", "1");
+    return u.toString();
+  }
+  return rawUrl;
+}
 
 /**
  * Map a job-posting URL to the ATS's public JSON endpoint for that posting.
@@ -151,7 +229,97 @@ export function atsApiUrl(rawUrl: string): AtsApi | null {
         api: `https://apply.workable.com/api/v1/accounts/${m[1]}/jobs/${m[2].toUpperCase()}`,
       };
   }
+  // <pod>.fa.<dc>.oraclecloud.com/hcmUI/CandidateExperience/<lang>[/sites/<site>]/job/<id>
+  if (ORACLE_HOST_RE.test(host)) {
+    const m = path.match(ORACLE_PATH_RE);
+    if (m && m[1]) return { kind: "oracle", api: oracleApiUrl(host, m[2], m[3]) };
+  }
+  // Eightfold: <org>.eightfold.ai/careers/job/<id> or /careers?pid=<id>, and
+  // Microsoft's apply.careers.microsoft.com (robots.txt allows /api/apply).
+  if (host.endsWith(".eightfold.ai") || host === "apply.careers.microsoft.com") {
+    const id = path.match(/^\/careers\/job\/(\d+)/)?.[1]
+      ?? (path === "/careers" ? u.searchParams.get("pid") : null);
+    if (id && /^\d+$/.test(id))
+      return {
+        kind: "eightfold",
+        api: `https://${host}/api/apply/v2/jobs/${id}`,
+        ...(host === "apply.careers.microsoft.com" ? { company: "Microsoft" } : {}),
+      };
+  }
+  // jobs.apple.com/<locale>/details/<id>[/<slug>]
+  if (host === "jobs.apple.com") {
+    const m = path.match(/^(?:\/[a-z]{2}-[a-z]{2})?\/details\/([A-Za-z0-9-]+)/i);
+    if (m) return { kind: "apple", api: `https://jobs.apple.com/api/v1/jobDetails/${m[1]}` };
+  }
   return null;
+}
+
+function str(x: unknown): string {
+  return typeof x === "string" ? x.trim() : "";
+}
+
+function joinSections(parts: [string, unknown][]): string {
+  return parts
+    .map(([heading, body]) => {
+      const text = stripJdHtml(str(body));
+      return text ? (heading ? `${heading}\n${text}` : text) : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function oracleItem(p: Record<string, unknown>): Record<string, unknown> | null {
+  const items = p.items as Record<string, unknown>[] | undefined;
+  return Array.isArray(items) && items[0] && typeof items[0] === "object" ? items[0] : null;
+}
+
+function appleRes(p: Record<string, unknown>): Record<string, unknown> {
+  return (p.res && typeof p.res === "object" ? p.res : p) as Record<string, unknown>;
+}
+
+/** Title / company / location named by an ATS payload (see JobMeta). */
+export function metaFromAtsPayload(kind: string, payload: unknown): JobMeta | null {
+  const p = payload as Record<string, unknown>;
+  if (!p || typeof p !== "object") return null;
+  let meta: JobMeta = {};
+  if (kind === "oracle") {
+    const it = oracleItem(p);
+    if (!it) return null;
+    meta = { title: str(it.Title), location: str(it.PrimaryLocation) };
+  } else if (kind === "eightfold") {
+    meta = { title: str(p.posting_name) || str(p.name), location: str(p.location) };
+  } else if (kind === "apple") {
+    const r = appleRes(p);
+    const loc = (r.locations as { name?: string }[] | undefined)?.[0];
+    meta = { title: str(r.postingTitle), company: "Apple", location: str(loc?.name) };
+  } else if (kind === "greenhouse") {
+    meta = {
+      title: str(p.title),
+      company: str(p.company_name),
+      location: str((p.location as { name?: string } | undefined)?.name),
+    };
+  } else if (kind === "lever") {
+    meta = { title: str(p.text), location: str((p.categories as { location?: string } | undefined)?.location) };
+  } else if (kind === "smartrecruiters") {
+    const loc = (p.location ?? {}) as { city?: string; region?: string; country?: string };
+    meta = {
+      title: str(p.name),
+      company: str((p.company as { name?: string } | undefined)?.name),
+      location: [loc.city, loc.region, loc.country?.toUpperCase()].map(str).filter(Boolean).join(", "),
+    };
+  } else if (kind === "workday") {
+    const info = (p.jobPostingInfo ?? {}) as { title?: string; location?: string };
+    meta = { title: str(info.title), location: str(info.location) };
+  } else if (kind === "workable") {
+    meta = { title: str(p.title) };
+  } else {
+    return null;
+  }
+  const out: JobMeta = {};
+  for (const [k, val] of Object.entries(meta) as [keyof JobMeta, string | undefined][]) {
+    if (val) out[k] = val;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** Pull the full JD text out of an ATS API's JSON payload. */
@@ -193,6 +361,27 @@ export function jdFromAtsPayload(kind: string, payload: unknown): string | null 
       .map((x) => stripJdHtml(String(x ?? "")));
     return ok(parts.join("\n\n"));
   }
+  if (kind === "oracle") {
+    const it = oracleItem(p);
+    if (!it) return null; // empty `items`: closed, or the wrong site
+    return ok(joinSections([
+      ["", it.ExternalDescriptionStr],
+      ["Responsibilities", it.ExternalResponsibilitiesStr],
+      ["Qualifications", it.ExternalQualificationsStr],
+    ]));
+  }
+  if (kind === "eightfold") {
+    return ok(stripJdHtml(str(p.job_description)));
+  }
+  if (kind === "apple") {
+    const r = appleRes(p);
+    return ok(joinSections([
+      ["Summary", r.jobSummary],
+      ["Description", r.description],
+      ["Minimum Qualifications", r.minimumQualifications],
+      ["Preferred Qualifications", r.preferredQualifications],
+    ]));
+  }
   return null;
 }
 
@@ -209,7 +398,47 @@ function walkDescriptions(obj: unknown, out: string[]): void {
   }
 }
 
+/** The balanced `{...}` object literal starting at `start` (string-aware). */
+function sliceJsonObject(s: string, start: number): string | null {
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return s.slice(start, i + 1);
+  }
+  return null;
+}
+
+/** Phenom career sites (careers.cisco.com and similar) server-render the
+ * posting into `phApp.ddo = {...}`: jobDetail.data.job carries the JD html
+ * plus title, companyName and location. */
+export function phenomJob(html: string): { text: string | null; meta: JobMeta | null } | null {
+  const at = html.search(/phApp\.ddo\s*=\s*\{/);
+  if (at < 0) return null;
+  const raw = sliceJsonObject(html, html.indexOf("{", at));
+  if (!raw) return null;
+  try {
+    const job = JSON.parse(raw)?.jobDetail?.data?.job;
+    if (!job || typeof job !== "object") return null;
+    const meta: JobMeta = {};
+    if (str(job.title)) meta.title = str(job.title);
+    if (str(job.companyName)) meta.company = str(job.companyName);
+    const loc = str(job.cityStateCountry) || str(job.location);
+    if (loc) meta.location = loc;
+    return { text: ok(stripJdHtml(str(job.description))), meta: Object.keys(meta).length ? meta : null };
+  } catch {
+    return null;
+  }
+}
+
 export function embeddedDescription(html: string): string | null {
+  const phenom = phenomJob(html);
+  if (phenom?.text) return phenom.text;
   const pats = [
     /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/g,
     /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
@@ -241,7 +470,24 @@ export type AcquireResult = {
   /** raw page HTML when a page was fetched but no tier accepted it — the
    * caller's LLM last-resort tier extracts from this. */
   html: string | null;
+  /** posting fields from an ATS payload or Phenom data, even when its JD
+   * text missed (ingest uses them when the page itself is a JS shell). */
+  meta?: JobMeta | null;
 };
+
+async function tryAts(
+  ats: AtsApi,
+  fetchText: (url: string) => Promise<string>,
+): Promise<{ text: string | null; meta: JobMeta | null }> {
+  try {
+    const payload = JSON.parse(await fetchText(ats.api));
+    let meta = metaFromAtsPayload(ats.kind, payload);
+    if (ats.company && !meta?.company) meta = { ...meta, company: ats.company };
+    return { text: jdFromAtsPayload(ats.kind, payload), meta };
+  } catch {
+    return { text: null, meta: null };
+  }
+}
 
 /**
  * Full acquisition chain for one URL. `fetchText` is injected so callers
@@ -253,32 +499,39 @@ export async function acquireJdFromUrl(
 ): Promise<AcquireResult> {
   if (!url) return { text: null, source: null, html: null };
 
+  let meta: JobMeta | null = null;
   const ats = atsApiUrl(url);
   if (ats) {
-    try {
-      const body = await fetchText(ats.api);
-      const text = jdFromAtsPayload(ats.kind, JSON.parse(body));
-      if (text) return { text, source: `ats:${ats.kind.split(":")[0]}`, html: null };
-    } catch {
-      // fall through to the page itself
-    }
+    const got = await tryAts(ats, fetchText);
+    meta = got.meta;
+    if (got.text) return { text: got.text, source: `ats:${ats.kind.split(":")[0]}`, html: null, meta };
+    // fall through to the page itself
   }
 
   let html = "";
   try {
-    html = await fetchText(url);
+    html = await fetchText(pageFetchUrl(url));
   } catch {
-    return { text: null, source: null, html: null };
+    return { text: null, source: null, html: null, meta };
   }
+  // Oracle CX on a custom domain: the page names its pod, whose REST feed
+  // carries the JD the JS shell never renders server-side.
+  const hinted = ats ? null : oracleApiFromPage(url, html);
+  if (hinted) {
+    const got = await tryAts(hinted, fetchText);
+    meta = got.meta ?? meta;
+    if (got.text) return { text: got.text, source: "ats:oracle", html, meta };
+  }
+  meta = meta ?? phenomJob(html)?.meta ?? null;
   // A page fetched via redirect may land on a supported ATS host even when
   // the original URL didn't look like one — no cheap way to see the final
   // URL through the injected fetch, so embedded data is the next tier.
   const embedded = embeddedDescription(html);
-  if (embedded) return { text: embedded, source: "embedded", html };
+  if (embedded) return { text: embedded, source: "embedded", html, meta };
 
   const body = ok(stripJdHtml(html));
-  if (body && looksLikeJd(body)) return { text: body, source: "scrape", html };
-  return { text: null, source: null, html };
+  if (body && looksLikeJd(body)) return { text: body, source: "scrape", html, meta };
+  return { text: null, source: null, html, meta };
 }
 
 // -- last-resort tier: LLM extraction (callers with model plumbing) ---------

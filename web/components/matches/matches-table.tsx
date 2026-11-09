@@ -9,11 +9,12 @@ import type { ResumeMeta } from "@/lib/convex";
 import type { TriageRow } from "@/app/(app)/page";
 import { ReferralLink } from "@/components/referrals/referral-link";
 import { DenseTable, type DenseColumn, type DenseSlot } from "./dense-table";
-import { CollapseShell, FOCUS_RING, blurOnPointerActivate } from "./row-primitives";
+import { ClosedBadge, CollapseShell, FOCUS_RING, blurOnPointerActivate } from "./row-primitives";
 import {
   UNKNOWN_TERM,
   absoluteDate,
   foundAge,
+  isClosed,
   isPrimaryTerm,
   reportSummary,
   rowStatus,
@@ -116,6 +117,7 @@ export function MatchesTable({
           <span className="truncate font-medium" title={r.company}>
             {r.company}
           </span>
+          {isClosed(r) && <ClosedBadge />}
         </span>
       ),
     },

@@ -78,9 +78,29 @@ export default defineSchema({
     pushedAt: v.number(),
     jobDescription: v.optional(v.string()),
     jobDescriptionUpdatedAt: v.optional(v.number()),
+    // Posting liveness (convex/liveness.ts, probed by the cron in
+    // liveness_probe.ts). Both optional so rows written before the probe
+    // existed - and every watcher push, which patches only the fields above -
+    // still validate and keep whatever the probe recorded. `livenessDueAt` is
+    // top-level only so it can be indexed: absent sorts first, so new rows are
+    // probed before re-checks. A closed mark is `liveness.closedAt` for
+    // `liveness.url`; a changed item.url makes it stale (see isClosed).
+    livenessDueAt: v.optional(v.number()),
+    liveness: v.optional(
+      v.object({
+        url: v.string(),
+        lastVerdict: v.union(v.literal("open"), v.literal("closed"), v.literal("unknown")),
+        reason: v.string(),
+        checkedAt: v.number(),
+        closedStreak: v.number(),
+        closedCountedAt: v.optional(v.number()),
+        closedAt: v.optional(v.number()),
+      }),
+    ),
   })
     .index("by_user_short", ["user", "short"])
-    .index("by_user", ["user"]),
+    .index("by_user", ["user"])
+    .index("by_liveness_due", ["livenessDueAt"]),
 
 // -- Gmail mail-sync ------------------------------------------------------
   //
@@ -378,6 +398,9 @@ export default defineSchema({
     canonicalUrl: v.optional(v.string()),
     status: v.string(),
     error: v.optional(v.string()),
+    // Why a failed ingest failed: "blocked" (bot wall / JS-only page) or
+    // "fetch_failed" (HTTP error, closed posting, network).
+    errorCode: v.optional(v.string()),
     dedupKey: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),

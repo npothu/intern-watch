@@ -1,0 +1,12 @@
+{
+ "url": "https://careers.ibm.com/en_US/careers/JobDetail?jobId=137269",
+ "expect": "unknown",
+ "calls": [
+  {
+   "url": "https://careers.ibm.com/en_US/careers/JobDetail?jobId=137269",
+   "status": 202,
+   "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"utf-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title></title>\n    <style>\n        body {\n            font-family: \"Arial\";\n        }\n    </style>\n    <script type=\"text/javascript\">\n    window.awsWafCookieDomainList = [];\n    window.gokuProps = {\n\"key\":\"AQIDAHjcYu/GjX+QlghicBgQ/7bFaQZ+m5FKCMDnO+vTbNg9\n<!-- trimmed: AWS WAF challenge -->"
+  }
+ ],
+ "recorded": "2026-11-08"
+}

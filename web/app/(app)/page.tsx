@@ -49,6 +49,9 @@ export type TriageRow = {
   saved: boolean;
   dismissed: boolean;
   hasJobDescription: boolean;
+  /** The liveness probe marked the posting closed (convex/liveness_probe.ts);
+   *  always false on applied rows. */
+  closed?: boolean;
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -73,6 +76,7 @@ export default async function AppPage() {
     const short =
       typeof m.short === "string" && m.short ? m.short : shortKey(m.key);
     const tick = ticksByShort.get(short);
+    const applied = tick?.applied ?? m.applied ?? false;
     return {
       key: str(m.key),
       short,
@@ -91,10 +95,12 @@ export default async function AppPage() {
       // linkable resume and is deliberately dropped.
       resumeUrl: data.resumes[short]?.url ?? null,
       resumeMeta: data.resumes[short] ?? null,
-      applied: tick?.applied ?? m.applied ?? false,
+      applied,
       saved: tick?.saved ?? m.saved ?? false,
       dismissed: tick?.dismissed ?? m.dismissed ?? false,
       hasJobDescription: m.hasJobDescription ?? false,
+      // An applied row is the user's call, not a dead link to warn about.
+      closed: m.closed === true && !applied,
     };
   });
 

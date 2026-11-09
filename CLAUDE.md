@@ -60,8 +60,19 @@ speedyapply, and `ats-boards` (direct Greenhouse/Lever/Ashby JSON APIs for
 `refresh-boards.yml`). Known coverage limits:
 - jobright's GitHub mirrors are a SUBSET of jobright.ai; some postings never
   appear in any repo. The full feed is auth-only and jobright's ToS
-  disallows crawling — this template only consumes the public GitHub mirrors
-  and public per-job JSON.
+  disallows crawling — the template never crawls it: it reads the public
+  GitHub mirrors and the public per-job JSON.
+- **Optional jobright login (operator's own account, at their own risk).**
+  When an instance sets the `JOBRIGHT_EMAIL` / `JOBRIGHT_PASSWORD` secrets,
+  the watcher logs in as that user (`src/adapters/jobright_auth.py`) and
+  makes at most 25 jobright requests per run (the login counts), only for
+  jobs it already has from the mirrors, to get the employer apply link and
+  the full JD. The session cookie is `state/jobright_session.json`, which is
+  gitignored and kept in the Actions cache, never committed with the rest of
+  `state/` - do not `git add` it. Unset, the public per-job page still
+  supplies the JD, but the employer link is not resolved, so digests keep the
+  jobright URL. This is a deliberate operator choice, not a credential leak;
+  keep the per-run cap and never use it to list or crawl jobs.
 - jobright README rows can be added and removed within ~5 hours (hence the
   2h cron), and repos retain only ~7 days.
 - Employers with proprietary ATSes have no ats-boards backstop.

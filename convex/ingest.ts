@@ -40,12 +40,31 @@ async function checkRateLimit(ctx: any, user: string) {
 // ---------------------------------------------------------------------------
 // Public mutation: requestIngest
 // ---------------------------------------------------------------------------
+// Caller-supplied posting fields. With jdText the JD is the caller's (it is
+// stored as a user override, like a pasted JD); title/company/location fill
+// in what a bot-walled or JS-only page cannot give. Bounds match the REST
+// schema (web/lib/api/endpoints.ts).
+const MANUAL_LIMITS = { jdText: 20_000, title: 300, company: 200, location: 300 } as const;
+export const manualArgs = {
+  jdText: v.optional(v.string()),
+  title: v.optional(v.string()),
+  company: v.optional(v.string()),
+  location: v.optional(v.string()),
+};
+
 export const requestIngest = mutation({
-  args: { user: v.string(), url: v.string(), secret: v.string() },
-  handler: async (ctx, { user, url, secret }) => {
+  args: { user: v.string(), url: v.string(), secret: v.string(), ...manualArgs },
+  handler: async (ctx, { user, url, secret, ...fields }) => {
     checkSecret(secret);
     // Validate and canonicalize
     validateUrl(url);
+    const manual: Record<string, string> = {};
+    for (const [k, limit] of Object.entries(MANUAL_LIMITS)) {
+      const val = (fields as Record<string, string | undefined>)[k]?.trim();
+      if (!val) continue;
+      if (val.length > limit) throw new Error(`invalid ${k}: longer than ${limit} characters`);
+      manual[k] = val;
+    }
     const canonical = canonicalUrl(url);
     const identity = postingIdentity(url) ?? canonical;
     const { dedupKey, short } = dedupInfoForUrl(canonical, url);
@@ -72,9 +91,10 @@ export const requestIngest = mutation({
       if (!sameJob || row.status === "failed") continue;
 
       // An in-flight ingest always blocks: it has no match yet by definition,
-      // and a second submit would race the first.
+      // and a second submit would race the first. It is not `already_exists`
+      // - no match backs its short yet - so the caller follows that ingest.
       if (row.status === "fetching" || row.status === "extracting") {
-        return { status: "already_exists" as const, short: row.short, ingestId: row._id };
+        return { status: "in_progress" as const, short: row.short, ingestId: row._id };
       }
 
       const match = await ctx.db
@@ -152,7 +172,9 @@ export const requestIngest = mutation({
       createdAt: now,
       updatedAt: now,
     });
-    await ctx.scheduler.runAfter(0, internal.ingest_node.runIngest, { user, ingestId });
+    await ctx.scheduler.runAfter(0, internal.ingest_node.runIngest, {
+      user, ingestId, ...(Object.keys(manual).length ? { manual } : {}),
+    });
     return { ingestId, status: "fetching" as const, short };
   },
 });
@@ -185,14 +207,16 @@ export const patchIngestInternal = internalMutation({
     ingestId: v.id("manualIngests"),
     status: v.optional(v.string()),
     error: v.optional(v.string()),
+    errorCode: v.optional(v.string()),
     dedupKey: v.optional(v.string()),
     short: v.optional(v.string()),
     canonicalUrl: v.optional(v.string()),
   },
-  handler: async (ctx, { ingestId, status, error, dedupKey, short, canonicalUrl: canon }) => {
+  handler: async (ctx, { ingestId, status, error, errorCode, dedupKey, short, canonicalUrl: canon }) => {
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (status !== undefined) patch.status = status;
     if (error !== undefined) patch.error = error;
+    if (errorCode !== undefined) patch.errorCode = errorCode;
     if (dedupKey !== undefined) patch.dedupKey = dedupKey;
     if (short !== undefined) patch.short = short;
     if (canon !== undefined) patch.canonicalUrl = canon;
@@ -206,8 +230,11 @@ export const upsertMatchInternal = internalMutation({
     short: v.string(),
     item: v.any(),
     jobDescription: v.optional(v.string()),
+    // The caller pasted this JD: store it as a user override, which a later
+    // automatic acquisition never replaces.
+    jobDescriptionIsManual: v.optional(v.boolean()),
   },
-  handler: async (ctx, { user, short, item, jobDescription }) => {
+  handler: async (ctx, { user, short, item, jobDescription, jobDescriptionIsManual }) => {
     let existing = await ctx.db
       .query("matches")
       .withIndex("by_user_short", (q: any) => q.eq("user", user).eq("short", short))
@@ -229,7 +256,10 @@ export const upsertMatchInternal = internalMutation({
     // A freshly acquired JD wins over an older auto-acquired one, but a
     // user-pasted override (which also stamps jobDescriptionUpdatedAt via
     // requestBuild) is never silently replaced by re-ingesting the URL.
-    if (jobDescription && !(existing?.jobDescriptionUpdatedAt && existing?.jobDescription)) {
+    if (jobDescription && jobDescriptionIsManual) {
+      row.jobDescription = jobDescription;
+      row.jobDescriptionUpdatedAt = Date.now();
+    } else if (jobDescription && !(existing?.jobDescriptionUpdatedAt && existing?.jobDescription)) {
       row.jobDescription = jobDescription;
     }
     if (existing) {

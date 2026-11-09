@@ -12,6 +12,7 @@ import {
   defaultCompare,
   foundAge,
   formatUrlState,
+  isClosed,
   isPrimaryTerm,
   orderTerms,
   parseUrlState,
@@ -424,5 +425,37 @@ describe("open row and unwatched terms", () => {
     expect(shorts(split.watched)).toEqual(["want", "none", "odd"]);
     expect(shorts(split.unwatched)).toEqual(["past"]);
     expect(splitUnwatched(rows, null).unwatched).toEqual([]);
+  });
+});
+
+describe("closed postings", () => {
+  test("a closed row sorts after live priority and live plain rows", () => {
+    const rows = [
+      row("closed", { company: "Aaa", added: "2026-11-08", priority: true, closed: true }),
+      row("live", { company: "Zzz", added: "2026-10-01" }),
+      row("prio", { company: "Mmm", added: "2026-10-01", priority: true }),
+    ];
+    expect(shorts(sortRows(rows, null))).toEqual(["prio", "live", "closed"]);
+  });
+  test("explicit sorts keep their key and tie-break through closed-last", () => {
+    const rows = [
+      row("closed", { company: "Acme", closed: true }),
+      row("live", { company: "Acme" }),
+      row("b", { company: "Beta" }),
+    ];
+    expect(shorts(sortRows(rows, { key: "company", dir: "asc" }))).toEqual(["live", "closed", "b"]);
+  });
+  test("an applied row is never closed", () => {
+    expect(isClosed({ closed: true, applied: false })).toBe(true);
+    expect(isClosed({ closed: true, applied: true })).toBe(false);
+    expect(isClosed({ closed: undefined, applied: false })).toBe(false);
+    const applied = row("a", { closed: true, applied: true });
+    expect(worthKnowing(applied)).toEqual([]);
+    expect(shorts(sortRows([applied, row("b", { company: "b" })], null))).toEqual(["a", "b"]);
+  });
+  test("worth knowing states the closed fact", () => {
+    expect(worthKnowing(row("c", { closed: true }))).toEqual([
+      "The job board no longer lists this posting.",
+    ]);
   });
 });
