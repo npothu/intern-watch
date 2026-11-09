@@ -7,7 +7,7 @@ unauthenticated REST feed -- the same one the page calls:
   list:   /hcmRestApi/resources/latest/recruitingCEJobRequisitions
             ?onlyData=true&expand=requisitionList.secondaryLocations
             &finder=findReqs;siteNumber=<site>,limit=..,offset=..,keyword=..,
-            sortBy=RELEVANCY
+            sortBy=POSTING_DATES_DESC
   detail: /hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails
             ?expand=all&onlyData=true&finder=ById;Id="<id>",siteNumber=<site>
 
@@ -36,13 +36,18 @@ from .listing_http import Pacer, iso_date, page_cap, page_through, request_text
 PAGE_SIZE = 100
 QUERIES = ("intern", "co-op")
 # The keyword search is fuzzy ("intern" also hits "Internal ..."), so totals
-# run to thousands on big pods (JPMorgan ~3,500): page to the stated total.
-DEFAULT_PAGES = 40
+# run to thousands on big pods (JPMorgan ~3,500 = 35 pages): page to the
+# stated total, with headroom; past 75% of the cap a warning is logged.
+DEFAULT_PAGES = 60
+# A stated TotalJobsCount can count a requisition the feed never lists (BNY:
+# 594 stated, 593 listed under every sort), so a query may finish this many
+# rows short and still count as complete.
+TOTAL_SLACK = 2
 _API = "https://{host}/hcmRestApi/resources/latest"
 LIST_URL = (_API + "/recruitingCEJobRequisitions?onlyData=true"
             "&expand=requisitionList.secondaryLocations"
             "&finder=findReqs;siteNumber={site},limit={limit},offset={offset},"
-            "keyword={query},sortBy=RELEVANCY")
+            "keyword={query},sortBy=POSTING_DATES_DESC")
 DETAIL_URL = (_API + "/recruitingCEJobRequisitionDetails?expand=all"
               "&onlyData=true&finder=ById;Id=%22{req_id}%22,siteNumber={site}")
 POSTING_URL = ("https://{host}/hcmUI/CandidateExperience/en/sites/{site}"
@@ -73,9 +78,11 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
             data = json.loads(raw)
             total = int(((data.get("items") or [{}])[0]).get("TotalJobsCount")
                         or 0)
-            return raw, [r.get("Title") or "" for r in _reqs(data)], total
-        pages += page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board, DEFAULT_PAGES),
-                              what=f"oracle/{board['slug']} q={query}")
+            return raw, [str(r.get("Id") or "") for r in _reqs(data)], total
+        pages += page_through(
+            fetch, page_size=PAGE_SIZE, cap=page_cap(board, DEFAULT_PAGES),
+            what=f"oracle/{board['slug']} q={query}",
+            slack=TOTAL_SLACK).pages
     return pages
 
 

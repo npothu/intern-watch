@@ -46,10 +46,11 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
                 host=host, query=quote(query), page=seen // PAGE_SIZE + 1,
                 limit=PAGE_SIZE))
             data = json.loads(raw)
-            return (raw, [j.get("title") or "" for j in _jobs(data)],
+            return (raw, [str(j.get("req_id") or j.get("slug") or "")
+                          for j in _jobs(data)],
                     int(data.get("totalCount") or 0))
         pages += page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board),
-                              what=f"jibe/{host} q={query}")
+                              what=f"jibe/{host} q={query}").pages
     return pages
 
 

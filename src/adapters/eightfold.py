@@ -23,12 +23,22 @@ from urllib.parse import quote
 import httpx
 
 from ..normalize import strip_html
-from .listing_http import Pacer, page_cap, page_through, request_text, spell_country
+from .listing_http import (
+    IncompleteListing,
+    Pacer,
+    page_cap,
+    page_through,
+    request_text,
+    spell_country,
+)
 
 QUERIES = ("intern", "co-op")
 DEFAULT_PAGES = 30
 PAGE_SIZE = 10        # fixed by the API (a num= parameter is ignored)
-SEARCH_URL = "https://{host}/api/pcsx/search?domain={domain}&query={query}&start={start}"
+# sort_by=timestamp: the default relevance order repeats rows across
+# non-adjacent pages (Micron: 163 rows, 155 distinct).
+SEARCH_URL = ("https://{host}/api/pcsx/search?domain={domain}&query={query}"
+              "&start={start}&sort_by=timestamp")
 DETAIL_URL = ("https://{host}/api/pcsx/position_details?position_id={pid}"
               "&domain={domain}&hl=en")
 POSTING_URL = "https://{host}/careers/job/{pid}"
@@ -57,9 +67,26 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
                 start=start))
             data = json.loads(raw)
             total = int((data.get("data") or {}).get("count") or 0)
-            return raw, [p.get("name") or "" for p in _positions(data)], total
-        pages += page_through(fetch, page_size=PAGE_SIZE, cap=cap,
-                              what=f"eightfold/{board['slug']} q={query}")
+            return (raw, [str(p.get("id") or "") for p in _positions(data)],
+                    total)
+        what = f"eightfold/{board['slug']} q={query}"
+        first = page_through(fetch, page_size=PAGE_SIZE, cap=cap, what=what,
+                             unique=False)
+        pages += first.pages
+        if first.total and len(first.ids) < first.total:
+            # Rows posted the same day tie on the timestamp and their order
+            # is unstable across pages: some repeat, others never show. A
+            # second pass shifted by half a page reads them (Micron: 158 +
+            # shifted pass = all 163).
+            second = page_through(fetch, page_size=PAGE_SIZE, cap=cap,
+                                  what=f"{what} (shifted)",
+                                  start=PAGE_SIZE // 2, unique=False)
+            pages += second.pages
+            found = len(first.ids | second.ids)
+            if found < max(first.total, second.total):
+                raise IncompleteListing(
+                    f"{what}: {found} distinct rows of {first.total} after a "
+                    "shifted second pass")
     return pages
 
 

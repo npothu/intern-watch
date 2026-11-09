@@ -38,7 +38,7 @@ DETAIL_URL = ("https://api.smartrecruiters.com/v1/companies/{slug}"
 
 def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     """Every page of each query, complete or IncompleteListing (a short
-    page before totalFound, or the board's page cap)."""
+    page before totalFound, repeated rows, or the board's page cap)."""
     pacer = Pacer()
     pages: list[str] = []
     for query in QUERIES:
@@ -47,10 +47,11 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
                 slug=board["slug"], offset=offset, query=quote(query)))
             data = json.loads(raw)
             rows = data.get("content") or []
-            return (raw, [r.get("name") or "" for r in rows],
+            return (raw, [str(r.get("id") or "") for r in rows],
                     int(data.get("totalFound") or 0))
-        pages += page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board),
-                              what=f"smartrecruiters/{board['slug']} q={query}")
+        pages += page_through(
+            fetch, page_size=PAGE_SIZE, cap=page_cap(board),
+            what=f"smartrecruiters/{board['slug']} q={query}").pages
     return pages
 
 

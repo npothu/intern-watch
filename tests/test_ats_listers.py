@@ -56,7 +56,7 @@ def test_pacer_sleeps_between_requests_not_before_first(no_sleep):
     assert no_sleep == [listing_http.REQUEST_DELAY] * 2
 
 
-def test_request_retries_once_on_429_then_raises(no_sleep):
+def test_request_retries_429_with_backoff_then_raises(no_sleep):
     hits = []
 
     def handler(req):
@@ -65,8 +65,47 @@ def test_request_retries_once_on_429_then_raises(no_sleep):
 
     with _client(handler) as c, pytest.raises(httpx.HTTPStatusError):
         listing_http.request_text(c, listing_http.Pacer(), "https://x.example/")
+    assert len(hits) == 1 + listing_http.RATE_LIMIT_RETRIES
+    assert no_sleep == [5.0, 10.0, 20.0]
+
+
+def test_request_honours_retry_after_then_succeeds(no_sleep):
+    answers = [httpx.Response(429, headers={"Retry-After": "7"}),
+               httpx.Response(429, headers={"Retry-After": "999"}),
+               httpx.Response(200, text="ok")]
+
+    with _client(lambda req: answers.pop(0)) as c:
+        assert listing_http.request_text(
+            c, listing_http.Pacer(), "https://x.example/") == "ok"
+    assert no_sleep == [7.0, listing_http.RETRY_AFTER_MAX]
+
+
+def test_request_5xx_gets_one_retry(no_sleep):
+    hits = []
+
+    def handler(req):
+        hits.append(1)
+        return httpx.Response(503)
+
+    with _client(handler) as c, pytest.raises(httpx.HTTPStatusError):
+        listing_http.request_text(c, listing_http.Pacer(), "https://x.example/")
     assert len(hits) == 2
-    assert listing_http.RETRY_DELAY in no_sleep
+
+
+def test_board_time_budget_stops_backoff(monkeypatch, no_sleep):
+    clock = {"t": 0.0}
+    monkeypatch.setattr(listing_http, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(listing_http, "sleep",
+                        lambda s: clock.__setitem__("t", clock["t"] + s))
+
+    def handler(req):
+        return httpx.Response(429, headers={"Retry-After": "60"})
+
+    pacer = listing_http.Pacer(budget=100)
+    with _client(handler) as c, pytest.raises(listing_http.IncompleteListing,
+                                              match="budget"):
+        listing_http.request_text(c, pacer, "https://x.example/")
+    assert clock["t"] == 60.0          # the second 60s wait would pass 100s
 
 
 def test_page_cap_override_and_garbage():
@@ -377,7 +416,8 @@ def test_ibm_posts_bounded_pages():
         bodies.append(body["from"])
         n = 100 if body["from"] == 0 else 20
         return httpx.Response(200, json={"hits": {"total": {"value": 120},
-                                                  "hits": [{}] * n}})
+                                                  "hits": [{"_id": f"{body['from']}-{i}"}
+                                                           for i in range(n)]}})
 
     from src.adapters import ibm_careers
     with _client(handler) as c:
@@ -424,9 +464,11 @@ def test_jibe_pages_by_page_number():
 
     def handler(req):
         asked.append((req.url.params["keywords"], req.url.params["page"]))
-        n = 100 if req.url.params["page"] == "1" else 5
+        page = int(req.url.params["page"])
+        n = 100 if page == 1 else 5
         return httpx.Response(200, json={"totalCount": 105, "jobs": [
-            {"data": {"req_id": str(i), "title": "Intern"}} for i in range(n)]})
+            {"data": {"req_id": str(page * 1000 + i), "title": "Intern"}}
+            for i in range(n)]})
 
     from src.adapters import jibe
     with _client(handler) as c:
@@ -690,7 +732,7 @@ def test_page_without_interns_is_not_the_end(ats):
     def handler(req):
         off = _offset(req, ats)
         offsets.append(off)
-        data = body(size if off < 2 * size else 1, 2 * size + 1, off)
+        data = body(size if off < 2 * size else 5, 2 * size + 5, off)
         if off == size:                  # a whole page of non-interns ...
             rows = (data.get("items", [{}])[0].get("requisitionList")
                     or (data.get("data") or {}).get("positions")
@@ -733,3 +775,95 @@ def test_incomplete_board_returns_no_rows_and_is_not_recorded(
     assert {j.company for j in jobs} == {"Acme"}
     assert set(adapter.fetched_boards) == {"smartrecruiters:acme"}
     assert all(j.board == "smartrecruiters:acme" for j in jobs)
+
+
+def _pager_fetch(pages_by_offset, total):
+    def fetch(offset):
+        ids = pages_by_offset.get(offset, [])
+        return json.dumps(ids), ids, total
+    return fetch
+
+
+def test_page_through_repeated_rows_under_total_raise():
+    # 3 pages of 2 reach the stated 5 in rows, but one id repeats
+    fetch = _pager_fetch({0: ["a", "b"], 2: ["c", "a"], 4: ["e"]}, 5)
+    with pytest.raises(listing_http.IncompleteListing, match="distinct"):
+        listing_http.page_through(fetch, page_size=2, cap=9, what="t")
+    got = listing_http.page_through(fetch, page_size=2, cap=9, what="t",
+                                    unique=False)
+    assert got.ids == {"a", "b", "c", "e"} and got.total == 5
+
+
+def test_page_through_slack_accepts_a_stated_total_the_feed_never_lists():
+    fetch = _pager_fetch({0: ["a", "b"], 2: ["c"]}, 4)
+    with pytest.raises(listing_http.IncompleteListing):
+        listing_http.page_through(fetch, page_size=2, cap=9, what="t")
+    got = listing_http.page_through(fetch, page_size=2, cap=9, what="t",
+                                    slack=1)
+    assert got.ids == {"a", "b", "c"}
+
+
+def test_page_through_warns_past_three_quarters_of_the_cap(caplog):
+    fetch = _pager_fetch({i: [str(i)] for i in range(4)}, 4)
+    with caplog.at_level("WARNING"):
+        listing_http.page_through(fetch, page_size=1, cap=5, what="board-x")
+    assert "board-x: used 4 of 5 pages" in caplog.text
+
+
+def test_eightfold_sorts_by_timestamp_and_recovers_tie_reorders():
+    from src.adapters import eightfold
+    total = 26                     # ids 0..25
+    # Unstable ties: the first pass (start 0) repeats 9 and 20 and never
+    # shows 10 or 15; the half-page-shifted pass (start 5) shows both.
+    first = {0: list(range(0, 10)),
+             10: [9] + list(range(11, 15)) + list(range(16, 21)),
+             20: [20] + list(range(21, 26))}
+    shifted = {5: list(range(5, 15)), 15: list(range(15, 25)), 25: [25]}
+    asked = []
+
+    def handler(req):
+        assert req.url.params["sort_by"] == "timestamp"
+        if req.url.params["query"] == "co-op":
+            return httpx.Response(200, json={"data": {"count": 0,
+                                                      "positions": []}})
+        start = int(req.url.params["start"])
+        asked.append(start)
+        ids = (first if start % 10 == 0 else shifted).get(start, [])
+        return httpx.Response(200, json={"data": {"count": total,
+                                                  "positions": [
+            {"id": i, "name": "Intern"} for i in ids]}})
+
+    with _client(handler) as c:
+        eightfold.fetch_pages(c, {"slug": MS_SLUG})
+    assert asked == [0, 10, 20, 5, 15, 25]
+
+
+def test_eightfold_still_short_after_shifted_pass_raises():
+    from src.adapters import eightfold
+
+    def handler(req):
+        start = int(req.url.params["start"])
+        ids = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] if start < 20 else [1]
+        return httpx.Response(200, json={"data": {"count": 21, "positions": [
+            {"id": i, "name": "Intern"} for i in ids]}})
+
+    with _client(handler) as c, pytest.raises(listing_http.IncompleteListing,
+                                              match="shifted"):
+        eightfold.fetch_pages(c, {"slug": MS_SLUG})
+
+
+def test_oracle_sorts_by_posting_date_and_tolerates_two_unlisted_rows():
+    from src.adapters import oracle_cx
+
+    def handler(req):
+        finder = req.url.params["finder"]
+        assert "sortBy=POSTING_DATES_DESC" in finder
+        off = int(finder.split("offset=")[1].split(",")[0])
+        n = 100 if off == 0 else 92
+        return httpx.Response(200, json={"items": [{
+            "TotalJobsCount": 194, "requisitionList": [
+                {"Id": str(off + i), "Title": "Intern"} for i in range(n)]}]})
+
+    with _client(handler) as c:
+        pages = oracle_cx.fetch_pages(c, {"slug": ORACLE_SLUG})
+    assert len(pages) == 4                     # 2 pages x 2 queries

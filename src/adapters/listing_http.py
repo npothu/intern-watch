@@ -6,35 +6,47 @@ one board costs several requests. These helpers keep that cheap and polite:
 
 - every request after the first waits REQUEST_DELAY seconds (sequential, never
   concurrent; one board's pages run back to back on the same host);
-- a 429 or 5xx gets ONE retry after RETRY_DELAY, then the error propagates so
-  the per-board try/except in ats_boards.fetch skips just that board;
+- a 429 is retried up to RATE_LIMIT_RETRIES times, honouring Retry-After
+  (else 5s, 10s, 20s); a 5xx gets one retry; every wait counts against the
+  board's BOARD_BUDGET seconds. Then the error propagates so the per-board
+  try/except in ats_boards.fetch skips just that board;
 - a listing is all or nothing: page_through returns only a COMPLETE paged
-  query and raises IncompleteListing on a short page or the page cap, so a
-  board never hands first-sight seeding a partial backlog;
+  query and raises IncompleteListing on a short page, repeated rows that
+  leave the distinct count under the total, the page cap or the time
+  budget, so a board never hands first-sight seeding a partial backlog. A
+  board past 75% of its page cap logs a warning first;
 - callers cap their own page count (MAX_PAGES unless a board row overrides
   it), so a misbehaving feed can never loop.
 
-`sleep` is module-level so tests can patch it out.
+`sleep` and `monotonic` are module-level so tests can patch them out.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 REQUEST_DELAY = 1.0   # seconds between requests to one board
-RETRY_DELAY = 5.0     # backoff before the single 429/5xx retry
+RETRY_DELAY = 5.0     # first backoff; doubles per 429 retry
+RATE_LIMIT_RETRIES = 3
+RETRY_AFTER_MAX = 60.0  # cap on an honoured Retry-After
+BOARD_BUDGET = 300.0  # seconds of waiting (pacing + backoff) per board
 TIMEOUT = 30.0
 MAX_PAGES = 5         # default per-query page cap
-PAGE_CAP_CEILING = 50  # hard ceiling on any max_pages override
+PAGE_CAP_CEILING = 100  # hard ceiling on any max_pages override
+CAP_WARN_FRACTION = 0.75
 
 sleep = time.sleep
+monotonic = time.monotonic
+log = logging.getLogger(__name__)
 
 # Title-level internship test shared by every board parser (and the listers'
 # relevancy-paging stop rule). Word-bounded: "Internal Audit" is not a hit.
@@ -77,37 +89,71 @@ def spell_country(raw: str, *, min_parts: int = 3) -> str:
 
 
 class Pacer:
-    """Sleeps `delay` (default REQUEST_DELAY; a host's robots.txt
-    crawl-delay when it names a longer one) before every request except the
-    first."""
+    """One board's request pacing and time budget. Sleeps `delay` (default
+    REQUEST_DELAY; a host's robots.txt crawl-delay when longer) before every
+    request except the first; `pause` sleeps for a backoff. Any wait that
+    would push the board past BOARD_BUDGET seconds raises IncompleteListing
+    instead, so one slow or rate-limited board cannot stall the run."""
 
-    def __init__(self, delay: float = REQUEST_DELAY) -> None:
+    def __init__(self, delay: float = REQUEST_DELAY,
+                 budget: float = BOARD_BUDGET) -> None:
         self._first = True
         self._delay = max(delay, REQUEST_DELAY)
+        self._budget = budget
+        self._start: float | None = None
+
+    def pause(self, seconds: float) -> None:
+        if self._start is None:
+            self._start = monotonic()
+        if monotonic() - self._start + seconds > self._budget:
+            raise IncompleteListing(
+                f"board time budget ({self._budget:.0f}s) exhausted")
+        sleep(seconds)
+        self._first = True          # the backoff already spaced the retry
 
     def wait(self) -> None:
         if not self._first:
-            sleep(self._delay)
+            self.pause(self._delay)
+        elif self._start is None:
+            self._start = monotonic()
         self._first = False
+
+
+def _retry_after(resp: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retry number `attempt` (1-based) of a 429:
+    the server's Retry-After (seconds form) when present, capped, else
+    exponential backoff from RETRY_DELAY."""
+    value = (resp.headers.get("Retry-After") or "").strip()
+    if value.isdigit():
+        return min(float(value), RETRY_AFTER_MAX)
+    return RETRY_DELAY * 2 ** (attempt - 1)
 
 
 def request_text(client: httpx.Client, pacer: Pacer, url: str, *,
                  body: Any = None) -> str:
     """GET (or POST `body` as JSON) and return the response text."""
-    for attempt in (1, 2):
+    rate_limited = 0
+    server_errors = 0
+    while True:
         pacer.wait()
         if body is None:
             resp = client.get(url, timeout=TIMEOUT, follow_redirects=True)
         else:
             resp = client.post(url, content=json.dumps(body), timeout=TIMEOUT,
                                headers={"Content-Type": "application/json"})
-        if attempt == 1 and (resp.status_code == 429
-                             or resp.status_code >= 500):
-            sleep(RETRY_DELAY)
+        if resp.status_code == 429 and rate_limited < RATE_LIMIT_RETRIES:
+            rate_limited += 1
+            wait = _retry_after(resp, rate_limited)
+            log.info("429 from %s; retry %d/%d in %.0fs", resp.url.host,
+                     rate_limited, RATE_LIMIT_RETRIES, wait)
+            pacer.pause(wait)
+            continue
+        if resp.status_code >= 500 and server_errors < 1:
+            server_errors += 1
+            pacer.pause(RETRY_DELAY)
             continue
         resp.raise_for_status()
         return resp.text
-    raise AssertionError("unreachable")  # pragma: no cover
 
 
 class IncompleteListing(RuntimeError):
@@ -118,30 +164,61 @@ class IncompleteListing(RuntimeError):
     seeded as the whole backlog and the unread rest delivered later as news."""
 
 
-def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
-                 page_size: int, cap: int, what: str) -> list[str]:
-    """Raw pages of one COMPLETE paged query, or IncompleteListing.
+@dataclass
+class Listing:
+    """One paged query: its raw pages, the distinct row ids read and the
+    feed's stated total (0 when it gives none)."""
 
-    fetch(offset) returns (raw page, the page's titles, the stated total --
+    pages: list[str]
+    ids: set[str]
+    total: int
+
+
+def page_through(fetch: Callable[[int], tuple[str, list[str], int]], *,
+                 page_size: int, cap: int, what: str, start: int = 0,
+                 unique: bool = True, slack: int = 0) -> Listing:
+    """One COMPLETE paged query, or IncompleteListing.
+
+    fetch(offset) returns (raw page, the page's row ids, the stated total --
     0 when the feed gives none). Complete means: the rows read reach the
     stated total, or (no total) a page shorter than page_size arrives. A
     short page before a stated total, or `cap` pages without finishing,
-    raises. A relevancy-sorted page with no intern title is NOT the end: on
-    a live Oracle board an intern title followed such a page."""
+    raises. With `unique` (the default) rows are counted by distinct id: a
+    feed that repeats rows across pages while dropping others (unstable
+    order among ties) reaches its total in rows but not in postings, and
+    raises too. A caller that can recover the missing rows (Eightfold: a
+    second, shifted pass) passes unique=False and checks the union itself.
+    `slack` lets a feed whose stated total counts rows it never lists
+    (Oracle: BNY states 594 and lists 593 under every sort) finish up to
+    that many rows short. A relevancy-sorted page with no intern title is
+    NOT the end: on a live Oracle board an intern title followed such a
+    page."""
     pages: list[str] = []
-    seen = 0
-    for _ in range(cap):
-        raw, titles, total = fetch(seen)
+    ids: set[str] = set()
+    seen = start
+    total = 0
+    for n in range(cap):
+        raw, row_ids, total = fetch(seen)
         pages.append(raw)
-        seen += len(titles)
-        if total and seen >= total:
-            return pages
-        if len(titles) < page_size:
+        ids.update(row_ids)
+        seen += len(row_ids)
+        done = bool(total and seen >= total - slack)
+        if not done and len(row_ids) < page_size:
             if total:
                 raise IncompleteListing(
-                    f"{what}: short page ({len(titles)} rows) at {seen} of "
+                    f"{what}: short page ({len(row_ids)} rows) at {seen} of "
                     f"{total}")
-            return pages
+            done = True
+        if done:
+            if n + 1 > cap * CAP_WARN_FRACTION:
+                log.warning("%s: used %d of %d pages; raise max_pages on its "
+                            "ats_boards.yaml row before it fails", what, n + 1,
+                            cap)
+            if unique and start == 0 and total and len(ids) < total - slack:
+                raise IncompleteListing(
+                    f"{what}: {len(ids)} distinct rows of {total} (the feed "
+                    "repeated rows across pages)")
+            return Listing(pages, ids, total)
     raise IncompleteListing(
         f"{what}: page cap {cap} reached at {seen} of {total or '?'} rows "
         "(raise max_pages on its ats_boards.yaml row)")

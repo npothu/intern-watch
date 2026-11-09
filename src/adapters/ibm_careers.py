@@ -79,10 +79,10 @@ def fetch_pages(client: httpx.Client, board: dict) -> list[str]:
     def fetch(offset: int) -> tuple[str, list[str], int]:
         raw = request_text(client, pacer, SEARCH_URL, body=query_body(offset))
         hits, total = _hits(json.loads(raw))
-        return (raw, [(h.get("_source") or {}).get("title") or ""
-                      for h in hits], total)
+        return (raw, [str(h.get("_id") or (h.get("_source") or {}).get("url")
+                          or "") for h in hits], total)
     return page_through(fetch, page_size=PAGE_SIZE, cap=page_cap(board),
-                        what="ibm/careers")
+                        what="ibm/careers").pages
 
 
 def rows(data: dict, slug: str) -> list[tuple]:
