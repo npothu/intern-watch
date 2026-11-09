@@ -46,7 +46,7 @@ from .paths import ROOT as ROOT
 KNOWN_TOP_LEVEL = {
     "name", "notify", "dashboard", "eliminate", "role_filter",
     "terms_wanted", "unknown_term_policy", "rules", "llm", "resume_llm",
-    "resume_build", "terms", "term_rules", "priority", "location",
+    "resume_build", "terms", "term_rules", "priority", "location", "recheck",
 }
 
 LLM_PROVIDERS = {"gemini", "anthropic"}
@@ -184,6 +184,7 @@ def validate_user(user: dict, label: str, *, root: Path,
 
     # 1b'. Rolling terms / per-season presets / priority block.
     _validate_watch_blocks(user, rep)
+    _validate_recheck(user, rep)
 
     # 1c. company_in_file paths under data/ must exist.
     for cif in _iter_company_in_file(user.get("rules")):
@@ -211,6 +212,34 @@ def validate_user(user: dict, label: str, *, root: Path,
                 f"             {name}: ${{{{ secrets.{name} }}}}")
 
     return rep
+
+
+def _validate_recheck(user: dict, rep: Report) -> None:
+    """`recheck: {daily_limit: int|null, per_run: int}` (src/recheck.py).
+    daily_limit null = unlimited, 0 = no recheck deliveries; per_run 0 =
+    no re-runs (both pause, the free re-fingerprint pass still runs)."""
+    if "recheck" not in user:
+        return
+    block = user["recheck"]
+    if not isinstance(block, dict):
+        rep.error("recheck must be a mapping {daily_limit, per_run}")
+        return
+    from .recheck import RECHECK_LIMIT_MAX
+    for key in block:
+        if key not in ("daily_limit", "per_run"):
+            rep.error(f"recheck.{key}: unknown key (have: daily_limit, "
+                      "per_run)")
+    for key in ("daily_limit", "per_run"):
+        if key not in block:
+            continue
+        value = block[key]
+        if value is None and key == "daily_limit":
+            continue   # null: no daily limit
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or not 0 <= value <= RECHECK_LIMIT_MAX):
+            rep.error(f"recheck.{key} must be an integer 0..{RECHECK_LIMIT_MAX}"
+                      + (" or null" if key == "daily_limit" else "")
+                      + f", got {value!r}")
 
 
 def _validate_watch_blocks(user: dict, rep: Report) -> None:

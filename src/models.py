@@ -24,6 +24,10 @@ class Job(BaseModel):
     # stage: one outside the wanted set is treated as unknown (LLM decides),
     # never as a term-not-wanted rejection. Transient, like `description`.
     terms_from_jd: bool = False
+    # Set by main.infer_terms_from_jds (JD body or URL slug); transient. A
+    # recheck keeps such a term on its record (src/recheck.py), since a
+    # later run's fresh Job may not carry it.
+    terms_inferred: bool = False
     # Set on the copy main._delivered hands out when a job was accepted
     # while its JD term was not wanted: the snapshot shows "Unknown term",
     # but `terms` keeps the JD guess so the content-dedup signature stays

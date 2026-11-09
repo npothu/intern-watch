@@ -21,6 +21,7 @@ import httpx
 
 from .models import Job
 from .normalize import extract_jobright_id
+from .recheck import RECHECK_REASON
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,15 @@ def display_term(job: Job, terms_order: list[str]) -> str:
 
 
 def _tag(reasons: list[str]) -> str:
+    """Display tag. A re-evaluated rejection (recheck.RECHECK_REASON) adds
+    [RECHECK] after the regular tag, so delivery order is unchanged."""
+    base = _base_tag(reasons)
+    if RECHECK_REASON in reasons:
+        return f"{base}[RECHECK] "
+    return base
+
+
+def _base_tag(reasons: list[str]) -> str:
     if "company:priority" in reasons:
         return "[PRIORITY] "
     for r in reasons:
@@ -129,6 +139,8 @@ def outbox_item(job: Job, reasons: list[str], terms_order: list[str]) -> dict:
     if "company:priority" in reasons:
         # Only ever True; absent otherwise so older snapshots read the same.
         item["priority"] = True
+    if RECHECK_REASON in reasons:
+        item["recheck"] = True       # same convention as "priority"
     return item
 
 
