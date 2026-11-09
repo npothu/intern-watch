@@ -52,6 +52,29 @@ describe("watchRuns", () => {
     expect(rows.map((r) => [r.user, r.newMatches]).sort()).toEqual([["u", 2], ["u", 4], ["v", 3]]);
   });
 
+  test("a run recorded with an `at` older than 7 days is pruned by its own record", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    const t = convexTest(schema);
+    await t.mutation(api.watchRuns.record, { user: "u", at: NOW - RETAIN_MS - HOUR, newMatches: 5, secret: SECRET });
+    expect(await t.run((ctx) => ctx.db.query("watchRuns").collect())).toEqual([]);
+    const wide = await t.query(api.watchRuns.recent, { user: "u", sinceMs: 0, secret: SECRET });
+    expect(wide).toEqual([]);
+  });
+
+  test("maintenance mode refuses record and recent and writes nothing", async () => {
+    const t = convexTest(schema);
+    process.env.TRACKER_MAINTENANCE = "1";
+    try {
+      await expect(
+        t.mutation(api.watchRuns.record, { user: "u", at: 1, newMatches: 0, secret: SECRET }),
+      ).rejects.toThrow(/maintenance/);
+      await expect(t.query(api.watchRuns.recent, { user: "u", secret: SECRET })).rejects.toThrow(/maintenance/);
+    } finally {
+      delete process.env.TRACKER_MAINTENANCE;
+    }
+    expect(await t.run((ctx) => ctx.db.query("watchRuns").collect())).toEqual([]);
+  });
+
   test("bad secret is refused", async () => {
     const t = convexTest(schema);
     await expect(

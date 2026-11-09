@@ -147,6 +147,26 @@ test("deleteUser removes only that user's rows and needs confirm + maintenance",
   expect(moved.remainingOnFrom).toBe(0);
 });
 
+test("watchRuns rows follow a rename and are removed by deleteUser", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("watchRuns", { user: "example", at: 1, newMatches: 2, scanned: 9, source: "schedule" });
+    await ctx.db.insert("watchRuns", { user: "example", at: 2, newMatches: 0 });
+    await ctx.db.insert("watchRuns", { user: "someone", at: 1, newMatches: 7 });
+  });
+  const r = await t.action(internal.migrations.renameUser, { from: "example", to: "nathan", dryRun: false });
+  expect(r.remainingOnFrom).toBe(0);
+  expect(r.moved).toMatchObject({ watchRuns: 2 });
+  const rows = await t.run((ctx) => ctx.db.query("watchRuns").collect());
+  expect(rows.map((row) => [row.user, row.at, row.newMatches]).sort()).toEqual([
+    ["nathan", 1, 2], ["nathan", 2, 0], ["someone", 1, 7],
+  ]);
+  const d = await t.action(internal.migrations.deleteUser, { user: "nathan", dryRun: false, confirm: "nathan" });
+  expect(d.remaining).toBe(0);
+  const left = await t.run((ctx) => ctx.db.query("watchRuns").collect());
+  expect(left.map((row) => row.user)).toEqual(["someone"]);
+});
+
 test("internal direct-request writes refuse during maintenance (gate passed before the switch)", async () => {
   const t = convexTest(schema);
   // Simulates a push whose public gate ran before maintenance started and whose
