@@ -835,6 +835,10 @@ def test_held_twin_is_decided_with_the_ats_jd_eliminations(
     # run 2: the ATS row is rejected by its JD, and the twin with it
     assert st.pending_keys(s2, "example") == set()
     assert not _delivered(s2, ka) and not _delivered(s2, kt)
+    # the twin's reject is fingerprinted like any reject, so a config change
+    # can recheck it (not seen-and-forgotten)
+    assert s2["jobs"][kt]["rj"]["example"].startswith("elim:")
+    assert s2["jobs"][ka]["rj"]["example"].startswith("elim:")
 
 
 def test_twin_takes_the_longest_jd_of_its_same_canon_rows():

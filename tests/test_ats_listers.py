@@ -937,3 +937,11 @@ def test_retry_after_http_date(monkeypatch):
     assert listing_http._retry_after(past, 1) == 0.0
     junk = httpx.Response(429, headers={"Retry-After": "soon"})
     assert listing_http._retry_after(junk, 2) == listing_http.RETRY_DELAY * 2
+
+
+def test_eightfold_rows_keep_id_zero():
+    from src.adapters import eightfold
+    data = {"data": {"positions": [{"id": 0, "name": "Intern"},
+                                   {"name": "No id"}]}}
+    out = eightfold.rows(data, MS_SLUG)
+    assert [r[1].rsplit("/", 1)[1] for r in out] == ["0"]

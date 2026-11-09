@@ -429,7 +429,8 @@ def _drop_url_dupes(state: dict, name: str,
 
 def _apply_twin_jds(uf: UserFilter, candidates: list[Job],
                     accepted: list[tuple[Job, list[str]]], name: str,
-                    today: dt.date) -> list[tuple[Job, list[str]]]:
+                    today: dt.date, state: dict | None = None,
+                    ) -> list[tuple[Job, list[str]]]:
     """An accepted job with no JD whose canonical URL matches a candidate of
     this run that has one (its ATS twin) takes that JD and is evaluated
     again, so the clearance / grad-only / unpaid lines that live only in the
@@ -454,6 +455,10 @@ def _apply_twin_jds(uf: UserFilter, candidates: list[Job],
             if verdict.status == "reject":
                 log.info("user %s: %s rejected with its twin's JD (%s)", name,
                          job.dedup_key, "; ".join(verdict.reasons))
+                if state is not None:
+                    # Like any reject: fingerprint it so a config change
+                    # can recheck it (src/recheck.py).
+                    recheck.record(state, uf, job, recheck.stage_of(verdict))
                 continue
         kept.append((job, reasons))
     return kept
@@ -958,7 +963,7 @@ def process_user(user_cfg: dict, candidates: list[Job], state: dict,
             else:
                 kept.append((job, reasons))
         accepted = kept
-    accepted = _apply_twin_jds(uf, candidates, accepted, name, today)
+    accepted = _apply_twin_jds(uf, candidates, accepted, name, today, state)
     accepted = _drop_url_dupes(state, name, accepted, terms_order, today)
     accepted = _drop_content_dupes(state, name, accepted, terms_order, today)
 

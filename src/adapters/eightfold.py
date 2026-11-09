@@ -96,7 +96,7 @@ def rows(data: dict, slug: str) -> list[tuple]:
     host, domain = split_slug(slug)
     out = []
     for p in _positions(data):
-        pid = str(p.get("id") or "").strip()
+        pid = "" if p.get("id") is None else str(p["id"]).strip()
         if not pid.isdigit():
             continue
         locs = p.get("standardizedLocations") or p.get("locations") or []
