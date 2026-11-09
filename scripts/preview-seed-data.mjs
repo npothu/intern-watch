@@ -47,7 +47,8 @@ const LEDGER = [
  */
 function factsFor(i, { added, location, priority }) {
   const source = SOURCES[i % SOURCES.length];
-  const facts = { source, sources: i % 4 === 2 ? [source, "jobright-swe"].sort() : [source] };
+  const sources = i % 4 === 2 ? [...new Set([source, "jobright-swe"])].sort() : [source];
+  const facts = { source, sources };
   if (source === "ats-boards" || source === "simplify") {
     const d = new Date(`${added}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() - 1 - (i % 3));

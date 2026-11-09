@@ -27,6 +27,14 @@ test("seed facts cover every detail-panel shape", () => {
   const { items, watchRuns } = buildPreviewSeed(sha1HexSync, { nowMs: Date.UTC(2026, 10, 9, 12) });
   const facts = items.map((i) => i.facts);
   expect(facts.every((f) => typeof f.source === "string" && f.acceptedBy)).toBe(true);
+  for (const f of facts) {
+    expect(new Set(f.sources).size).toBe(f.sources.length);
+    expect(f.sources).toContain(f.source);
+  }
+  // i % 4 === 2 rows whose own source is jobright-swe (i = 10, 30) would
+  // otherwise list it twice
+  expect(facts[10].source).toBe("jobright-swe");
+  expect(facts[10].sources).toEqual(["jobright-swe"]);
   const modes = new Set(facts.map((f) => f.delivery?.mode).filter(Boolean));
   expect(modes).toEqual(new Set(["immediate", "digest"]));
   expect(facts.some((f) => !f.delivery)).toBe(true);
