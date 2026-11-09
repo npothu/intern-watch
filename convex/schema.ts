@@ -370,6 +370,17 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_user", ["user"]),
 
+  // One row per watcher run per user (convex/watchRuns.ts), for the Matches
+  // header sparkline. Written by the Python watcher next to putWatchReport;
+  // record() keeps only the last RETAIN_MS (7 days) per user.
+  watchRuns: defineTable({
+    user: v.string(),
+    at: v.number(),          // run time, ms epoch
+    newMatches: v.number(),  // matches accepted for this user this run
+    scanned: v.optional(v.number()),  // candidate jobs evaluated
+    source: v.optional(v.string()),   // trigger, e.g. "schedule"
+  }).index("by_user_at", ["user", "at"]),
+
   // In-flight on-demand resume builds. A row is upserted to "building" when
   // requestBuild schedules runBuild; runBuild deletes it on success or patches
   // it to "failed" (with a truncated error) on failure. The hosted web app

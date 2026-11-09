@@ -59,6 +59,7 @@ export const USER_TABLES: ReadonlyArray<readonly [string, string, KeySpec]> = [
   ["referralContacts", "by_user", { kind: "none" }],
   ["referrals", "by_user", { kind: "none" }],
   ["referralNotes", "by_user", { kind: "none" }],
+  ["watchRuns", "by_user_at", { kind: "none" }],
 ] as const;
 
 const TABLE_NAMES = USER_TABLES.map(([t]) => t);
