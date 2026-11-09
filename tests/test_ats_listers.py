@@ -945,3 +945,9 @@ def test_eightfold_rows_keep_id_zero():
                                    {"name": "No id"}]}}
     out = eightfold.rows(data, MS_SLUG)
     assert [r[1].rsplit("/", 1)[1] for r in out] == ["0"]
+
+
+def test_ibm_query_breaks_score_ties_by_id():
+    from src.adapters import ibm_careers
+    assert ibm_careers.query_body(0)["sort"] == [{"_score": "desc"},
+                                                 {"_id": "asc"}]

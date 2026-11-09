@@ -60,7 +60,9 @@ def query_body(offset: int) -> dict:
             "filter": [{"term": {"field_keyword_18": "Internship"}}]}},
         "size": PAGE_SIZE,
         "from": offset,
-        "sort": [{"_score": "desc"}],
+        # _id breaks score ties: on _score alone equal-score hits reorder
+        # between pages (178 rows, 175 distinct), so page_through fails it.
+        "sort": [{"_score": "desc"}, {"_id": "asc"}],
         "lang": "zz",
         "_source": _SOURCE_FIELDS,
     }
