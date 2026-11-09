@@ -51,28 +51,15 @@ WATCHLIST_FILE = DATA_ROOT / "manual_watchlist.yaml"
 LEDGER_FILE = DATA_ROOT / "state" / "applications.json"
 
 
-# ATSes whose board slug is "<host>/<qualifier>" while posting identity is
-# per host: Oracle's req ids are per pod (every site of a pod lists the same
-# requisitions), Eightfold's per tenant host. A board on one of these counts
-# as watched when any polled board shares its host - its "scope".
-SCOPED_ATS = frozenset({"oracle", "eightfold"})
-
-
 @dataclasses.dataclass(frozen=True)
 class Board:
     ats: str
     # The identifier an ats_boards.yaml row would carry in `slug`; None when
     # the URL proves the ATS but not the board (a gh_jid on a custom domain).
     board: str | None
-    # For SCOPED_ATS: the host part of the board, set explicitly when the URL
-    # names the host but not the full slug (a bare <tenant>.eightfold.ai).
+    # Set only with board=None: the host a URL names when the full slug isn't
+    # in it (a bare <tenant>.eightfold.ai, whose slug adds a company domain).
     scope: str | None = None
-
-    @property
-    def watch_scope(self) -> str | None:
-        if self.ats not in SCOPED_ATS:
-            return None
-        return self.scope or (self.board.split("/", 1)[0] if self.board else None)
 
 
 # -- URL -> (ats, board) -----------------------------------------------------
@@ -274,21 +261,18 @@ def watched_board_ids(rows: Iterable[dict] | None = None) -> list[str]:
     return sorted({ats_boards.board_id(r) for r in rows if r.get("ats") and r.get("slug")})
 
 
-def _scopes(ids: Iterable[str]) -> set[str]:
-    """"ats:host" for every polled board on a SCOPED_ATS."""
-    out = set()
-    for bid in ids:
-        ats, _, slug = bid.partition(":")
-        if ats in SCOPED_ATS:
-            out.add(f"{ats}:{slug.split('/', 1)[0]}")
-    return out
-
-
-def is_watched(board: Board, ids: set[str], scopes: set[str]) -> bool:
-    if board.board and f"{board.ats}:{board.board.lower()}" in ids:
-        return True
-    scope = board.watch_scope
-    return scope is not None and f"{board.ats}:{scope.lower()}" in scopes
+def is_watched(board: Board, ids: set[str]) -> bool:
+    """Exact board match - a listing is per board (Oracle lists one site of a
+    pod, Eightfold one company domain of a host), so a sibling board on the
+    same host does not cover this one. The one exception: a URL that names
+    only its host (board None, scope set) is covered when exactly one polled
+    board sits on that host, since that board is the only listing it can be."""
+    if board.board:
+        return f"{board.ats}:{board.board.lower()}" in ids
+    if board.scope:
+        prefix = f"{board.ats}:{board.scope.lower()}/"
+        return sum(i.startswith(prefix) for i in ids) == 1
+    return False
 
 
 def supported_ats() -> list[str]:
@@ -387,7 +371,6 @@ def build_report(misses: list[Miss], rows: list[dict],
                  supported: set[str] | None = None) -> Report:
     supported = set(supported_ats()) if supported is None else supported
     ids = set(watched_board_ids(rows))
-    scopes = _scopes(ids)
     # An EU-hosted Greenhouse board also answers the US embed URL, but not the
     # US API the adapter polls - so a board seen on the EU host is EU.
     eu = {m.board.board.lower() for m in misses
@@ -398,7 +381,7 @@ def build_report(misses: list[Miss], rows: list[dict],
         board = m.board
         if board.ats == "greenhouse" and b in eu:
             board = Board("greenhouse-eu", board.board)
-        key = (board.ats, b if b is not None else (board.watch_scope or "").lower() or None)
+        key = (board.ats, b if b is not None else (board.scope or "").lower() or None)
         gap = groups.setdefault(key, Gap(board.ats, board.board, Counter(), [], board))
         gap.companies[m.company] += 1
         gap.misses.append(m)
@@ -406,7 +389,7 @@ def build_report(misses: list[Miss], rows: list[dict],
     for gap in groups.values():
         if gap.ats not in supported:
             rep.unsupported.append(gap)
-        elif is_watched(gap.sample, ids, scopes):
+        elif is_watched(gap.sample, ids):
             rep.configured.append(gap)
         elif gap.board is None:
             rep.unknown_board.append(gap)
@@ -496,7 +479,7 @@ def render_markdown(rep: Report, watch: list[dict], today: dt.date) -> str:
         lines += ["", "## Already watched, still added by hand", "",
                   "The board is configured, so the miss came from the intern-title "
                   "prefilter, a filter rejection, or a posting added before the board was.", ""]
-        lines += [f"- {g.ats}:{g.board or g.sample.watch_scope} ({g.company}) x{len(g.misses)}"
+        lines += [f"- {g.ats}:{g.board or g.sample.scope} ({g.company}) x{len(g.misses)}"
                   for g in rep.configured]
     lines += ["", "## Where the links came from", ""]
     lines += [f"- {via}: {n}" for via, n in rep.by_via.most_common()] or ["- (none)"]

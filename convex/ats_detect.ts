@@ -3,19 +3,9 @@
 // src/coverage.py; shared/ats-board-cases.json pins both to the same answers.
 // ATS names are the `ats:` values data/ats_boards.yaml uses.
 
-// `scope` (SCOPED_ATS only) is the host part of a board, set explicitly when
-// the URL names the host but not the whole slug (a bare <tenant>.eightfold.ai).
+// `scope` is set only with board null: the host a URL names when the full
+// slug isn't in it (a bare <tenant>.eightfold.ai, whose slug adds a domain).
 export type AtsBoard = { ats: string; board: string | null; scope?: string };
-
-// Oracle req ids are per pod and Eightfold's per tenant host, while their
-// board slugs are "<host>/<qualifier>": a board on one of these is watched
-// when any polled board shares its host. Mirrors SCOPED_ATS in src/coverage.py.
-const SCOPED_ATS = new Set(["oracle", "eightfold"]);
-
-function watchScope(b: AtsBoard): string | null {
-  if (!SCOPED_ATS.has(b.ats)) return null;
-  return b.scope ?? (b.board ? b.board.split("/")[0] : null);
-}
 
 type Rule = (host: string, path: string[], q: URLSearchParams) => AtsBoard | null;
 
@@ -160,19 +150,22 @@ export function boardId(b: AtsBoard): string | null {
 type CoverageReport = { watched_boards?: unknown; supported_ats?: unknown } | null | undefined;
 
 /** Whether a hand-added URL's board is one the watcher polls, given the
- * watcher's last report. undefined when that can't be said: no report yet,
- * or the URL names neither its board nor (for SCOPED_ATS) its host. */
+ * watcher's last report. Exact board match: a listing is per board (Oracle
+ * lists one site of a pod, Eightfold one domain of a host), so a sibling
+ * board on the same host doesn't cover it. A URL naming only its host
+ * counts as watched when exactly one polled board sits on that host.
+ * undefined when it can't be said: no report, or no board to compare.
+ * Mirrors is_watched in src/coverage.py. */
 export function isBoardWatched(b: AtsBoard | null, watchReport: unknown): boolean | undefined {
   const watched = (watchReport as CoverageReport)?.watched_boards;
   if (!b || !Array.isArray(watched)) return undefined;
   const id = boardId(b);
-  if (id && watched.includes(id)) return true;
-  const scope = watchScope(b);
-  if (scope) {
-    const prefix = `${b.ats}:${scope.toLowerCase()}/`;
-    if (watched.some((w) => typeof w === "string" && w.startsWith(prefix))) return true;
+  if (id) return watched.includes(id);
+  if (b.scope) {
+    const prefix = `${b.ats}:${b.scope.toLowerCase()}/`;
+    if (watched.filter((w) => typeof w === "string" && w.startsWith(prefix)).length === 1) return true;
   }
-  return id ? false : undefined;
+  return undefined;
 }
 
 /** Whether the ats-boards adapter can poll this ATS at all (so a yaml row

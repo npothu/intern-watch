@@ -24,14 +24,21 @@ describe("isBoardWatched", () => {
     expect(isBoardWatched({ ats: "workday", board: "acme/wd5/Careers_Acme" }, report)).toBe(true);
     expect(isBoardWatched({ ats: "greenhouse", board: "beta" }, report)).toBe(false);
   });
-  test("oracle and eightfold are watched by host", () => {
-    const r = { watched_boards: ["oracle:abcd.fa.us2.oraclecloud.com/cx_1", "eightfold:ngc.eightfold.ai/ngc.com"] };
-    expect(isBoardWatched(detectAtsBoard(
-      "https://abcd.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/1"), r)).toBe(true);
+  test("oracle needs its exact site; eightfold host-only only with one polled domain", () => {
+    const r = { watched_boards: [
+      "oracle:abcd.fa.us2.oraclecloud.com/cx_1",
+      "eightfold:ngc.eightfold.ai/ngc.com",
+      "eightfold:two.eightfold.ai/a.com", "eightfold:two.eightfold.ai/b.com",
+    ] };
+    const oracle = (site: string) => detectAtsBoard(
+      `https://abcd.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/${site}/job/1`);
+    expect(isBoardWatched(oracle("CX_1"), r)).toBe(true);
+    expect(isBoardWatched(oracle("CX"), r)).toBe(false); // sibling site of a polled pod
     expect(isBoardWatched(detectAtsBoard("https://ngc.eightfold.ai/careers/job/123456"), r)).toBe(true);
+    expect(isBoardWatched(detectAtsBoard("https://two.eightfold.ai/careers/job/123456"), r)).toBeUndefined();
     expect(isBoardWatched(detectAtsBoard("https://other.eightfold.ai/careers/job/123456"), r)).toBeUndefined();
-    expect(isBoardWatched(detectAtsBoard(
-      "https://zzzz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/2"), r)).toBe(false);
+    expect(isBoardWatched(detectAtsBoard("https://apply.careers.microsoft.com/careers/job/1970393556621237"),
+      { watched_boards: ["eightfold:apply.careers.microsoft.com/other.com"] })).toBe(false);
   });
   test("unknown without a report or a board", () => {
     expect(isBoardWatched({ ats: "greenhouse", board: "acme" }, null)).toBeUndefined();

@@ -111,20 +111,27 @@ def test_watched_ids_use_the_adapter_loader_and_board_id(tmp_path, monkeypatch):
     assert cov.watched_board_ids(rows) == ["greenhouse:a", "workday:w.wd1/ext"]
 
 
-def test_oracle_and_eightfold_count_as_watched_by_host():
+def test_oracle_needs_exact_site_eightfold_host_only_needs_one_domain():
+    # The Oracle lister filters by site and the Eightfold one by domain, so a
+    # sibling board on the same host is not coverage.
     rows = [{"company": "Acme", "ats": "oracle", "slug": "abcd.fa.us2.oraclecloud.com/CX_1"},
-            {"company": "Ngc", "ats": "eightfold", "slug": "ngc.eightfold.ai/ngc.com"}]
+            {"company": "Ngc", "ats": "eightfold", "slug": "ngc.eightfold.ai/ngc.com"},
+            {"company": "Two", "ats": "eightfold", "slug": "two.eightfold.ai/a.com"},
+            {"company": "Two", "ats": "eightfold", "slug": "two.eightfold.ai/b.com"}]
     book = {
-        "a": _rec("https://abcd.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/1"),
-        "b": _rec("https://ngc.eightfold.ai/careers/job/123456"),
-        "c": _rec("https://zzzz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/2"),
-        "d": _rec("https://other.eightfold.ai/careers/job/123456"),
+        "a": _rec("https://abcd.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/1"),
+        "b": _rec("https://abcd.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/2"),
+        "c": _rec("https://ngc.eightfold.ai/careers/job/123456"),
+        "d": _rec("https://two.eightfold.ai/careers/job/123456"),
+        "e": _rec("https://other.eightfold.ai/careers/job/123456"),
     }
     rep = cov.build_report(cov.collect_misses({"u": book}, {}), rows, {"oracle", "eightfold"})
-    assert sorted(g.ats for g in rep.configured) == ["eightfold", "oracle"]
+    assert sorted((g.ats, g.board or g.sample.scope) for g in rep.configured) == [
+        ("eightfold", "ngc.eightfold.ai"), ("oracle", "abcd.fa.us2.oraclecloud.com/CX_1")]
     assert cov.suggested_rows(rep) == [
-        {"company": "X", "ats": "oracle", "slug": "zzzz.fa.us2.oraclecloud.com/CX"}]
-    assert [g.sample.watch_scope for g in rep.unknown_board] == ["other.eightfold.ai"]
+        {"company": "X", "ats": "oracle", "slug": "abcd.fa.us2.oraclecloud.com/CX"}]
+    assert sorted(g.sample.scope or "" for g in rep.unknown_board) == [
+        "other.eightfold.ai", "two.eightfold.ai"]
 
 
 def test_vanity_host_maps_match_normalize_and_the_boards_file():
@@ -140,14 +147,12 @@ def test_vanity_host_maps_match_normalize_and_the_boards_file():
 
 def test_real_ledger_shapes_resolve_to_main_boards():
     ids = set(cov.watched_board_ids())
-    scopes = cov._scopes(ids)
     for url in ["https://careers.americanexpress.com/en/sites/CX_1/job/26012000",
-                "https://egug.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/1",
                 "https://generalmotors.wd5.myworkdayjobs.com/en-US/Careers_GM/job/x_JR-1",
                 "https://apply.careers.microsoft.com/careers/job/1970393556621237",
                 "https://careers.amd.com/careers-home/jobs/67890"]:
         hit = cov.detect(url)
-        assert hit and cov.is_watched(hit, ids, scopes), url
+        assert hit and cov.is_watched(hit, ids), url
 
 
 def test_failed_convex_ingests_count_as_misses():
