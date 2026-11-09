@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { PAGE_CONTAINER } from "@/lib/layout";
 import { utcDayIso } from "@/lib/headline";
+import { LoadedAt } from "@/components/loaded-at";
 import { Triage } from "@/components/matches/triage";
 import { MotionPreviewToggle } from "@/components/motion-preview";
 import type { TriageRow } from "@/app/(app)/page";
@@ -67,6 +68,7 @@ export default function MotionLabPage() {
   if (process.env.NODE_ENV === "production") notFound();
   return (
     <>
+      <LoadedAt />
       <div className={`${PAGE_CONTAINER} pt-5`}>
         <MotionPreviewToggle />
       </div>

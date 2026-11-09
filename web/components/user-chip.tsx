@@ -24,7 +24,8 @@ function initialsOf(first: string | null | undefined, last: string | null | unde
 
 /**
  * The signed-in user chip in the header: initials in a 24px circle plus the
- * Clerk first name (or the tracker user key) in a 36px pill. On phones
+ * Clerk first name (or the tracker user key) in a 36px pill, initials only
+ * below 1200px so the header keeps one row. On phones
  * (`compact`) it is the initials alone in a round button, and the menu also
  * carries what the phone header has no room for: the freshness readout and
  * its refresh, and the Settings link.
@@ -51,12 +52,13 @@ export function UserChip({
         <button
           data-slot="user-chip"
           type="button"
-          aria-label={compact ? `Account menu for ${label}` : undefined}
+          // A constant name: the visible first name hides below 1200px.
+          aria-label={`Account menu for ${label}`}
           className={cn(
             "inline-flex cursor-pointer items-center select-none transition-colors",
             compact
               ? "size-[34px] justify-center rounded-full bg-chip text-[11px] font-semibold text-ink hover:bg-line"
-              : "h-9 gap-2 rounded-full border border-line bg-surface py-[5px] pr-2.5 pl-[5px] text-[13px] text-ink hover:border-line-2"
+              : "h-9 gap-2 rounded-full border border-line bg-surface p-[5px] text-[13px] text-ink hover:border-line-2 min-[1200px]:pr-2.5"
           )}
         >
           {compact ? (
@@ -69,7 +71,7 @@ export function UserChip({
               >
                 {initials}
               </span>
-              <span className="max-w-[12ch] truncate">{label}</span>
+              <span className="hidden max-w-[12ch] truncate min-[1200px]:inline">{label}</span>
             </>
           )}
         </button>

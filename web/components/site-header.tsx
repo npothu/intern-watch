@@ -209,12 +209,14 @@ function Brand() {
 }
 
 /**
- * The design's search "input": really a button that opens the palette. At
- * 1400px and up it takes the design's flex 1 1 240px up to 420px; below that
- * it narrows (flex 1 1 200px, at most 320px, free to shrink) so the header
- * stays one row from 1024px.
+ * The design's search "input": really a button that opens the palette.
+ *   700-1023   the header's second row, full width
+ *   1024-1399  flex 1 1 200px, at most 320px, never under 200px
+ *   1400+      the design's flex 1 1 240px, up to 420px
+ * The label truncates and the keycap never shrinks, so the keycap always
+ * paints inside the box.
  */
-function SearchButton() {
+function SearchButton({ className }: { className?: string }) {
   return (
     <button
       type="button"
@@ -222,7 +224,12 @@ function SearchButton() {
       aria-label="Search or paste a URL"
       aria-haspopup="dialog"
       aria-keyshortcuts="Control+K Meta+K"
-      className="flex min-h-[38px] max-w-[320px] min-w-0 flex-[1_1_200px] cursor-pointer items-center justify-between gap-3 rounded-lg border border-line bg-surface py-2 pr-2.5 pl-3.5 text-left text-[13px] text-ink-2 transition-colors hover:border-line-2 focus-visible:border-accent focus-visible:outline-none min-[1400px]:max-w-[420px] min-[1400px]:flex-[1_1_240px]"
+      className={cn(
+        "flex min-h-[38px] w-full min-w-0 cursor-pointer items-center justify-between gap-3 overflow-hidden rounded-lg border border-line bg-surface py-2 pr-2.5 pl-3.5 text-left text-[13px] text-ink-2 transition-colors hover:border-line-2 focus-visible:border-accent focus-visible:outline-none",
+        "min-[1024px]:w-auto min-[1024px]:max-w-[320px] min-[1024px]:min-w-[200px] min-[1024px]:flex-[1_1_200px]",
+        "min-[1400px]:max-w-[420px] min-[1400px]:flex-[1_1_240px]",
+        className
+      )}
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <Search aria-hidden className="size-3.5 shrink-0" />
@@ -285,19 +292,23 @@ export function SiteHeader({
 
   return (
     <header className="relative bg-bg">
-      {/* Desktop and tablet: one row from 1024px (it may wrap between 700 and
-          1023), edge to edge. Below 1400 the gaps tighten, the search
-          narrows and Settings goes icon-only; below 1100 the freshness text
-          hides behind its refresh button's tooltip. */}
-      <div className="hidden flex-wrap items-center gap-x-4 gap-y-3 px-6 py-3 min-[700px]:flex min-[1024px]:flex-nowrap min-[1400px]:gap-x-6">
-        <div className="shrink-0 min-[1400px]:min-w-[140px]">
+      {/* Desktop and tablet, edge to edge, in deliberate bands:
+            700-1023   a two-row grid: brand, nav (scrolls sideways if it
+                       must) and the tools right-aligned; then the search
+                       button full width
+            1024+      one row; the search keeps at least 200px
+          Below 1200 the gaps are 12px, the freshness text hides behind its
+          refresh button's tooltip and the user chip is initials only; below
+          1400 Settings is icon-only. */}
+      <div className="hidden grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 px-6 py-3 min-[700px]:grid min-[1024px]:flex min-[1024px]:flex-nowrap min-[1200px]:gap-x-4 min-[1400px]:gap-x-6">
+        <div className="col-start-1 row-start-1 shrink-0 min-[1400px]:min-w-[140px]">
           <Brand />
         </div>
-        <AppNav className="shrink-0" />
-        <SearchButton />
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <AppNav className="no-scrollbar col-start-2 row-start-1 max-w-full shrink-0 justify-self-start overflow-x-auto" />
+        <SearchButton className="col-span-3 row-start-2" />
+        <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-2 justify-self-end min-[1024px]:ml-auto">
           <HealthDot health={health} />
-          <FreshnessReadout freshness={freshness} className="min-[1100px]:mr-1.5" />
+          <FreshnessReadout freshness={freshness} className="min-[1200px]:mr-1.5" />
           <ThemeToggle />
           <Link
             href="/settings"

@@ -41,15 +41,26 @@ function subscribeStamp(onChange: () => void): () => void {
   };
 }
 
-function setStamp(at: number) {
-  if (stamp === at) return;
-  stamp = at;
+function setStamp(next: number | null) {
+  if (stamp === next) return;
+  stamp = next;
   stampListeners.forEach((cb) => cb());
 }
 
-/** Publishes the mounted page's server-read time to the header readout. */
+/**
+ * Publishes the mounted page's server-read time to the header readout, and
+ * withdraws it on unmount, so a page without a stamp shows no time rather than
+ * the previous page's. (React runs the outgoing page's cleanup before the
+ * incoming page's effect in the same commit, and the equality guard keeps a
+ * late cleanup from erasing a newer stamp.)
+ */
 export function DataStamp({ at }: { at: number }) {
-  useEffect(() => setStamp(at), [at]);
+  useEffect(() => {
+    setStamp(at);
+    return () => {
+      if (stamp === at) setStamp(null);
+    };
+  }, [at]);
   return null;
 }
 
@@ -109,7 +120,7 @@ export function useFreshness(): Freshness {
 
 /**
  * The header's mono readout plus its refresh icon button. The text hides
- * below 1100px to keep the header on one row; the button's tooltip and name
+ * below 1200px to keep the header on one row; the button's tooltip and name
  * still carry the time.
  */
 export function FreshnessReadout({
@@ -126,7 +137,7 @@ export function FreshnessReadout({
       <span
         title={stale ? "data is older than one cron cycle - hit refresh" : undefined}
         className={cn(
-          "hidden font-mono text-[11px] tracking-[0.06em] whitespace-nowrap uppercase tabular-nums min-[1100px]:inline",
+          "hidden font-mono text-[11px] tracking-[0.06em] whitespace-nowrap uppercase tabular-nums min-[1200px]:inline",
           stale ? "font-medium text-amber" : "text-ink-2"
         )}
       >

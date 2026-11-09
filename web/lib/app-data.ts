@@ -23,10 +23,12 @@ import type { TriageRow } from "@/app/(app)/page";
  * The layout needs the Matches and Tracker counts on every screen (the header
  * nav), and the page needs the rows themselves. Each read is wrapped in
  * React's per-request `cache`, so on `/` the layout's count pass and the
- * page's render issue one set of Convex queries between them, not two. On the
- * other screens the layout pays for matches, ticks, ledger and settings -
- * there is no count-only query, and this PR does not add one to convex/ -
- * but not for resume URLs, which only the page reads.
+ * page's render issue one set of Convex queries between them, not two, and
+ * Referrals reads its matches and ledger through `loadCore` for the same
+ * reason. On the other screens the layout still pays for matches, ticks,
+ * ledger and settings - there is no count-only query, and this PR does not add
+ * one to convex/ - but it streams those counts instead of awaiting them, so
+ * the screen never waits on them; resume URLs only the page reads.
  */
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -91,6 +93,8 @@ export function toTriageRows(core: Core, resumes: ResumeUrls): TriageRow[] {
 export async function loadViewCounts(user: string): Promise<{ matches: number; tracker: number }> {
   const core = await loadCore(user);
   return {
+    // Unwatched terms hidden, as the list opens; a deep link that opens on an
+    // unwatched row makes Triage publish the larger count on mount instead.
     matches: liveMatchCount(toTriageRows(core, {}), core.prefs.wantedTerms, false),
     tracker: buildTrackerRows(core.ledger, core.matches, {}).length,
   };

@@ -66,6 +66,8 @@ const MAX_JUMPS = 6;
  * state in the layout and a header re-render on every surface mount, for a
  * value nothing renders. It is read
  * only inside event handlers, never during render, so it cannot tear.
+ * Dev only: a Fast Refresh of this module resets it to 0 while a surface
+ * palette is still mounted, so both palettes can answer until a reload.
  */
 let surfacePalettes = 0;
 
