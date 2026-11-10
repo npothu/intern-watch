@@ -9,7 +9,7 @@
 // the swipeable cards, grouped by term; a card's inline action row is the
 // same "open row" state. Both layouts are rendered and CSS picks one at
 // 700px. Pure logic - filter counts, sort, term codes, the
-// ?filter/?term/?sort/?open URL state - is matches-lib.ts.
+// ?filter/?show/?term/?sort/?open URL state - is matches-lib.ts.
 //
 //   cursor rail  one measured rail + wash over the table, sliding between
 //                rows in 150ms so a held j/k never outruns it
@@ -46,6 +46,7 @@ import {
   Mail,
   AlertTriangle,
   Users,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -70,9 +71,8 @@ import {
   CommandPalette,
   type PaletteAction,
 } from "@/components/command-palette";
-import { SegmentedPills, type PillOption } from "@/components/filter-pills";
 import { usePublishViewCount } from "@/components/nav/view-counts";
-import { composeMatchesHeadline, isAddedOn } from "@/lib/headline";
+import { composeNewToday } from "@/lib/headline";
 import { PAGE_WITH_DOCK } from "@/lib/layout";
 import {
   ResumeReportDialog,
@@ -87,6 +87,7 @@ import type { TriageRow } from "@/app/(app)/page";
 import { sortTerms } from "@/lib/terms";
 import type { ResumeMeta, TickWrite } from "@/lib/convex";
 import { MatchesTable, type BuildState, type MatchHandlers } from "./matches-table";
+import { MatchesToolbar, type TermOption } from "./matches-toolbar";
 import {
   COLLAPSE_MS,
   ClosedBadge,
@@ -96,8 +97,8 @@ import {
 } from "./row-primitives";
 import {
   ALL_TERMS,
+  DEFAULT_STAGE,
   DEFAULT_URL_STATE,
-  STATUS_FILTERS,
   UNKNOWN_TERM,
   absoluteDate,
   closedLast,
@@ -107,9 +108,11 @@ import {
   defaultCompare,
   formatUrlState,
   isPrimaryTerm,
+  isNewToday,
   isUnwatched,
-  liveMatchCount,
+  newTodayCount,
   orderTerms,
+  passesStage,
   resolveOpen,
   sortLabel,
   sortRows,
@@ -120,10 +123,22 @@ import {
   termOf,
   termShort,
   termSlug,
+  type Flag,
   type MatchesUrlState,
   type Sort,
-  type StatusFilter,
+  type Stage,
 } from "./matches-lib";
+
+/** The empty `kept` set, shared so resetting it does not re-run the filters. */
+const NO_SHORTS: ReadonlySet<string> = new Set();
+
+/** What an empty stage says when no chip, term or query is narrowing it. */
+const EMPTY_STAGE: Record<Stage, string> = {
+  todo: "Nothing left to apply to.",
+  applied: "Nothing marked applied yet.",
+  all: "No matches in the terms you are watching.",
+  hidden: "Nothing hidden.",
+};
 
 /** Page scroll increment when j/k runs off the end of the list (item 5). */
 const EDGE_SCROLL_PX = 180;
@@ -306,8 +321,9 @@ export function Triage({
    */
   demo?: boolean;
   /**
-   * The view to open on, from the page's `?filter=`, `?term=`, `?sort=` and
-   * `?open=` search params (matches-lib parseUrlState). `?filter=` exists so
+   * The view to open on, from the page's `?filter=` (the stage tab), `?show=`
+   * (the chips), `?term=`, `?sort=` and `?open=` search params (matches-lib
+   * parseUrlState). `?filter=` exists so
    * the command palette's "Show hidden" can reach the hidden list from the
    * tracker page; the rest let a link reproduce a view. Kept in sync with the
    * URL (replace, not push) as they change.
@@ -332,13 +348,25 @@ export function Triage({
   }
 
   // A row the link points at (?job= or ?open=) must be reachable: a hidden
-  // one opens the hidden list, and one in a term the preferences no longer
-  // want shows those terms. Nothing else about the view changes.
+  // one opens the hidden list, one the stage leaves out (an applied row,
+  // while the page opens on To apply) opens All, and one in a term the
+  // preferences no longer want shows those terms. Nothing else changes.
   const focusShort = initialSelected ?? initialView.open ?? undefined;
   const focusRow = initialRows.find((r) => r.short === focusShort);
-  const [filter, setFilter] = useState<StatusFilter>(() =>
-    focusRow?.dismissed ? "hidden" : initialView.filter
-  );
+  const [stage, setStage] = useState<Stage>(() => {
+    if (!focusRow || passesStage(focusRow, initialView.stage)) return initialView.stage;
+    return focusRow.dismissed ? "hidden" : "all";
+  });
+  const [flags, setFlags] = useState<Flag[]>(initialView.flags);
+  /* Rows a tick just moved out of the stage on screen (an applied tick in To
+     apply, an undone one in Applied). They stay in the list, counted under
+     their real stage, until the stage changes - so the tick's animation
+     plays and a misclick is undone where it was made. */
+  const [kept, setKept] = useState<ReadonlySet<string>>(NO_SHORTS);
+  function pickStage(next: Stage) {
+    setStage(next);
+    setKept(NO_SHORTS);
+  }
   const [showUnwatched, setShowUnwatched] = useState(
     () => !!focusRow && isUnwatched(focusRow, wantedTerms)
   );
@@ -540,40 +568,30 @@ export function Triage({
     [demo]
   );
 
-  /* Status pills x term pills x search (matches-lib composeFilters). Each
-     status pill is counted against the active term and query, each term pill
-     against the active status and query. Term pills come from the rows - the
-     wanted set rolls with the calendar. A stored term no longer on offer is
-     cleared from state (adjusting during render), so it cannot come back on
-     its own later. */
+  /* Stage x chips x term x search (matches-lib composeFilters). Every count
+     is what the list would show with that control picked and the rest
+     unchanged. Term options come from the rows - the wanted set rolls with
+     the calendar. A stored term no longer on offer is cleared from state
+     (adjusting during render), so it cannot come back on its own later. */
   const filtered = useMemo(
-    () => composeFilters(scoped, { filter, term: termFilter, query }),
-    [scoped, filter, termFilter, query]
+    () => composeFilters(scoped, { stage, flags, term: termFilter, query, todayIso, keep: kept }),
+    [scoped, stage, flags, termFilter, query, todayIso, kept]
   );
   const activeTerm = filtered.term;
   const visible = filtered.rows;
   if (termFilter !== activeTerm) setTermFilter(activeTerm);
 
-  const statusPills = useMemo<PillOption[]>(
-    () =>
-      STATUS_FILTERS.map((f) => ({
-        key: f.key,
-        // Sentence case for the segmented group ("To apply"); the keys and
-        // the lib's labels stay as they are.
-        label: f.label.charAt(0).toUpperCase() + f.label.slice(1),
-        count: filtered.statusCounts[f.key],
-      })),
-    [filtered]
-  );
-  const termPills = useMemo<PillOption[]>(
+  const termOptions = useMemo<TermOption[]>(
     () =>
       filtered.termCounts.map((t) => ({
         key: t.key,
-        label: t.key === ALL_TERMS ? "All terms" : termLabel(t.key),
+        label: t.key === ALL_TERMS ? "Any term" : termLabel(t.key),
         count: t.count,
       })),
     [filtered]
   );
+  /** A chip, a term or a query is narrowing the stage. */
+  const narrowed = flags.length > 0 || activeTerm !== ALL_TERMS || query.trim() !== "";
 
   /* Desktop: one flat list in the header's sort order. Phones keep the term
      groups (pinned Priority first). Both are rendered (CSS picks one); the
@@ -591,21 +609,27 @@ export function Triage({
   const activeOpen = resolveOpen(openShort, visible);
   if (openShort !== activeOpen) setOpenShort(null);
 
-  // The header nav's Matches count: live matches in the terms this list is
-  // showing, whatever the filters. The only publisher of it - the layout's
-  // server seed uses the same definition (matches-lib liveMatchCount).
-  const liveCount = useMemo(
-    () => liveMatchCount(rows, wantedTerms, showUnwatched),
-    [rows, wantedTerms, showUnwatched]
+  // The header nav's Matches badge and the "N new today" line: today's rows
+  // still to apply, in the terms this list is showing, whatever the filters.
+  // The only publisher of it - the layout's server seed uses the same
+  // definition (matches-lib newTodayCount).
+  const newToday = useMemo(
+    () => newTodayCount(rows, wantedTerms, showUnwatched, todayIso),
+    [rows, wantedTerms, showUnwatched, todayIso]
   );
-  usePublishViewCount("matches", liveCount);
+  const newTodayPriority = useMemo(
+    () => scoped.reduce((n, r) => (r.priority && isNewToday(r, todayIso) ? n + 1 : n), 0),
+    [scoped, todayIso]
+  );
+  usePublishViewCount("newMatches", newToday);
 
-  /* View state in the URL: ?filter= ?term= ?sort= ?open=, replacing the
+  /* View state in the URL: ?filter= ?show= ?term= ?sort= ?open=, replacing the
      history entry so filtering never piles up Back presses. Other params
      (view, job) ride along untouched. */
   useEffect(() => {
     const qs = formatUrlState(window.location.search, {
-      filter,
+      stage,
+      flags,
       term: activeTerm === ALL_TERMS ? null : termSlug(activeTerm),
       sort,
       open: activeOpen,
@@ -614,7 +638,7 @@ export function Triage({
     if (href !== `${window.location.pathname}${window.location.search}`) {
       window.history.replaceState(null, "", href);
     }
-  }, [filter, activeTerm, sort, activeOpen]);
+  }, [stage, flags, activeTerm, sort, activeOpen]);
 
   const cursorIndex = cursor ? ordered.findIndex((r) => r.short === cursor) : -1;
   const currentRow = cursorIndex >= 0 ? ordered[cursorIndex] : null;
@@ -846,7 +870,7 @@ export function Triage({
 
   function restoreShort(short: string) {
     // In the hidden list a restored row leaves it, like a hide elsewhere.
-    if (filter === "hidden") {
+    if (stage === "hidden") {
       const i = ordered.findIndex((r) => r.short === short);
       const next = ordered[i + 1] || ordered[i - 1];
       if (openShort === short) setOpenShort(null);
@@ -861,6 +885,8 @@ export function Triage({
     if (!r) return;
     const value = !r.applied;
     if (value) flashTick(short, "a"); // 1a: pop + checkdraw only on toggle-ON
+    // The tick moves the row to the other stage; keep it on screen here.
+    if (stage === "todo" || stage === "applied") setKept((prev) => new Set(prev).add(short));
     updateRow(short, { applied: value });
     void persistTicks([{ short, field: "applied", value }]).catch(() => {
       updateRow(short, { applied: r.applied });
@@ -1086,13 +1112,13 @@ export function Triage({
         navigate(-1);
       } else if (k === "ArrowLeft" || k === "ArrowRight") {
         e.preventDefault();
-        if (termPills.length) {
-          const idx = termPills.findIndex((p) => p.key === activeTerm);
+        if (termOptions.length) {
+          const idx = termOptions.findIndex((p) => p.key === activeTerm);
           const cur = idx >= 0 ? idx : 0;
           const delta = k === "ArrowRight" ? 1 : -1;
           const next =
-            (cur + delta + termPills.length) % termPills.length;
-          setTermFilter(termPills[next].key);
+            (cur + delta + termOptions.length) % termOptions.length;
+          setTermFilter(termOptions[next].key);
         }
       } else if (k === "/") {
         e.preventDefault();
@@ -1145,10 +1171,16 @@ export function Triage({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /** Drops the chips, the term and the query. The stage is not a filter -
+   *  one is always on - so it stays. */
   function clearFilters() {
-    setFilter("all");
+    setFlags([]);
     setTermFilter(ALL_TERMS);
     setQuery("");
+  }
+
+  function toggleFlag(flag: Flag) {
+    setFlags((cur) => (cur.includes(flag) ? cur.filter((f) => f !== flag) : [...cur, flag]));
   }
 
   function toggleSort(key: NonNullable<Sort>["key"]) {
@@ -1177,7 +1209,10 @@ export function Triage({
       id: "matches",
       label: "Go to Matches",
       icon: <LayoutList className="size-4" />,
-      run: () => clearFilters(),
+      run: () => {
+        clearFilters();
+        pickStage(DEFAULT_STAGE);
+      },
     },
     {
       id: "tracker",
@@ -1198,12 +1233,22 @@ export function Triage({
       run: () => router.push("/profile"),
     },
     {
+      id: "new",
+      label: "Show new today",
+      icon: <Sparkles className="size-4" />,
+      run: () => {
+        clearFilters();
+        pickStage("todo");
+        setFlags(["new"]);
+      },
+    },
+    {
       id: "priority",
       label: "Show priority",
       icon: <Star className="size-4" />,
       run: () => {
-        setTermFilter(ALL_TERMS);
-        setFilter("priority");
+        clearFilters();
+        setFlags(["priority"]);
       },
     },
     {
@@ -1211,8 +1256,8 @@ export function Triage({
       label: "Show hidden",
       icon: <Ghost className="size-4" />,
       run: () => {
-        setTermFilter(ALL_TERMS);
-        setFilter("hidden");
+        clearFilters();
+        pickStage("hidden");
       },
     },
     {
@@ -1226,26 +1271,17 @@ export function Triage({
   function paletteJump(short: string) {
     const row = rows.find((r) => r.short === short);
     if (!row) return;
-    if (!ordered.some((r) => r.short === short)) clearFilters();
+    if (!ordered.some((r) => r.short === short)) {
+      clearFilters();
+      // Jump targets are live rows; an applied one is not in To apply.
+      if (!passesStage(row, stage)) pickStage("all");
+    }
     scrollBlock.current = "center";
     setCursor(short);
   }
 
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && visible.length === 0;
-
-  /* The page headline, from the rows the table shows. */
-  const headline = (() => {
-    if (!hasAnyRows) return "No matches yet.";
-    const fresh = visible.filter((r) => isAddedOn(r.added, todayIso));
-    return composeMatchesHeadline({
-      shown: visible.length,
-      priority: visible.filter((r) => r.priority).length,
-      newToday: fresh.length,
-      newTodayPriority: fresh.filter((r) => r.priority).length,
-      hidden: filter === "hidden",
-    });
-  })();
 
   const tableHandlers: MatchHandlers = {
     onActivate: toggleDetails,
@@ -1257,7 +1293,8 @@ export function Triage({
     onOpenReport: openReport,
   };
 
-  const nothingHere = (
+  // An empty stage with nothing narrowing it has no filters to clear.
+  const nothingHere = narrowed ? (
     <>
       Nothing matches the current filters.
       <button
@@ -1268,6 +1305,8 @@ export function Triage({
         clear filters
       </button>
     </>
+  ) : (
+    EMPTY_STAGE[stage]
   );
 
   // Flat render index per row for the mobile cascade stagger.
@@ -1278,46 +1317,35 @@ export function Triage({
       ref={rootRef}
       className={PAGE_WITH_DOCK}
     >
-      {/* Page header: a headline composed from the rows on screen
-          (lib/headline.ts), with the status and term groups on the right. The header's search box opens the palette (jumps, Add URL, a
-          pasted link); the compact input here is the live table filter it
-          cannot be, and `/` still focuses it. On phones each group scrolls
-          in its own row. */}
-      <div className="mb-[18px] flex flex-wrap items-end justify-between gap-4">
-        <h1 className="m-0 min-w-0 text-[28px] leading-[1.05] font-semibold tracking-[-0.03em] text-ink min-[700px]:text-[40px]">
-          {headline}
+      {/* Page top (matches-toolbar.tsx): the title and its "new today" line,
+          the stage tabs, then the list filter, the chips and the term menu.
+          The header's search box opens the palette (jumps, Add URL, a pasted
+          link); the input here is the live table filter it cannot be, and
+          `/` still focuses it. With no rows at all there is nothing to
+          filter, so only the title shows above the empty state. */}
+      {hasAnyRows ? (
+        <MatchesToolbar
+          newLine={composeNewToday({ newToday, priority: newTodayPriority })}
+          stage={stage}
+          stageCounts={filtered.stageCounts}
+          onStage={pickStage}
+          flags={flags}
+          flagCounts={filtered.flagCounts}
+          onToggleFlag={toggleFlag}
+          terms={termOptions}
+          term={activeTerm}
+          onTerm={setTermFilter}
+          query={query}
+          onQuery={setQuery}
+          searchRef={searchRef}
+          filtered={narrowed}
+          onClear={clearFilters}
+        />
+      ) : (
+        <h1 className="m-0 mb-[18px] text-[24px] leading-[1.1] font-semibold tracking-[-0.02em] text-ink">
+          Matches
         </h1>
-        <div className="flex max-w-full min-w-0 flex-col items-stretch gap-2 min-[700px]:flex-row min-[700px]:flex-wrap min-[700px]:items-center">
-          <input
-            ref={searchRef}
-            type="search"
-            name="filter-matches"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter matches…"
-            autoComplete="off"
-            aria-label="Filter matches"
-            aria-keyshortcuts="/"
-            className="h-[38px] min-w-0 rounded-full border border-line bg-surface px-3.5 text-[13px] text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none min-[700px]:w-[200px]"
-          />
-          <SegmentedPills
-            label="Filter by status"
-            tone="ink"
-            options={statusPills}
-            value={filter}
-            onChange={(key) => setFilter(key as StatusFilter)}
-            className="min-[700px]:self-start"
-          />
-          <SegmentedPills
-            label="Filter by term"
-            tone="accent"
-            options={termPills}
-            value={activeTerm}
-            onChange={setTermFilter}
-            className="min-[700px]:self-start"
-          />
-        </div>
-      </div>
+      )}
 
       {!hasAnyRows ? (
         <EmptyState

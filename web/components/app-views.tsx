@@ -5,7 +5,6 @@ import { Tracker } from "@/components/tracker/tracker";
 import { useSearchParams } from "next/navigation";
 import { useAppView } from "@/lib/view";
 import { PAGE } from "@/lib/layout";
-import { usePublishViewCount } from "@/components/nav/view-counts";
 import { parseUrlState } from "@/components/matches/matches-lib";
 import type { TriageRow } from "@/app/(app)/page";
 import type { TrackerRow } from "@/components/tracker/tracker-lib";
@@ -38,11 +37,6 @@ export function AppViews({
 }) {
   const { view, job } = useAppView();
   const params = useSearchParams();
-  // The header nav's Tracker count. Matches has a single publisher, Triage,
-  // which knows whether unwatched terms are being shown; the layout seeds
-  // both on the server for every screen.
-  usePublishViewCount("tracker", applications.length);
-
   if (view === "tracker") {
     return (
       <div className={PAGE}>
@@ -51,7 +45,7 @@ export function AppViews({
     );
   }
 
-  // The matches view (?filter= ?term= ?sort= ?open=) is read once, at mount;
+  // The matches view (?filter= ?show= ?term= ?sort= ?open=) is read once, at mount;
   // Triage keeps the URL in step with it from then on.
   return (
     <Triage

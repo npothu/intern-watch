@@ -7,40 +7,58 @@ import type { TriageRow } from "@/app/(app)/page";
 import type { MatchFacts, ResumeReport } from "@/lib/convex";
 import { compare, dayFromIso, parseTerm, sortTerms, termStart, type Day } from "@/lib/terms";
 import { isKnownTerm } from "@/lib/preferences";
+import { isAddedOn } from "@/lib/headline";
 
 /**
- * The status pills. "Has resume" filters on a built resume; "to apply" is
- * the working queue (still open, not yet ticked). The Python web UI's
- * "Agent touched" and "Likely closed" have no data in the hosted app.
+ * The stage tabs: which pile is on screen. Exactly one is always on. "To
+ * apply" is the working queue (live, not yet ticked) and the default; "All"
+ * is to apply plus applied; "Hidden" is the dismissed list, which is not part
+ * of All.
  */
-export type StatusFilter =
-  | "all"
-  | "priority"
-  | "todo"
-  | "applied"
-  | "saved"
-  | "resumes"
-  | "hidden";
+export type Stage = "todo" | "applied" | "all" | "hidden";
+
+export const STAGES: readonly { key: Stage; label: string }[] = [
+  { key: "todo", label: "To apply" },
+  { key: "applied", label: "Applied" },
+  { key: "all", label: "All" },
+  { key: "hidden", label: "Hidden" },
+];
+
+export const DEFAULT_STAGE: Stage = "todo";
+
+export function isStage(v: string | null | undefined): v is Stage {
+  return STAGES.some((s) => s.key === v);
+}
+
+/**
+ * The narrowing chips. Unlike the stage they are checkboxes: any number can
+ * be on, and a row has to pass all of them. "Has resume" is a built resume;
+ * "New today" is a row the watcher added on the server's UTC day.
+ */
+export type Flag = "new" | "priority" | "saved" | "resumes";
+
+export const FLAGS: readonly { key: Flag; label: string }[] = [
+  { key: "new", label: "New today" },
+  { key: "priority", label: "Priority" },
+  { key: "saved", label: "Saved" },
+  { key: "resumes", label: "Has resume" },
+];
+
+export function isFlag(v: string | null | undefined): v is Flag {
+  return FLAGS.some((f) => f.key === v);
+}
+
+/** `flags` deduplicated and in chip order, so two spellings compare equal. */
+export function normalizeFlags(flags: Iterable<string>): Flag[] {
+  const set = new Set(flags);
+  return FLAGS.filter((f) => set.has(f.key)).map((f) => f.key);
+}
 
 /** The term bucket for a row with no term at all. Never a real term. */
 export const UNKNOWN_TERM = "Unknown term";
 
-/** The term-pill value meaning "no term filter". */
+/** The term-menu value meaning "no term filter". */
 export const ALL_TERMS = "__all__";
-
-export const STATUS_FILTERS: readonly { key: StatusFilter; label: string }[] = [
-  { key: "all", label: "all" },
-  { key: "priority", label: "priority" },
-  { key: "todo", label: "to apply" },
-  { key: "applied", label: "applied" },
-  { key: "saved", label: "saved" },
-  { key: "resumes", label: "resumes" },
-  { key: "hidden", label: "hidden" },
-];
-
-export function isStatusFilter(v: string | null | undefined): v is StatusFilter {
-  return STATUS_FILTERS.some((f) => f.key === v);
-}
 
 /* ------------------------------------------------------------------ terms */
 
@@ -95,22 +113,24 @@ export function orderTerms(terms: Iterable<string>): string[] {
 
 /* ---------------------------------------------------------------- filters */
 
-export function passesStatus(row: TriageRow, filter: StatusFilter): boolean {
-  if (filter === "hidden") return row.dismissed;
+export function passesStage(row: Pick<TriageRow, "dismissed" | "applied">, stage: Stage): boolean {
+  if (stage === "hidden") return row.dismissed;
   if (row.dismissed) return false;
-  switch (filter) {
+  if (stage === "todo") return !row.applied;
+  if (stage === "applied") return row.applied;
+  return true;
+}
+
+export function passesFlag(row: TriageRow, flag: Flag, todayIso: string): boolean {
+  switch (flag) {
+    case "new":
+      return isAddedOn(row.added, todayIso);
     case "priority":
       return Boolean(row.priority);
-    case "todo": // the working queue: still open, not yet ticked
-      return !row.applied;
-    case "applied":
-      return row.applied;
     case "saved":
       return row.saved;
     case "resumes":
       return Boolean(row.resumeUrl);
-    default:
-      return true;
   }
 }
 
@@ -140,18 +160,25 @@ export function splitUnwatched(
   return { watched, unwatched };
 }
 
+/** A row that is new today and still waiting on you: live, not applied. */
+export function isNewToday(row: TriageRow, todayIso: string): boolean {
+  return !row.dismissed && !row.applied && isAddedOn(row.added, todayIso);
+}
+
 /**
- * The Matches count the header nav shows: live (not hidden) rows, in watched
- * terms unless the unwatched ones are being shown too. One definition for the
+ * The number on the header nav's Matches badge and in the page's "N new
+ * today" line: rows added today that are still to apply, in watched terms
+ * unless the unwatched ones are being shown too. One definition for the
  * server seed (lib/app-data.ts) and the surface's live republish (triage.tsx).
  */
-export function liveMatchCount(
+export function newTodayCount(
   rows: readonly TriageRow[],
   wantedTerms: readonly string[] | null,
-  showUnwatched: boolean
+  showUnwatched: boolean,
+  todayIso: string
 ): number {
   const scoped = showUnwatched ? rows : splitUnwatched(rows, wantedTerms).watched;
-  return scoped.reduce((n, r) => (r.dismissed ? n : n + 1), 0);
+  return scoped.reduce((n, r) => (isNewToday(r, todayIso) ? n + 1 : n), 0);
 }
 
 /** The open row, if it is still on screen; otherwise nothing is open. */
@@ -159,18 +186,35 @@ export function resolveOpen(open: string | null, visible: readonly Pick<TriageRo
   return open !== null && visible.some((r) => r.short === open) ? open : null;
 }
 
-export type FilterState = { filter: StatusFilter; term: string; query: string };
+export type FilterState = {
+  stage: Stage;
+  flags: readonly Flag[];
+  term: string;
+  query: string;
+  /** The server's UTC day; what "New today" compares `added` against. */
+  todayIso: string;
+  /**
+   * Rows that stay in the list although a tick just moved them out of the
+   * stage (an applied tick in To apply, an undone one in Applied), so a
+   * misclick can be undone in place. They count under their real stage.
+   * Never keeps a row in or out of Hidden.
+   */
+  keep?: ReadonlySet<string>;
+};
 
 export type FilterResult = {
-  /** Rows passing all three axes, in input order. */
+  /** Rows passing every axis, in input order. */
   rows: TriageRow[];
-  /** Per status pill: rows passing that status, the active term and query. */
-  statusCounts: Record<StatusFilter, number>;
-  /** Term pills (ALL_TERMS first). Counted against the active status and
-   *  query. Offered for every term with a live (not hidden) row - or any row
-   *  while viewing hidden - so the row keeps its shape as the status changes
-   *  and a zero count reads as "none here", while a term whose only rows are
-   *  hidden does not linger as a dead pill. */
+  /** Per stage tab: rows in that stage passing the flags, term and query. */
+  stageCounts: Record<Stage, number>;
+  /** Per chip: rows the list would show with that chip on and everything
+   *  else unchanged. For a chip that is on, that is the list as it stands. */
+  flagCounts: Record<Flag, number>;
+  /** Term options (ALL_TERMS first). Counted against the stage, the flags
+   *  and the query. Offered for every term with a live (not hidden) row - or
+   *  any row while viewing hidden - so the menu keeps its shape as the stage
+   *  changes and a zero count reads as "none here", while a term whose only
+   *  rows are hidden does not linger as a dead option. */
   termCounts: { key: string; count: number }[];
   /** The term actually applied: a stored pick no longer on offer falls back
    *  to ALL_TERMS instead of filtering everything away. */
@@ -178,18 +222,18 @@ export type FilterResult = {
 };
 
 /**
- * Status pills x term pills x search. Each pill's count is what the list
- * would show if that pill were picked with the other two axes unchanged.
+ * Stage x chips x term x search. Every count is what the list would show if
+ * that control were picked with the other axes unchanged.
  */
 export function composeFilters(rows: readonly TriageRow[], state: FilterState): FilterResult {
-  const offered = state.filter === "hidden" ? rows : rows.filter((r) => !r.dismissed);
+  const { stage, todayIso, keep } = state;
+  const flags = normalizeFlags(state.flags);
+  const offered = stage === "hidden" ? rows : rows.filter((r) => !r.dismissed);
   const terms = orderTerms(offered.map(termOf));
   const term = state.term === ALL_TERMS || terms.includes(state.term) ? state.term : ALL_TERMS;
 
-  const statusCounts = Object.fromEntries(STATUS_FILTERS.map((f) => [f.key, 0])) as Record<
-    StatusFilter,
-    number
-  >;
+  const stageCounts = Object.fromEntries(STAGES.map((s) => [s.key, 0])) as Record<Stage, number>;
+  const flagCounts = Object.fromEntries(FLAGS.map((f) => [f.key, 0])) as Record<Flag, number>;
   const termTally = new Map<string, number>();
   let allTerms = 0;
   const out: TriageRow[] = [];
@@ -197,20 +241,32 @@ export function composeFilters(rows: readonly TriageRow[], state: FilterState): 
   for (const r of rows) {
     if (!passesQuery(r, state.query)) continue;
     const inTerm = passesTerm(r, term);
-    const inStatus = passesStatus(r, state.filter);
-    if (inTerm) {
-      for (const f of STATUS_FILTERS) if (passesStatus(r, f.key)) statusCounts[f.key]++;
+    // Which chips the row fails. A chip's own count ignores that chip, so a
+    // row counts toward it when it fails nothing else.
+    const failed = flags.filter((f) => !passesFlag(r, f, todayIso));
+    const inFlags = failed.length === 0;
+    if (inTerm && inFlags) {
+      for (const s of STAGES) if (passesStage(r, s.key)) stageCounts[s.key]++;
     }
-    if (inStatus) {
+    const kept = stage !== "hidden" && !r.dismissed && keep?.has(r.short) === true;
+    if (!passesStage(r, stage) && !kept) continue;
+    if (inFlags) {
       allTerms++;
       termTally.set(termOf(r), (termTally.get(termOf(r)) ?? 0) + 1);
     }
-    if (inTerm && inStatus) out.push(r);
+    if (inTerm) {
+      for (const f of FLAGS) {
+        const others = failed.length === 0 || (failed.length === 1 && failed[0] === f.key);
+        if (others && passesFlag(r, f.key, todayIso)) flagCounts[f.key]++;
+      }
+    }
+    if (inTerm && inFlags) out.push(r);
   }
 
   return {
     rows: out,
-    statusCounts,
+    stageCounts,
+    flagCounts,
     termCounts: [
       { key: ALL_TERMS, count: allTerms },
       ...terms.map((t) => ({ key: t, count: termTally.get(t) ?? 0 })),
@@ -630,14 +686,19 @@ export function reportSummary(report: ResumeReport): string {
 /* --------------------------------------------------------------- URL state */
 
 export const URL_PARAMS = {
+  /** The stage tab. The name predates the tabs; old links keep working. */
   filter: "filter",
+  /** The chips that are on, comma separated. */
+  show: "show",
   term: "term",
   sort: "sort",
   open: "open",
 } as const;
 
 export type MatchesUrlState = {
-  filter: StatusFilter;
+  stage: Stage;
+  /** In chip order (normalizeFlags). */
+  flags: Flag[];
   /** A term slug (termSlug); resolved against the data by termFromSlug. */
   term: string | null;
   sort: Sort;
@@ -646,7 +707,8 @@ export type MatchesUrlState = {
 };
 
 export const DEFAULT_URL_STATE: MatchesUrlState = {
-  filter: "all",
+  stage: DEFAULT_STAGE,
+  flags: [],
   term: null,
   sort: null,
   open: null,
@@ -662,13 +724,24 @@ export function parseSort(v: string | null | undefined): Sort {
 
 export const formatSort = (sort: Sort): string | null => (sort ? `${sort.key}.${sort.dir}` : null);
 
-/** Reads the matches view from search params; bad values fall back silently. */
+/** The old `?filter=` pills that became chips. */
+const LEGACY_FILTER_FLAGS: readonly Flag[] = ["priority", "saved", "resumes"];
+
+/**
+ * Reads the matches view from search params; bad values fall back silently.
+ * `?filter=` used to hold one of seven pills. Three of them are chips now, so
+ * an old `?filter=priority` (or saved, resumes) reads as that chip on All,
+ * which is the list the old link showed.
+ */
 export function parseUrlState(params: { get(name: string): string | null }): MatchesUrlState {
   const filter = params.get(URL_PARAMS.filter);
   const term = params.get(URL_PARAMS.term);
   const open = params.get(URL_PARAMS.open);
+  const legacy = LEGACY_FILTER_FLAGS.find((f) => f === filter) ?? null;
+  const shown = (params.get(URL_PARAMS.show) ?? "").split(",");
   return {
-    filter: isStatusFilter(filter) ? filter : "all",
+    stage: isStage(filter) ? filter : legacy ? "all" : DEFAULT_STAGE,
+    flags: normalizeFlags(legacy ? [...shown, legacy] : shown),
     term: term && SLUG_RE.test(term) ? term.toLowerCase() : null,
     sort: parseSort(params.get(URL_PARAMS.sort)),
     open: open && SHORT_RE.test(open) ? open : null,
@@ -686,7 +759,8 @@ export function formatUrlState(search: string, state: MatchesUrlState): string {
     if (value) params.set(name, value);
     else params.delete(name);
   };
-  set(URL_PARAMS.filter, state.filter === "all" ? null : state.filter);
+  set(URL_PARAMS.filter, state.stage === DEFAULT_STAGE ? null : state.stage);
+  set(URL_PARAMS.show, normalizeFlags(state.flags).join(",") || null);
   set(URL_PARAMS.term, state.term);
   set(URL_PARAMS.sort, formatSort(state.sort));
   set(URL_PARAMS.open, state.open);

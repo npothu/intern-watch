@@ -1,4 +1,5 @@
-// Pure logic behind the header's watcher sparkline (components/watcher-pulse.tsx):
+// Pure logic behind the watcher sparkline in the header's status popover
+// (components/watcher-pulse.tsx):
 // runs to polyline points, and the compact "since" label. No React, no DOM.
 
 /** One watcher run (see lib/convex.ts WatcherRun; repeated so this stays client-safe). */
@@ -85,9 +86,14 @@ export function sinceLabel(at: number, now: number): string {
  * run was.
  */
 export function pulseLabel(runs: readonly PulseRun[], now: number, clock: number = now): string {
-  const day = windowRuns(runs, now);
-  const found = day.reduce((n, r) => n + Math.max(0, r.newMatches), 0);
+  const day = pulseTotals(runs, now);
   const last = lastRunAt(runs, now);
   const ago = last === null ? "" : `, last run ${sinceLabel(last, clock)} ago`;
-  return `Watcher runs, last 24 hours: ${day.length} run${day.length === 1 ? "" : "s"}, ${found} new match${found === 1 ? "" : "es"}${ago}`;
+  return `Watcher runs, last 24 hours: ${day.runs} run${day.runs === 1 ? "" : "s"}, ${day.found} new match${day.found === 1 ? "" : "es"}${ago}`;
+}
+
+/** Runs and new matches in the drawn window (negative counts read as 0). */
+export function pulseTotals(runs: readonly PulseRun[], now: number): { runs: number; found: number } {
+  const day = windowRuns(runs, now);
+  return { runs: day.length, found: day.reduce((n, r) => n + Math.max(0, r.newMatches), 0) };
 }

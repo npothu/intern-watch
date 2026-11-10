@@ -12,11 +12,11 @@ import { ViewCycle } from "@/components/nav/view-cycle";
  * in email isn't provisioned, render the full-page "not provisioned" state
  * instead of the app.
  *
- * The header's health dot and Inbox count come from one getHealth call here.
- * Its Matches/Tracker counts come from lib/app-data.ts, started here but
- * streamed rather than awaited (on `/` and Referrals the reads are shared with
- * the page through the per-request cache). Either read failing degrades - the
- * dot to "no data", the counts to absent - rather than taking the whole shell
+ * The header's status chip and Inbox badge come from one getHealth call here.
+ * Its Matches badge comes from lib/app-data.ts, started here but streamed
+ * rather than awaited (on `/` and Referrals the read is shared with the page
+ * through the per-request cache). Either read failing degrades - the chip to
+ * "no watcher data", the badge to absent - rather than taking the whole shell
  * down: header numbers must never be the thing that breaks the page.
  */
 export default async function AppLayout({

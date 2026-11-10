@@ -26,8 +26,9 @@ import {
  *     /?view=tracker    tracker
  *
  * Matches carries more of its view the same way, so a link reproduces it:
- * `?term=su27` (term pill), `?sort=found.desc` (company|term|found, asc|desc)
- * and `?open=<short>` (the row whose details are open), next to `?filter=`.
+ * `?filter=applied` (the stage tab), `?show=priority,saved` (the chips),
+ * `?term=su27`, `?sort=found.desc` (company|term|found, asc|desc) and
+ * `?open=<short>` (the row whose details are open).
  * Parsing and formatting live in components/matches/matches-lib.ts; the
  * matches surface replaces (never pushes) the entry as they change.
  *
@@ -69,8 +70,12 @@ export function viewHref(view: DestId, filter?: string): string {
   return query ? `${APP_PATH}?${query}` : APP_PATH;
 }
 
-/** The counts the header nav can show (components/nav/view-counts.tsx). */
-export type NavCounts = { matches?: number; tracker?: number; inbox: number };
+/**
+ * The numbers the header nav can show (components/nav/view-counts.tsx). A nav
+ * badge means "something here needs you", never a total: matches found today
+ * that are still to apply, and inbox items waiting for review.
+ */
+export type NavCounts = { newMatches?: number; inbox: number };
 
 /** One row in the shared navigation registry. */
 export type ViewEntry = {
@@ -84,10 +89,12 @@ export type ViewEntry = {
   cycle: boolean;
   /** The command palette's wording for going there. */
   paletteLabel: string;
-  /** The pill's count, if it has one right now. */
+  /** The pill's badge, if it has one right now. */
   count?: (c: NavCounts) => number | undefined;
-  /** An inactive pill's count in amber (it wants attention). */
-  countTone?: "amber";
+  /** What the badge counts, for its tooltip and accessible name. */
+  countLabel?: (n: number) => string;
+  /** The badge's colour: accent for news, amber for work waiting. */
+  countTone?: "accent" | "amber";
 };
 
 const entry = (
@@ -113,10 +120,15 @@ const entry = (
  * surfaces' own palettes use for the same moves.
  */
 export const VIEWS: ViewEntry[] = [
-  entry("matches", "Matches", LayoutList, { count: (c) => c.matches }),
-  entry("tracker", "Tracker", ListChecks, { count: (c) => c.tracker }),
+  entry("matches", "Matches", LayoutList, {
+    count: (c) => (c.newMatches ? c.newMatches : undefined),
+    countLabel: (n) => `${n} new today`,
+    countTone: "accent",
+  }),
+  entry("tracker", "Tracker", ListChecks),
   entry("inbox", "Inbox", Mail, {
     count: (c) => (c.inbox > 0 ? c.inbox : undefined),
+    countLabel: (n) => `${n} to review`,
     countTone: "amber",
   }),
   entry("profile", "Profile", FileText, { cycle: false }),

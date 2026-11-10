@@ -1,20 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeMatchesHeadline, isAddedOn, numberWord, utcDayIso } from "./headline";
-
-describe("numberWord", () => {
-  it("spells out zero through twelve", () => {
-    expect(numberWord(0)).toBe("zero");
-    expect(numberWord(1)).toBe("one");
-    expect(numberWord(9)).toBe("nine");
-    expect(numberWord(12)).toBe("twelve");
-  });
-  it("uses digits above twelve and for non-counts", () => {
-    expect(numberWord(13)).toBe("13");
-    expect(numberWord(140)).toBe("140");
-    expect(numberWord(-1)).toBe("-1");
-    expect(numberWord(2.5)).toBe("2.5");
-  });
-});
+import { composeNewToday, isAddedOn, utcDayIso } from "./headline";
 
 describe("isAddedOn", () => {
   it("matches the date part only", () => {
@@ -39,55 +24,32 @@ describe("isAddedOn", () => {
   });
 });
 
-const base = { shown: 0, priority: 0, newToday: 0, newTodayPriority: 0 };
-
-describe("composeMatchesHeadline", () => {
-  it("handles an empty table", () => {
-    expect(composeMatchesHeadline(base)).toBe("No matches for these filters.");
+describe("composeNewToday", () => {
+  it("says so when nothing is new", () => {
+    expect(composeNewToday({ newToday: 0, priority: 0 })).toBe("Nothing new today");
+    // A priority count without new rows cannot happen; it must not print.
+    expect(composeNewToday({ newToday: 0, priority: 3 })).toBe("Nothing new today");
   });
 
-  it("leads with new-today rows and their priority share", () => {
-    expect(
-      composeMatchesHeadline({ shown: 20, priority: 5, newToday: 9, newTodayPriority: 3 })
-    ).toBe("Nine new matches, three from priority companies.");
-  });
-
-  it("falls back to shown rows when nothing is new today", () => {
-    expect(composeMatchesHeadline({ ...base, shown: 9, priority: 3 })).toBe(
-      "Nine matches, three from priority companies."
+  it("gives the count and its priority share", () => {
+    expect(composeNewToday({ newToday: 12, priority: 7 })).toBe(
+      "12 new today, 7 from priority companies"
+    );
+    expect(composeNewToday({ newToday: 5, priority: 1 })).toBe(
+      "5 new today, 1 from a priority company"
     );
   });
 
   it("drops the priority clause when there are none", () => {
-    expect(composeMatchesHeadline({ ...base, shown: 4, newToday: 2 })).toBe("Two new matches.");
-    expect(composeMatchesHeadline({ ...base, shown: 1 })).toBe("One match.");
+    expect(composeNewToday({ newToday: 4, priority: 0 })).toBe("4 new today");
   });
 
-  it("singular priority and all-priority phrasing", () => {
-    expect(composeMatchesHeadline({ ...base, shown: 5, priority: 1 })).toBe(
-      "Five matches, one from a priority company."
+  it("does not repeat the number when every new row is priority", () => {
+    expect(composeNewToday({ newToday: 3, priority: 3 })).toBe(
+      "3 new today, all from priority companies"
     );
-    expect(composeMatchesHeadline({ ...base, shown: 3, priority: 3 })).toBe(
-      "Three matches, all from priority companies."
+    expect(composeNewToday({ newToday: 1, priority: 1 })).toBe(
+      "1 new today, from a priority company"
     );
-    expect(composeMatchesHeadline({ ...base, shown: 1, priority: 1 })).toBe(
-      "One match, from a priority company."
-    );
-  });
-
-  it("uses digits above twelve", () => {
-    expect(composeMatchesHeadline({ ...base, shown: 48, priority: 13 })).toBe(
-      "48 matches, 13 from priority companies."
-    );
-  });
-
-  it("does not call hidden rows new", () => {
-    expect(
-      composeMatchesHeadline({ shown: 2, priority: 1, newToday: 2, newTodayPriority: 1, hidden: true })
-    ).toBe("Two hidden matches.");
-  });
-
-  it("an empty hidden list is still the hidden list", () => {
-    expect(composeMatchesHeadline({ ...base, hidden: true })).toBe("No hidden matches.");
   });
 });

@@ -1,15 +1,14 @@
 "use client";
 
 import { useEffect, useSyncExternalStore, useTransition } from "react";
-import { RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useSyncRefresh } from "@/lib/sync-pulse";
+import { MINUTE_MS, useMinute } from "@/lib/use-minute";
 
 /**
- * "AS OF 10:39 AM ⟳" - the freshness readout and manual reload, carried over
- * from the Python webui (src/webui/static/index.html). It lives in the app
- * header; `useFreshness` reads it once so the desktop readout and the phone's
- * user-chip menu agree.
+ * "as of 10:39 AM" - when the page's data was read, and the manual reload,
+ * carried over from the Python webui (src/webui/static/index.html). The
+ * header reads it once with `useFreshness` and shows it in the status chip's
+ * popover (components/watcher-status.tsx), next to Refresh.
  *
  * The time is the data's, not the clock's: each data page renders
  * <LoadedAt /> (components/loaded-at.tsx), a server-stamped `at` that
@@ -24,12 +23,11 @@ import { useSyncRefresh } from "@/lib/sync-pulse";
  * components have re-rendered.
  *
  * The watcher cron runs every two hours, so data that outlives one cycle is
- * genuinely stale - past that the timestamp goes amber and carries a tooltip,
- * exactly as the webui's `checkStale` did.
+ * genuinely stale - past that `stale` is set and the status chip asks for a
+ * refresh, as the webui's `checkStale` did.
  */
 
 const STALE_MS = 2 * 3600e3; // one watcher cron cycle
-const TICK_MS = 60e3;
 
 let stamp: number | null = null;
 const stampListeners = new Set<() => void>();
@@ -73,21 +71,6 @@ function useDataStamp(): number | null {
   );
 }
 
-/**
- * Minute-resolution clock for the staleness check. `null` on the server, so
- * nothing time-dependent renders during SSR and hydration agrees.
- */
-function useMinute(): number | null {
-  return useSyncExternalStore(
-    (onChange) => {
-      const id = setInterval(onChange, TICK_MS);
-      return () => clearInterval(id);
-    },
-    () => Math.floor(Date.now() / TICK_MS),
-    () => null
-  );
-}
-
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, {
     hour: "numeric",
@@ -108,7 +91,7 @@ export function useFreshness(): Freshness {
   const [pending, startTransition] = useTransition();
   const at = useDataStamp();
   const minute = useMinute();
-  const stale = at !== null && minute !== null && minute * TICK_MS - at > STALE_MS;
+  const stale = at !== null && minute !== null && minute * MINUTE_MS - at > STALE_MS;
 
   return {
     label: at !== null && minute !== null ? `as of ${formatTime(at)}` : "",
@@ -116,46 +99,4 @@ export function useFreshness(): Freshness {
     pending,
     refresh: () => startTransition(() => syncRefresh()),
   };
-}
-
-/**
- * The header's mono readout plus its refresh icon button. The text hides
- * below 1200px to keep the header on one row; the button's tooltip and name
- * still carry the time.
- */
-export function FreshnessReadout({
-  freshness,
-  className,
-}: {
-  freshness: Freshness;
-  className?: string;
-}) {
-  const { label, stale, pending, refresh } = freshness;
-  const staleNote = stale ? " - older than one cron cycle" : "";
-  return (
-    <span className={cn("inline-flex items-center gap-1", className)}>
-      <span
-        title={stale ? "data is older than one cron cycle - hit refresh" : undefined}
-        className={cn(
-          "hidden font-mono text-[11px] tracking-[0.06em] whitespace-nowrap uppercase tabular-nums min-[1200px]:inline",
-          stale ? "font-medium text-amber" : "text-ink-2"
-        )}
-      >
-        {label}
-      </span>
-      <button
-        type="button"
-        onClick={refresh}
-        disabled={pending}
-        aria-label={label ? `Refresh data (${label}${staleNote})` : "Refresh data"}
-        title={label ? `Refresh data (${label}${staleNote})` : "Refresh data"}
-        className={cn(
-          "inline-flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-chip hover:text-ink disabled:cursor-default disabled:opacity-70",
-          stale ? "text-amber" : "text-ink-2"
-        )}
-      >
-        <RefreshCw className={cn("size-3.5", pending && "animate-spin")} />
-      </button>
-    </span>
-  );
 }

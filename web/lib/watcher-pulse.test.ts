@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { lastRunAt, pulseGeometry, pulseLabel, sinceLabel } from "./watcher-pulse";
+import { lastRunAt, pulseGeometry, pulseLabel, pulseTotals, sinceLabel } from "./watcher-pulse";
 
 const H = 3600e3;
 /** The server render time: the window is the 24h ending here. */
@@ -173,5 +173,18 @@ describe("pulseLabel", () => {
       "Watcher runs, last 24 hours: 2 runs, 1 new match, last run 0m ago"
     );
     expect(pulseLabel([], NOW)).toBe("Watcher runs, last 24 hours: 0 runs, 0 new matches");
+  });
+});
+
+describe("pulseTotals", () => {
+  test("counts the runs and new matches inside the window only", () => {
+    const runs = [
+      { at: NOW - 30 * H, newMatches: 9 },
+      { at: NOW - 5 * H, newMatches: 3 },
+      { at: NOW - H, newMatches: -2 },
+      { at: NOW, newMatches: 4 },
+    ];
+    expect(pulseTotals(runs, NOW)).toEqual({ runs: 3, found: 7 });
+    expect(pulseTotals([], NOW)).toEqual({ runs: 0, found: 0 });
   });
 });
