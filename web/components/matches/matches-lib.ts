@@ -7,7 +7,7 @@ import type { TriageRow } from "@/app/(app)/page";
 import type { MatchFacts, ResumeReport } from "@/lib/convex";
 import { compare, dayFromIso, parseTerm, sortTerms, termStart, type Day } from "@/lib/terms";
 import { isKnownTerm } from "@/lib/preferences";
-import { isAddedOn } from "@/lib/headline";
+import { isAddedOn, type NewTodayCounts } from "@/lib/headline";
 
 /**
  * The stage tabs: which pile is on screen. Exactly one is always on. "To
@@ -65,7 +65,7 @@ export const ALL_TERMS = "__all__";
 /** The bucket a row's term falls in: its own string, or UNKNOWN_TERM. */
 export const termOf = (row: Pick<TriageRow, "term">): string => row.term || UNKNOWN_TERM;
 
-/** Display label for a term pill ("Unknown term" reads better as "Unknown"). */
+/** Display label for a term ("Unknown term" reads better as "Unknown"). */
 export const termLabel = (term: string): string => (term === UNKNOWN_TERM ? "Unknown" : term);
 
 const SEASON_CODE: Record<string, string> = {
@@ -166,19 +166,26 @@ export function isNewToday(row: TriageRow, todayIso: string): boolean {
 }
 
 /**
- * The number on the header nav's Matches badge and in the page's "N new
- * today" line: rows added today that are still to apply, in watched terms
- * unless the unwatched ones are being shown too. One definition for the
- * server seed (lib/app-data.ts) and the surface's live republish (triage.tsx).
+ * The numbers behind the header nav's Matches badge and the page's "N new
+ * today" line: rows added today that are still to apply, and how many of
+ * them are from priority employers, in watched terms unless the unwatched
+ * ones are being shown too. One definition for the server seed
+ * (lib/app-data.ts) and the surface's live republish (triage.tsx).
  */
-export function newTodayCount(
+export function newTodayCounts(
   rows: readonly TriageRow[],
   wantedTerms: readonly string[] | null,
   showUnwatched: boolean,
   todayIso: string
-): number {
+): NewTodayCounts {
   const scoped = showUnwatched ? rows : splitUnwatched(rows, wantedTerms).watched;
-  return scoped.reduce((n, r) => (isNewToday(r, todayIso) ? n + 1 : n), 0);
+  const counts = { newToday: 0, priority: 0 };
+  for (const r of scoped) {
+    if (!isNewToday(r, todayIso)) continue;
+    counts.newToday++;
+    if (r.priority) counts.priority++;
+  }
+  return counts;
 }
 
 /** The open row, if it is still on screen; otherwise nothing is open. */
@@ -196,7 +203,8 @@ export type FilterState = {
   /**
    * Rows that stay in the list although a tick just moved them out of the
    * stage (an applied tick in To apply, an undone one in Applied), so a
-   * misclick can be undone in place. They count under their real stage.
+   * misclick can be undone in place. They are listed and nothing more: every
+   * count (stage, chip, term) treats them as being in their real stage.
    * Never keeps a row in or out of Hidden.
    */
   keep?: ReadonlySet<string>;
@@ -248,17 +256,19 @@ export function composeFilters(rows: readonly TriageRow[], state: FilterState): 
     if (inTerm && inFlags) {
       for (const s of STAGES) if (passesStage(r, s.key)) stageCounts[s.key]++;
     }
-    const kept = stage !== "hidden" && !r.dismissed && keep?.has(r.short) === true;
-    if (!passesStage(r, stage) && !kept) continue;
-    if (inFlags) {
-      allTerms++;
-      termTally.set(termOf(r), (termTally.get(termOf(r)) ?? 0) + 1);
-    }
-    if (inTerm) {
-      for (const f of FLAGS) {
-        const others = failed.length === 0 || (failed.length === 1 && failed[0] === f.key);
-        if (others && passesFlag(r, f.key, todayIso)) flagCounts[f.key]++;
+    if (passesStage(r, stage)) {
+      if (inFlags) {
+        allTerms++;
+        termTally.set(termOf(r), (termTally.get(termOf(r)) ?? 0) + 1);
       }
+      if (inTerm) {
+        for (const f of FLAGS) {
+          const others = failed.length === 0 || (failed.length === 1 && failed[0] === f.key);
+          if (others && passesFlag(r, f.key, todayIso)) flagCounts[f.key]++;
+        }
+      }
+    } else if (stage === "hidden" || r.dismissed || !keep?.has(r.short)) {
+      continue;
     }
     if (inTerm && inFlags) out.push(r);
   }
@@ -548,8 +558,8 @@ const timeOf = (iso: string | undefined, withDate: boolean): PanelFact["time"] =
  * The details panel's facts list, in display order, with only the rows that
  * have data: Source, Posted, Metro and Sent come from the watcher's facts
  * (absent on older rows), then Added, Term, Salary, Tag and Key as before.
- * `todayIso` is the server's UTC day, the same one the headline counts
- * "new today" against, so "found Nd ago" agrees with it.
+ * `todayIso` is the server's UTC day, the same one "new today" is counted
+ * against, so "found Nd ago" agrees with it.
  */
 export function panelFacts(row: TriageRow, todayIso: string): PanelFact[] {
   const out: PanelFact[] = [];

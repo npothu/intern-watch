@@ -12,6 +12,7 @@
 // this twice, once per layout (desktop, phone) with CSS picking one, so the
 // open state lives in the header and both copies share it.
 
+import { useId } from "react";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sinceLabel, type PulseRun } from "@/lib/watcher-pulse";
@@ -67,13 +68,16 @@ export function WatcherStatusChip({
   /** Always the short label (phones); otherwise it widens at 1200px. */
   compact?: boolean;
 }) {
+  const panelId = useId();
+  // The same two mail problems lib/watcher-status.ts reports on the chip.
+  const mailExpired = Boolean(health?.mail?.watchExpiration && health.mail.watchExpiration < clock);
   return (
     <div data-watcher-status className="relative">
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
         aria-expanded={open}
-        aria-haspopup="dialog"
+        aria-controls={open ? panelId : undefined}
         aria-label={`Pipeline status: ${status.label}`}
         className={cn(
           "inline-flex h-8 cursor-pointer items-center gap-2 rounded-full px-2.5 text-[12.5px] whitespace-nowrap tabular-nums transition-colors hover:bg-chip",
@@ -93,8 +97,11 @@ export function WatcherStatusChip({
         )}
       </button>
       {open && (
+        // A disclosure panel, not a dialog: it does not take focus or trap
+        // it, and it sits right after its button in the tab order.
         <div
-          role="dialog"
+          id={panelId}
+          role="group"
           aria-label="Pipeline status"
           className={cn(
             "absolute top-[calc(100%+8px)] right-0 z-50 w-[300px] origin-top-right animate-in rounded-xl border border-line-2 bg-surface p-3.5 text-[12.5px] shadow-lg duration-150 fade-in-0 zoom-in-95",
@@ -113,11 +120,13 @@ export function WatcherStatusChip({
               ? `ran ${sinceLabel(health.watcherPushedAt, clock)} ago`
               : "no matches pushed yet"}
           </Row>
-          <Row k="Mail sync" ok={!health?.mail?.lastError}>
+          <Row k="Mail sync" ok={!health?.mail?.lastError && !mailExpired}>
             {health?.mail
               ? health.mail.lastError
                 ? `failing: ${health.mail.lastError.slice(0, 60)}`
-                : health.mail.lastPushAt
+                : mailExpired
+                  ? "watch expired"
+                  : health.mail.lastPushAt
                   ? `push ${sinceLabel(health.mail.lastPushAt, clock)} ago`
                   : "no push yet"
               : "not connected"}

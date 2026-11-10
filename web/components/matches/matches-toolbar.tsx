@@ -31,7 +31,7 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
 const fmt = (n: number) => n.toLocaleString("en-US");
 
 export function MatchesToolbar({
-  newLine,
+  newTodayLine,
   stage,
   stageCounts,
   onStage,
@@ -44,11 +44,11 @@ export function MatchesToolbar({
   query,
   onQuery,
   searchRef,
-  filtered,
+  narrowed,
   onClear,
 }: {
   /** "12 new today, 7 from priority companies" (lib/headline composeNewToday). */
-  newLine: string;
+  newTodayLine: string;
   stage: Stage;
   stageCounts: Record<Stage, number>;
   onStage: (stage: Stage) => void;
@@ -63,7 +63,7 @@ export function MatchesToolbar({
   onQuery: (query: string) => void;
   searchRef: Ref<HTMLInputElement>;
   /** A chip, a term or a query is narrowing the stage. */
-  filtered: boolean;
+  narrowed: boolean;
   onClear: () => void;
 }) {
   return (
@@ -72,17 +72,19 @@ export function MatchesToolbar({
         <h1 className="m-0 text-[24px] leading-[1.1] font-semibold tracking-[-0.02em] text-ink">
           Matches
         </h1>
-        <p className="m-0 text-[13px] text-ink-2">{newLine}</p>
+        <p className="m-0 text-[13px] text-ink-2">{newTodayLine}</p>
       </div>
 
       {/* Stage tabs. Toggle buttons rather than ARIA tabs: they filter one
           list, and the arrow keys already belong to the term menu. The rule
           under them is an inset shadow so the scroll container (phones) does
-          not clip the active tab's underline. */}
+          not clip the active tab's underline. On a phone four tabs with
+          four-digit counts can outgrow the screen, so they tighten up and
+          the row scrolls sideways, like the nav above it. */}
       <div
         role="group"
         aria-label="Stage"
-        className="no-scrollbar flex items-end gap-6 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-line)]"
+        className="no-scrollbar flex items-end gap-4 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-line)] min-[700px]:gap-6"
       >
         {STAGES.map((s) => {
           const active = s.key === stage;
@@ -93,7 +95,7 @@ export function MatchesToolbar({
               aria-pressed={active}
               onClick={() => onStage(s.key)}
               className={cn(
-                "relative inline-flex shrink-0 cursor-pointer items-baseline gap-[7px] pt-2 pb-[11px] text-[14px] whitespace-nowrap transition-colors",
+                "relative inline-flex shrink-0 cursor-pointer items-baseline gap-[5px] pt-2 pb-[11px] text-[13px] whitespace-nowrap transition-colors min-[700px]:gap-[7px] min-[700px]:text-[14px]",
                 FOCUS,
                 // Hidden is not part of All, so it stands apart at the end.
                 s.key === "hidden" && "ml-auto",
@@ -129,8 +131,9 @@ export function MatchesToolbar({
           </kbd>
         </label>
 
-        <div role="group" aria-label="Show only" className="contents">
-          {FLAGS.map((f) => {
+        {/* The chips sit straight in the row so they wrap one by one. Each
+            is a pressed/unpressed button with its own name and count. */}
+        {FLAGS.map((f) => {
             const on = flags.includes(f.key);
             const count = flagCounts[f.key];
             return (
@@ -164,7 +167,6 @@ export function MatchesToolbar({
               </button>
             );
           })}
-        </div>
 
         {terms.length > 1 && (
           // The rule travels with the menu, so a wrap never strands it at the
@@ -175,7 +177,7 @@ export function MatchesToolbar({
           </span>
         )}
 
-        {filtered && (
+        {narrowed && (
           <button
             type="button"
             onClick={onClear}

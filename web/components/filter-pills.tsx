@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * The rounded-full filter pill row used by the tracker status filter and the
- * Settings palette picker, so they stay one visual language: the active
+ * Settings pickers (theme, palette, motion), so they stay one visual
+ * language: the active
  * pill is a filled accent chip with its paired ink, the rest are outlined and
  * muted on the surface colour.
  *

@@ -14,7 +14,7 @@ import {
   formatUrlState,
   isClosed,
   isPrimaryTerm,
-  newTodayCount,
+  newTodayCounts,
   normalizeFlags,
   orderTerms,
   parseUrlState,
@@ -317,6 +317,15 @@ describe("rows kept after a tick", () => {
     expect(r.stageCounts).toEqual({ todo: 1, applied: 1, all: 2, hidden: 1 });
   });
 
+  test("a kept row is listed but never counted, so every count agrees with the tab", () => {
+    const pri = [row("p1", { priority: true }), row("p2", { priority: true, applied: true })];
+    const r = composeFilters(pri, view({ stage: "todo", keep: new Set(["p2"]) }));
+    expect(shorts(r.rows)).toEqual(["p1", "p2"]);
+    expect(r.stageCounts.todo).toBe(1);
+    expect(r.flagCounts.priority).toBe(1);
+    expect(r.termCounts[0]).toEqual({ key: ALL_TERMS, count: 1 });
+  });
+
   test("a just-unticked row stays in Applied", () => {
     const r = composeFilters(rows, view({ stage: "applied", keep: new Set(["a"]) }));
     expect(shorts(r.rows)).toEqual(["a", "b"]);
@@ -558,9 +567,9 @@ describe("open row and unwatched terms", () => {
   });
 });
 
-describe("newTodayCount", () => {
+describe("newTodayCounts", () => {
   const rows = [
-    row("want", { term: "Summer 2027", added: TODAY }),
+    row("want", { term: "Summer 2027", added: TODAY, priority: true }),
     row("want-old", { term: "Summer 2027", added: "2026-11-09" }),
     row("want-applied", { term: "Summer 2027", added: TODAY, applied: true }),
     row("want-hidden", { term: "Summer 2027", added: TODAY, dismissed: true }),
@@ -568,16 +577,16 @@ describe("newTodayCount", () => {
     row("none", { term: "", added: TODAY }),
   ];
   test("counts today's rows still to apply, in watched terms only", () => {
-    expect(newTodayCount(rows, ["Summer 2027"], false, TODAY)).toBe(2);
+    expect(newTodayCounts(rows, ["Summer 2027"], false, TODAY)).toEqual({ newToday: 2, priority: 1 });
   });
   test("counts unwatched rows too while they are shown", () => {
-    expect(newTodayCount(rows, ["Summer 2027"], true, TODAY)).toBe(3);
+    expect(newTodayCounts(rows, ["Summer 2027"], true, TODAY).newToday).toBe(3);
   });
   test("no preferences known means every term is watched", () => {
-    expect(newTodayCount(rows, null, false, TODAY)).toBe(3);
+    expect(newTodayCounts(rows, null, false, TODAY).newToday).toBe(3);
   });
   test("another day has nothing new", () => {
-    expect(newTodayCount(rows, null, false, "2026-11-11")).toBe(0);
+    expect(newTodayCounts(rows, null, false, "2026-11-11")).toEqual({ newToday: 0, priority: 0 });
   });
 });
 

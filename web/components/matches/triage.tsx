@@ -4,7 +4,7 @@
 // semantics, filters, mobile swipe) is independent of the motion layer.
 //
 // Desktop (>= 700px) is one flat dense table (matches-table.tsx on the
-// dense-table.tsx shell): status pills x term pills x search, a sortable
+// dense-table.tsx shell): stage tabs x chips x term x search, a sortable
 // header, and one row open at a time with its details panel. Phones keep
 // the swipeable cards, grouped by term; a card's inline action row is the
 // same "open row" state. Both layouts are rendered and CSS picks one at
@@ -108,9 +108,8 @@ import {
   defaultCompare,
   formatUrlState,
   isPrimaryTerm,
-  isNewToday,
   isUnwatched,
-  newTodayCount,
+  newTodayCounts,
   orderTerms,
   passesStage,
   resolveOpen,
@@ -302,14 +301,14 @@ export function Triage({
   rows: TriageRow[];
   /**
    * Today as a UTC day ("YYYY-MM-DD"), read once on the server. `added` is a
-   * UTC day too, so the header's "new today" compares like with like, and
-   * the server and client render the same headline.
+   * UTC day too, so "new today" compares like with like, and the server and
+   * client render the same line.
    */
   todayIso: string;
   /**
    * Terms Settings > Preferences wants today. Rows in a known term outside
    * this set (Fall 2026 after it started, a term switched off) stay out of
-   * the list, the pills and the counts, behind one "show" link. Null means
+   * the list, the term menu and the counts, behind one "show" link. Null means
    * the preferences are unknown and nothing is hidden.
    */
   wantedTerms?: string[] | null;
@@ -372,7 +371,7 @@ export function Triage({
   );
   /* Rows in terms the preferences don't want, and the rows the surface
      works from. Unwatched rows are set aside before every count and filter,
-     so "11 matches" and the pills describe what is actually on screen. */
+     so every count describes what is actually on screen. */
   const split = useMemo(() => splitUnwatched(rows, wantedTerms), [rows, wantedTerms]);
   const scoped = showUnwatched ? rows : split.watched;
   const unwatchedLive = useMemo(() => split.unwatched.filter((r) => !r.dismissed), [split]);
@@ -612,16 +611,12 @@ export function Triage({
   // The header nav's Matches badge and the "N new today" line: today's rows
   // still to apply, in the terms this list is showing, whatever the filters.
   // The only publisher of it - the layout's server seed uses the same
-  // definition (matches-lib newTodayCount).
-  const newToday = useMemo(
-    () => newTodayCount(rows, wantedTerms, showUnwatched, todayIso),
+  // definition (matches-lib newTodayCounts).
+  const fresh = useMemo(
+    () => newTodayCounts(rows, wantedTerms, showUnwatched, todayIso),
     [rows, wantedTerms, showUnwatched, todayIso]
   );
-  const newTodayPriority = useMemo(
-    () => scoped.reduce((n, r) => (r.priority && isNewToday(r, todayIso) ? n + 1 : n), 0),
-    [scoped, todayIso]
-  );
-  usePublishViewCount("newMatches", newToday);
+  usePublishViewCount("newMatches", fresh.newToday);
 
   /* View state in the URL: ?filter= ?show= ?term= ?sort= ?open=, replacing the
      history entry so filtering never piles up Back presses. Other params
@@ -1093,6 +1088,10 @@ export function Triage({
         }
         return;
       }
+      // An open menu (the term menu, the avatar menu) owns its keys: arrows
+      // walk its items, Enter picks one, letters are typeahead. None of them
+      // may reach the row shortcuts underneath - "s" would save a row.
+      if ((e.target as HTMLElement | null)?.closest?.('[role="menu"]')) return;
       const kl = k.toLowerCase();
       if (isInput) {
         if (kl === "z" && (e.ctrlKey || e.metaKey)) {
@@ -1248,6 +1247,7 @@ export function Triage({
       icon: <Star className="size-4" />,
       run: () => {
         clearFilters();
+        pickStage("todo");
         setFlags(["priority"]);
       },
     },
@@ -1325,7 +1325,7 @@ export function Triage({
           filter, so only the title shows above the empty state. */}
       {hasAnyRows ? (
         <MatchesToolbar
-          newLine={composeNewToday({ newToday, priority: newTodayPriority })}
+          newTodayLine={composeNewToday(fresh)}
           stage={stage}
           stageCounts={filtered.stageCounts}
           onStage={pickStage}
@@ -1338,7 +1338,7 @@ export function Triage({
           query={query}
           onQuery={setQuery}
           searchRef={searchRef}
-          filtered={narrowed}
+          narrowed={narrowed}
           onClear={clearFilters}
         />
       ) : (

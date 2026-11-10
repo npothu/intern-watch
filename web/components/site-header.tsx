@@ -237,12 +237,11 @@ export function SiteHeader({
       </div>
 
       {notice && (
-        <div
-          role="status"
-          className="flex items-center gap-2.5 border-b border-line bg-red/10 px-4 py-2 text-[12.5px] text-ink min-[700px]:px-6"
-        >
+        <div className="flex items-center gap-2.5 border-b border-line bg-red/10 px-4 py-2 text-[12.5px] text-ink min-[700px]:px-6">
           <StatusDot level="bad" />
-          <span className="min-w-0">{notice}</span>
+          <span role="status" className="min-w-0">
+            {notice}
+          </span>
           <button
             type="button"
             data-watcher-status

@@ -27,7 +27,7 @@ const HOUR = 3600e3;
 /** The watcher runs every two hours; three missed runs is worth a colour. */
 const QUIET_MS = 6 * HOUR;
 /** Two days without a run is a stall: new jobs are not being found. */
-export const STALLED_MS = 48 * HOUR;
+const STALLED_MS = 48 * HOUR;
 
 /**
  * One status for the whole pipeline, worst problem first. `pageStale` is the

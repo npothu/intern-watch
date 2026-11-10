@@ -88,7 +88,7 @@ export function MatchesTable({
   openShort: string | null;
   cursor: string | null;
   wantedTerms: string[] | null;
-  /** The server's UTC day ("YYYY-MM-DD"), the one the headline uses. */
+  /** The server's UTC day ("YYYY-MM-DD"), the one "new today" uses. */
   todayIso: string;
   hiding: ReadonlySet<string>;
   entering: ReadonlySet<string>;
