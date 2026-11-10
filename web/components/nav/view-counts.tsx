@@ -14,19 +14,20 @@ import {
 import type { NavCounts } from "@/lib/view";
 
 /**
- * Counts the header's pill nav shows next to Matches, Tracker and Inbox.
+ * The badges the header's pill nav shows on Matches and Inbox.
  *
- * Inbox comes from the layout's getHealth call. Matches and Tracker are
- * seeded on the server for every screen (lib/app-data.ts loadViewCounts),
- * but the layout does not wait for them: it hands this provider the seed as
- * a promise, and `SeedResolver` reads it with `use()` inside its own Suspense
- * boundary, so the header and the page render at once and the two counts
- * stream in when the read lands. A slow or failed read leaves the pills
- * without a count; it never delays or breaks the screen.
+ * Inbox comes from the layout's getHealth call. The Matches badge (matches
+ * found today that are still to apply) is seeded on the server for every
+ * screen (lib/app-data.ts loadViewCounts), but the layout does not wait for
+ * it: it hands this provider the seed as a promise, and `SeedResolver` reads
+ * it with `use()` inside its own Suspense boundary, so the header and the
+ * page render at once and the badge streams in when the read lands. A slow
+ * or failed read leaves the pill without a badge; it never delays or breaks
+ * the screen.
  *
- * The `/` surfaces override with live numbers through `usePublishViewCount`
- * (Triage for Matches, AppViews for Tracker), and an override outlives the
- * surface, so the nav keeps the newest number while you move to Inbox.
+ * The Matches surface overrides with its live number through
+ * `usePublishViewCount` (Triage), and an override outlives the surface, so
+ * the nav keeps the newest number while you move to Inbox.
  *
  * Every server render of the layout (a hard load, a refresh) sends a new
  * seed promise, and its arrival starts a new seed `version`: all overrides
@@ -36,7 +37,7 @@ import type { NavCounts } from "@/lib/view";
  * mounted Triage puts its own live count straight back.
  */
 
-type CountKey = "matches" | "tracker";
+type CountKey = "newMatches";
 type Seed = Partial<Record<CountKey, number>>;
 export type SeedPromise = Promise<Seed | null>;
 
@@ -73,7 +74,7 @@ export function ViewCountsProvider({
   children,
 }: {
   inboxPending: number;
-  /** The server's Matches/Tracker counts, streamed; null when the read failed. */
+  /** The server's Matches badge count, streamed; null when the read failed. */
   seed: SeedPromise;
   children: ReactNode;
 }) {
@@ -112,7 +113,7 @@ export function ViewCountsProvider({
   );
 }
 
-/** Matches/Tracker (undefined while unknown) and the inbox's pending count. */
+/** New matches (undefined while unknown) and the inbox's pending count. */
 export function useViewCounts(): NavCounts {
   return useContext(CountsContext).counts;
 }

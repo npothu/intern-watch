@@ -14,7 +14,8 @@ import {
   formatUrlState,
   isClosed,
   isPrimaryTerm,
-  liveMatchCount,
+  newTodayCount,
+  normalizeFlags,
   orderTerms,
   parseUrlState,
   reportSummary,
@@ -182,9 +183,19 @@ describe("sorting", () => {
   });
 });
 
+const TODAY = "2026-11-10";
+const view = (extra: Partial<Parameters<typeof composeFilters>[1]> = {}) => ({
+  stage: "all" as const,
+  flags: [],
+  term: ALL_TERMS,
+  query: "",
+  todayIso: TODAY,
+  ...extra,
+});
+
 describe("composeFilters", () => {
   const rows = [
-    row("s1", { term: "Summer 2027", priority: true }),
+    row("s1", { term: "Summer 2027", priority: true, added: TODAY }),
     row("s2", { term: "Summer 2027", applied: true }),
     row("s3", { term: "Summer 2027", saved: true, resumeUrl: "https://r.invalid" }),
     row("f1", { term: "Fall 2027", company: "Figma" }),
@@ -192,18 +203,11 @@ describe("composeFilters", () => {
     row("u1", { term: "" }),
   ];
 
-  test("no filters: everything but the hidden row", () => {
-    const r = composeFilters(rows, { filter: "all", term: ALL_TERMS, query: "" });
+  test("All with no chips: everything but the hidden row", () => {
+    const r = composeFilters(rows, view());
     expect(shorts(r.rows)).toEqual(["s1", "s2", "s3", "f1", "u1"]);
-    expect(r.statusCounts).toEqual({
-      all: 5,
-      priority: 1,
-      todo: 4,
-      applied: 1,
-      saved: 1,
-      resumes: 1,
-      hidden: 1,
-    });
+    expect(r.stageCounts).toEqual({ todo: 4, applied: 1, all: 5, hidden: 1 });
+    expect(r.flagCounts).toEqual({ new: 1, priority: 1, saved: 1, resumes: 1 });
     expect(r.termCounts).toEqual([
       { key: ALL_TERMS, count: 5 },
       { key: "Summer 2027", count: 3 },
@@ -212,14 +216,18 @@ describe("composeFilters", () => {
     ]);
   });
 
-  test("status counts follow the term; term counts follow the status", () => {
-    const r = composeFilters(rows, { filter: "hidden", term: "Fall 2027", query: "" });
+  test("the stages split All in two, and Hidden stands apart", () => {
+    expect(shorts(composeFilters(rows, view({ stage: "todo" })).rows)).toEqual(["s1", "s3", "f1", "u1"]);
+    expect(shorts(composeFilters(rows, view({ stage: "applied" })).rows)).toEqual(["s2"]);
+    expect(shorts(composeFilters(rows, view({ stage: "hidden" })).rows)).toEqual(["f2"]);
+  });
+
+  test("stage counts follow the term; term counts follow the stage", () => {
+    const r = composeFilters(rows, view({ stage: "hidden", term: "Fall 2027" }));
     expect(shorts(r.rows)).toEqual(["f2"]);
-    // status pills are counted inside Fall 2027
-    expect(r.statusCounts.all).toBe(1);
-    expect(r.statusCounts.hidden).toBe(1);
-    expect(r.statusCounts.priority).toBe(0);
-    // term pills are counted inside "hidden"; terms with none still appear
+    // stage tabs are counted inside Fall 2027
+    expect(r.stageCounts).toEqual({ todo: 1, applied: 0, all: 1, hidden: 1 });
+    // terms are counted inside "hidden"; terms with none still appear
     expect(r.termCounts).toEqual([
       { key: ALL_TERMS, count: 1 },
       { key: "Summer 2027", count: 0 },
@@ -228,22 +236,110 @@ describe("composeFilters", () => {
     ]);
   });
 
-  test("the query narrows both axes", () => {
-    const r = composeFilters(rows, { filter: "all", term: ALL_TERMS, query: "  figma " });
+  test("the query narrows every axis", () => {
+    const r = composeFilters(rows, view({ query: "  figma " }));
     expect(shorts(r.rows)).toEqual(["f1"]);
-    expect(r.statusCounts.all).toBe(1);
+    expect(r.stageCounts.all).toBe(1);
+    expect(r.flagCounts.priority).toBe(0);
     expect(r.termCounts.find((t) => t.key === "Summer 2027")?.count).toBe(0);
   });
 
   test("a term not on offer falls back to all terms", () => {
-    const r = composeFilters(rows, { filter: "all", term: "Spring 2031", query: "" });
+    const r = composeFilters(rows, view({ term: "Spring 2031" }));
     expect(r.term).toBe(ALL_TERMS);
     expect(r.rows).toHaveLength(5);
   });
 
   test("unknown-term bucket filters rows with no term", () => {
-    const r = composeFilters(rows, { filter: "all", term: UNKNOWN_TERM, query: "" });
+    const r = composeFilters(rows, view({ term: UNKNOWN_TERM }));
     expect(shorts(r.rows)).toEqual(["u1"]);
+  });
+});
+
+describe("chips", () => {
+  const rows = [
+    row("np", { priority: true, added: TODAY }),
+    row("n", { added: TODAY }),
+    row("p", { priority: true }),
+    row("ps", { priority: true, saved: true }),
+    row("pa", { priority: true, applied: true, added: TODAY }),
+    row("x"),
+  ];
+
+  test("chips combine: a row has to pass all of them", () => {
+    const r = composeFilters(rows, view({ stage: "todo", flags: ["new", "priority"] }));
+    expect(shorts(r.rows)).toEqual(["np"]);
+  });
+
+  test("an off chip counts what turning it on would leave", () => {
+    const r = composeFilters(rows, view({ stage: "todo", flags: ["priority"] }));
+    expect(shorts(r.rows)).toEqual(["np", "p", "ps"]);
+    expect(r.flagCounts.new).toBe(1); // np
+    expect(r.flagCounts.saved).toBe(1); // ps
+    expect(r.flagCounts.resumes).toBe(0);
+  });
+
+  test("an on chip counts the list as it stands, not the list without it", () => {
+    const r = composeFilters(rows, view({ stage: "todo", flags: ["new", "priority"] }));
+    expect(r.flagCounts.new).toBe(1);
+    expect(r.flagCounts.priority).toBe(1);
+  });
+
+  test("stage and term counts follow the chips", () => {
+    const r = composeFilters(rows, view({ stage: "todo", flags: ["new"] }));
+    expect(r.stageCounts).toEqual({ todo: 2, applied: 1, all: 3, hidden: 0 });
+    expect(r.termCounts[0]).toEqual({ key: ALL_TERMS, count: 2 });
+  });
+
+  test("New today reads the server's day, with or without a time on the stamp", () => {
+    const stamped = [row("t", { added: `${TODAY}T08:00:00Z` }), row("y", { added: "2026-11-09" })];
+    expect(shorts(composeFilters(stamped, view({ flags: ["new"] })).rows)).toEqual(["t"]);
+  });
+
+  test("flag order and duplicates do not matter", () => {
+    expect(normalizeFlags(["saved", "new", "saved", "bogus"])).toEqual(["new", "saved"]);
+    const a = composeFilters(rows, view({ flags: ["priority", "new"] }));
+    const b = composeFilters(rows, view({ flags: ["new", "priority", "new"] }));
+    expect(shorts(a.rows)).toEqual(shorts(b.rows));
+  });
+});
+
+describe("rows kept after a tick", () => {
+  const rows = [
+    row("a"),
+    row("b", { applied: true }),
+    row("gone", { applied: true, dismissed: true }),
+  ];
+
+  test("a just-applied row stays in To apply but counts under Applied", () => {
+    const r = composeFilters(rows, view({ stage: "todo", keep: new Set(["b"]) }));
+    expect(shorts(r.rows)).toEqual(["a", "b"]);
+    expect(r.stageCounts).toEqual({ todo: 1, applied: 1, all: 2, hidden: 1 });
+  });
+
+  test("a kept row is listed but never counted, so every count agrees with the tab", () => {
+    const pri = [row("p1", { priority: true }), row("p2", { priority: true, applied: true })];
+    const r = composeFilters(pri, view({ stage: "todo", keep: new Set(["p2"]) }));
+    expect(shorts(r.rows)).toEqual(["p1", "p2"]);
+    expect(r.stageCounts.todo).toBe(1);
+    expect(r.flagCounts.priority).toBe(1);
+    expect(r.termCounts[0]).toEqual({ key: ALL_TERMS, count: 1 });
+  });
+
+  test("a just-unticked row stays in Applied", () => {
+    const r = composeFilters(rows, view({ stage: "applied", keep: new Set(["a"]) }));
+    expect(shorts(r.rows)).toEqual(["a", "b"]);
+  });
+
+  test("a kept row still has to pass the chips, the term and the query", () => {
+    const r = composeFilters(rows, view({ stage: "todo", flags: ["priority"], keep: new Set(["b"]) }));
+    expect(r.rows).toEqual([]);
+  });
+
+  test("keeping never crosses the hidden line", () => {
+    const keep = new Set(["a", "gone"]);
+    expect(shorts(composeFilters(rows, view({ stage: "todo", keep })).rows)).toEqual(["a"]);
+    expect(shorts(composeFilters(rows, view({ stage: "hidden", keep })).rows)).toEqual(["gone"]);
   });
 });
 
@@ -336,7 +432,8 @@ describe("row facts", () => {
 describe("URL state", () => {
   test("round-trips every field and keeps foreign params", () => {
     const state: MatchesUrlState = {
-      filter: "priority",
+      stage: "applied",
+      flags: ["priority", "saved"],
       term: "su27",
       sort: { key: "found", dir: "desc" },
       open: "3f9a0b1c2d3e",
@@ -344,18 +441,42 @@ describe("URL state", () => {
     const qs = formatUrlState("view=matches&job=abc", state);
     const params = new URLSearchParams(qs);
     expect(params.get("job")).toBe("abc");
+    expect(params.get("filter")).toBe("applied");
+    expect(params.get("show")).toBe("priority,saved");
     expect(params.get("sort")).toBe("found.desc");
     expect(parseUrlState(params)).toEqual(state);
   });
   test("defaults are omitted", () => {
-    expect(formatUrlState("filter=hidden&sort=term.asc", parseUrlState(new URLSearchParams("")))).toBe("");
+    expect(
+      formatUrlState("filter=hidden&show=saved&sort=term.asc", parseUrlState(new URLSearchParams("")))
+    ).toBe("");
+  });
+  test("the plain URL opens on To apply with no chips", () => {
+    expect(parseUrlState(new URLSearchParams(""))).toEqual({
+      stage: "todo",
+      flags: [],
+      term: null,
+      sort: null,
+      open: null,
+    });
   });
   test("invalid values fall back silently", () => {
     const parsed = parseUrlState(
-      new URLSearchParams("filter=bogus&sort=title.up&open=<script>&term=%20%20")
+      new URLSearchParams("filter=bogus&show=nope,,saved,saved&sort=title.up&open=<script>&term=%20%20")
     );
-    expect(parsed).toEqual({ filter: "all", term: null, sort: null, open: null });
+    expect(parsed).toEqual({ stage: "todo", flags: ["saved"], term: null, sort: null, open: null });
     expect(parseUrlState(new URLSearchParams("sort=company")).sort).toBeNull();
+  });
+  test("old ?filter= links still show the list they showed", () => {
+    const old = (qs: string) => parseUrlState(new URLSearchParams(qs));
+    expect(old("filter=all")).toMatchObject({ stage: "all", flags: [] });
+    expect(old("filter=hidden")).toMatchObject({ stage: "hidden", flags: [] });
+    expect(old("filter=todo")).toMatchObject({ stage: "todo", flags: [] });
+    expect(old("filter=priority")).toMatchObject({ stage: "all", flags: ["priority"] });
+    expect(old("filter=saved")).toMatchObject({ stage: "all", flags: ["saved"] });
+    expect(old("filter=resumes")).toMatchObject({ stage: "all", flags: ["resumes"] });
+    // "new" was never a ?filter= value, so it is not read as one.
+    expect(old("filter=new")).toMatchObject({ stage: "todo", flags: [] });
   });
   test("term slugs are lowercased", () => {
     expect(parseUrlState(new URLSearchParams("term=SU27")).term).toBe("su27");
@@ -394,32 +515,28 @@ describe("sort tie-breaks", () => {
   });
 });
 
-describe("pill counts, more cases", () => {
-  test("a row both saved and applied counts in both pills", () => {
-    const r = composeFilters([row("both", { saved: true, applied: true })], {
-      filter: "all",
-      term: ALL_TERMS,
-      query: "",
-    });
-    expect(r.statusCounts.saved).toBe(1);
-    expect(r.statusCounts.applied).toBe(1);
-    expect(r.statusCounts.todo).toBe(0);
+describe("counts, more cases", () => {
+  test("a row both saved and applied counts under the chip and the stage", () => {
+    const r = composeFilters([row("both", { saved: true, applied: true })], view());
+    expect(r.flagCounts.saved).toBe(1);
+    expect(r.stageCounts.applied).toBe(1);
+    expect(r.stageCounts.todo).toBe(0);
   });
   test("a term whose only rows are hidden is not offered, except while viewing hidden", () => {
     const rows = [
       row("live", { term: "Summer 2027" }),
       row("gone", { term: "Fall 2026", dismissed: true }),
     ];
-    const live = composeFilters(rows, { filter: "all", term: ALL_TERMS, query: "" });
+    const live = composeFilters(rows, view());
     expect(live.termCounts.map((t) => t.key)).toEqual([ALL_TERMS, "Summer 2027"]);
-    const hidden = composeFilters(rows, { filter: "hidden", term: ALL_TERMS, query: "" });
+    const hidden = composeFilters(rows, view({ stage: "hidden" }));
     expect(hidden.termCounts.map((t) => t.key)).toEqual([ALL_TERMS, "Fall 2026", "Summer 2027"]);
     // ...and a pick of that term stops applying outside the hidden view.
-    expect(composeFilters(rows, { filter: "all", term: "Fall 2026", query: "" }).term).toBe(ALL_TERMS);
+    expect(composeFilters(rows, view({ term: "Fall 2026" })).term).toBe(ALL_TERMS);
   });
-  test("a live term with nothing under the active status still shows a zero", () => {
+  test("a live term with nothing under the active chips still shows a zero", () => {
     const rows = [row("a", { term: "Summer 2027" }), row("b", { term: "Fall 2027", saved: true })];
-    const r = composeFilters(rows, { filter: "saved", term: ALL_TERMS, query: "" });
+    const r = composeFilters(rows, view({ flags: ["saved"] }));
     expect(r.termCounts).toEqual([
       { key: ALL_TERMS, count: 1 },
       { key: "Summer 2027", count: 0 },
@@ -450,22 +567,26 @@ describe("open row and unwatched terms", () => {
   });
 });
 
-describe("liveMatchCount", () => {
+describe("newTodayCount", () => {
   const rows = [
-    row("want", { term: "Summer 2027" }),
-    row("want-hidden", { term: "Summer 2027", dismissed: true }),
-    row("past", { term: "Fall 2026" }),
-    row("past-hidden", { term: "Fall 2026", dismissed: true }),
-    row("none", { term: "" }),
+    row("want", { term: "Summer 2027", added: TODAY }),
+    row("want-old", { term: "Summer 2027", added: "2026-11-09" }),
+    row("want-applied", { term: "Summer 2027", added: TODAY, applied: true }),
+    row("want-hidden", { term: "Summer 2027", added: TODAY, dismissed: true }),
+    row("past", { term: "Fall 2026", added: TODAY }),
+    row("none", { term: "", added: TODAY }),
   ];
-  test("counts live rows in watched terms only", () => {
-    expect(liveMatchCount(rows, ["Summer 2027"], false)).toBe(2);
+  test("counts today's rows still to apply, in watched terms only", () => {
+    expect(newTodayCount(rows, ["Summer 2027"], false, TODAY)).toBe(2);
   });
-  test("counts unwatched live rows too while they are shown", () => {
-    expect(liveMatchCount(rows, ["Summer 2027"], true)).toBe(3);
+  test("counts unwatched rows too while they are shown", () => {
+    expect(newTodayCount(rows, ["Summer 2027"], true, TODAY)).toBe(3);
   });
   test("no preferences known means every term is watched", () => {
-    expect(liveMatchCount(rows, null, false)).toBe(3);
+    expect(newTodayCount(rows, null, false, TODAY)).toBe(3);
+  });
+  test("another day has nothing new", () => {
+    expect(newTodayCount(rows, null, false, "2026-11-11")).toBe(0);
   });
 });
 

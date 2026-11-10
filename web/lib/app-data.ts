@@ -14,8 +14,7 @@ import { normCompany } from "@/lib/company";
 import { resolvePreferences } from "@/lib/preferences";
 import { dayFromIso } from "@/lib/terms";
 import { utcDayIso } from "@/lib/headline";
-import { buildTrackerRows } from "@/components/tracker/build-rows";
-import { liveMatchCount, sanitizeFacts } from "@/components/matches/matches-lib";
+import { newTodayCount, sanitizeFacts } from "@/components/matches/matches-lib";
 import type { TriageRow } from "@/app/(app)/page";
 
 /**
@@ -93,16 +92,15 @@ export function toTriageRows(core: Core, resumes: ResumeUrls): TriageRow[] {
 }
 
 /**
- * The header nav's Matches and Tracker counts, by the same definitions the
- * surfaces use (liveMatchCount, buildTrackerRows). Resume URLs change neither
- * count, so they are not fetched here.
+ * The header nav's Matches badge: today's matches still to apply, by the
+ * same definition the surface uses (newTodayCount). Resume URLs do not change
+ * it, so they are not fetched here.
  */
-export async function loadViewCounts(user: string): Promise<{ matches: number; tracker: number }> {
+export async function loadViewCounts(user: string): Promise<{ newMatches: number }> {
   const core = await loadCore(user);
   return {
     // Unwatched terms hidden, as the list opens; a deep link that opens on an
     // unwatched row makes Triage publish the larger count on mount instead.
-    matches: liveMatchCount(toTriageRows(core, {}), core.prefs.wantedTerms, false),
-    tracker: buildTrackerRows(core.ledger, core.matches, {}).length,
+    newMatches: newTodayCount(toTriageRows(core, {}), core.prefs.wantedTerms, false, core.todayIso),
   };
 }

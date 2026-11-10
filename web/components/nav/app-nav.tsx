@@ -3,7 +3,9 @@
 // The header's pill nav: the `nav` entries of the view registry (lib/view.ts
 // VIEWS - Matches, Tracker, Inbox, Profile, Referrals) in one bordered rounded
 // container, the active pill filled ink. The header owns navigation on every
-// screen; no surface renders its own switch any more.
+// screen; no surface renders its own switch any more. A badge on a pill means
+// something there needs you (new matches, inbox items to review); totals
+// live on the page that filters them.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -75,12 +77,18 @@ export function AppNav({
             {item.label}
             {typeof count === "number" && (
               <span
+                title={item.countLabel?.(count)}
                 className={cn(
-                  "font-mono text-[11px] tabular-nums",
-                  isActive ? "opacity-80" : item.countTone === "amber" ? "text-amber" : "text-ink-2"
+                  "rounded-full px-[5px] py-[3px] font-mono text-[10.5px] leading-none font-medium tabular-nums",
+                  isActive
+                    ? "bg-bg/15 text-bg"
+                    : item.countTone === "amber"
+                      ? "bg-amber/20 text-amber"
+                      : "bg-accent/20 text-accent"
                 )}
               >
-                {count}
+                <span aria-hidden>{count}</span>
+                {item.countLabel && <span className="sr-only">, {item.countLabel(count)}</span>}
               </span>
             )}
           </Link>
