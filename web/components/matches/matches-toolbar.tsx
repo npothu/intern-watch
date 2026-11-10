@@ -1,8 +1,8 @@
 "use client";
 
-// The top of the Matches page: the title with its "new today" line, the
-// stage tabs, and one row of narrowing controls (the list filter, the chips,
-// the term menu). Each kind of control has its own form on purpose:
+// The controls under the Matches headline: the stage tabs, and one row of
+// narrowing controls (the list filter, the chips, the term menu). Each kind
+// of control has its own form on purpose:
 //
 //   tabs       exactly one is on        which pile (To apply / Applied / ...)
 //   chips      checkboxes, any number   narrow the pile (Priority, Saved ...)
@@ -31,7 +31,6 @@ const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visi
 const fmt = (n: number) => n.toLocaleString("en-US");
 
 export function MatchesToolbar({
-  newTodayLine,
   stage,
   stageCounts,
   onStage,
@@ -47,8 +46,6 @@ export function MatchesToolbar({
   narrowed,
   onClear,
 }: {
-  /** "12 new today, 7 from priority companies" (lib/headline composeNewToday). */
-  newTodayLine: string;
   stage: Stage;
   stageCounts: Record<Stage, number>;
   onStage: (stage: Stage) => void;
@@ -68,13 +65,6 @@ export function MatchesToolbar({
 }) {
   return (
     <div className="mb-3.5">
-      <div className="mb-2.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="m-0 text-[24px] leading-[1.1] font-semibold tracking-[-0.02em] text-ink">
-          Matches
-        </h1>
-        <p className="m-0 text-[13px] text-ink-2">{newTodayLine}</p>
-      </div>
-
       {/* Stage tabs. Toggle buttons rather than ARIA tabs: they filter one
           list, and the arrow keys already belong to the term menu. The rule
           under them is an inset shadow so the scroll container (phones) does

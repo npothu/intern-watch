@@ -16,9 +16,9 @@ function useMounted(): boolean {
 }
 
 /**
- * The theme next-themes drives, as a labelled control. The header's avatar
- * menu (user-chip.tsx) sets the same preference. Same shape as the motion
- * control below, so it earns a place on this page.
+ * A second, labelled way to set the theme next-themes already drives via the
+ * header's icon toggle (site-header.tsx, untouched). Same preference, same
+ * shape as the motion control below, so it earns a place on this page.
  */
 
 const OPTIONS: PillOption[] = [
@@ -30,8 +30,8 @@ const OPTIONS: PillOption[] = [
 export function ThemeControl() {
   const { theme, setTheme } = useTheme();
   // next-themes reports `theme` as undefined until mounted, so the pill
-  // selection is gated on mount - server and first client render both show
-  // "system" active.
+  // selection is gated the same way the header toggle's icons implicitly
+  // are - server and first client render both show "system" active.
   const mounted = useMounted();
 
   return (

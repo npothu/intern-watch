@@ -7,7 +7,7 @@ import type { TriageRow } from "@/app/(app)/page";
 import type { MatchFacts, ResumeReport } from "@/lib/convex";
 import { compare, dayFromIso, parseTerm, sortTerms, termStart, type Day } from "@/lib/terms";
 import { isKnownTerm } from "@/lib/preferences";
-import { isAddedOn, type NewTodayCounts } from "@/lib/headline";
+import { isAddedOn } from "@/lib/headline";
 
 /**
  * The stage tabs: which pile is on screen. Exactly one is always on. "To
@@ -166,26 +166,19 @@ export function isNewToday(row: TriageRow, todayIso: string): boolean {
 }
 
 /**
- * The numbers behind the header nav's Matches badge and the page's "N new
- * today" line: rows added today that are still to apply, and how many of
- * them are from priority employers, in watched terms unless the unwatched
- * ones are being shown too. One definition for the server seed
- * (lib/app-data.ts) and the surface's live republish (triage.tsx).
+ * The number on the header nav's Matches badge: rows added today that are
+ * still to apply, in watched terms unless the unwatched ones are being shown
+ * too. One definition for the server seed (lib/app-data.ts) and the
+ * surface's live republish (triage.tsx).
  */
-export function newTodayCounts(
+export function newTodayCount(
   rows: readonly TriageRow[],
   wantedTerms: readonly string[] | null,
   showUnwatched: boolean,
   todayIso: string
-): NewTodayCounts {
+): number {
   const scoped = showUnwatched ? rows : splitUnwatched(rows, wantedTerms).watched;
-  const counts = { newToday: 0, priority: 0 };
-  for (const r of scoped) {
-    if (!isNewToday(r, todayIso)) continue;
-    counts.newToday++;
-    if (r.priority) counts.priority++;
-  }
-  return counts;
+  return scoped.reduce((n, r) => (isNewToday(r, todayIso) ? n + 1 : n), 0);
 }
 
 /** The open row, if it is still on screen; otherwise nothing is open. */
@@ -558,8 +551,8 @@ const timeOf = (iso: string | undefined, withDate: boolean): PanelFact["time"] =
  * The details panel's facts list, in display order, with only the rows that
  * have data: Source, Posted, Metro and Sent come from the watcher's facts
  * (absent on older rows), then Added, Term, Salary, Tag and Key as before.
- * `todayIso` is the server's UTC day, the same one "new today" is counted
- * against, so "found Nd ago" agrees with it.
+ * `todayIso` is the server's UTC day, the same one the headline counts
+ * "new today" against, so "found Nd ago" agrees with it.
  */
 export function panelFacts(row: TriageRow, todayIso: string): PanelFact[] {
   const out: PanelFact[] = [];

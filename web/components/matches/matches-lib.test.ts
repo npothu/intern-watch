@@ -14,7 +14,7 @@ import {
   formatUrlState,
   isClosed,
   isPrimaryTerm,
-  newTodayCounts,
+  newTodayCount,
   normalizeFlags,
   orderTerms,
   parseUrlState,
@@ -567,9 +567,9 @@ describe("open row and unwatched terms", () => {
   });
 });
 
-describe("newTodayCounts", () => {
+describe("newTodayCount", () => {
   const rows = [
-    row("want", { term: "Summer 2027", added: TODAY, priority: true }),
+    row("want", { term: "Summer 2027", added: TODAY }),
     row("want-old", { term: "Summer 2027", added: "2026-11-09" }),
     row("want-applied", { term: "Summer 2027", added: TODAY, applied: true }),
     row("want-hidden", { term: "Summer 2027", added: TODAY, dismissed: true }),
@@ -577,16 +577,16 @@ describe("newTodayCounts", () => {
     row("none", { term: "", added: TODAY }),
   ];
   test("counts today's rows still to apply, in watched terms only", () => {
-    expect(newTodayCounts(rows, ["Summer 2027"], false, TODAY)).toEqual({ newToday: 2, priority: 1 });
+    expect(newTodayCount(rows, ["Summer 2027"], false, TODAY)).toBe(2);
   });
   test("counts unwatched rows too while they are shown", () => {
-    expect(newTodayCounts(rows, ["Summer 2027"], true, TODAY).newToday).toBe(3);
+    expect(newTodayCount(rows, ["Summer 2027"], true, TODAY)).toBe(3);
   });
   test("no preferences known means every term is watched", () => {
-    expect(newTodayCounts(rows, null, false, TODAY).newToday).toBe(3);
+    expect(newTodayCount(rows, null, false, TODAY)).toBe(3);
   });
   test("another day has nothing new", () => {
-    expect(newTodayCounts(rows, null, false, "2026-11-11")).toEqual({ newToday: 0, priority: 0 });
+    expect(newTodayCount(rows, null, false, "2026-11-11")).toBe(0);
   });
 });
 

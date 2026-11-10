@@ -72,7 +72,7 @@ import {
   type PaletteAction,
 } from "@/components/command-palette";
 import { usePublishViewCount } from "@/components/nav/view-counts";
-import { composeNewToday } from "@/lib/headline";
+import { composeMatchesHeadline, isAddedOn } from "@/lib/headline";
 import { PAGE_WITH_DOCK } from "@/lib/layout";
 import {
   ResumeReportDialog,
@@ -109,7 +109,7 @@ import {
   formatUrlState,
   isPrimaryTerm,
   isUnwatched,
-  newTodayCounts,
+  newTodayCount,
   orderTerms,
   passesStage,
   resolveOpen,
@@ -301,8 +301,8 @@ export function Triage({
   rows: TriageRow[];
   /**
    * Today as a UTC day ("YYYY-MM-DD"), read once on the server. `added` is a
-   * UTC day too, so "new today" compares like with like, and the server and
-   * client render the same line.
+   * UTC day too, so the header's "new today" compares like with like, and
+   * the server and client render the same headline.
    */
   todayIso: string;
   /**
@@ -608,15 +608,15 @@ export function Triage({
   const activeOpen = resolveOpen(openShort, visible);
   if (openShort !== activeOpen) setOpenShort(null);
 
-  // The header nav's Matches badge and the "N new today" line: today's rows
-  // still to apply, in the terms this list is showing, whatever the filters.
-  // The only publisher of it - the layout's server seed uses the same
-  // definition (matches-lib newTodayCounts).
-  const fresh = useMemo(
-    () => newTodayCounts(rows, wantedTerms, showUnwatched, todayIso),
+  // The header nav's Matches badge: today's rows still to apply, in the terms
+  // this list is showing, whatever the filters. The only publisher of it -
+  // the layout's server seed uses the same definition (matches-lib
+  // newTodayCount).
+  const newToday = useMemo(
+    () => newTodayCount(rows, wantedTerms, showUnwatched, todayIso),
     [rows, wantedTerms, showUnwatched, todayIso]
   );
-  usePublishViewCount("newMatches", fresh.newToday);
+  usePublishViewCount("newMatches", newToday);
 
   /* View state in the URL: ?filter= ?show= ?term= ?sort= ?open=, replacing the
      history entry so filtering never piles up Back presses. Other params
@@ -1283,6 +1283,19 @@ export function Triage({
   const hasAnyRows = rows.length > 0;
   const emptyFilter = hasAnyRows && visible.length === 0;
 
+  /* The page headline, from the rows the table shows. */
+  const headline = (() => {
+    if (!hasAnyRows) return "No matches yet.";
+    const fresh = visible.filter((r) => isAddedOn(r.added, todayIso));
+    return composeMatchesHeadline({
+      shown: visible.length,
+      priority: visible.filter((r) => r.priority).length,
+      newToday: fresh.length,
+      newTodayPriority: fresh.filter((r) => r.priority).length,
+      hidden: stage === "hidden",
+    });
+  })();
+
   const tableHandlers: MatchHandlers = {
     onActivate: toggleDetails,
     onToggleApplied: toggleApplied,
@@ -1317,15 +1330,19 @@ export function Triage({
       ref={rootRef}
       className={PAGE_WITH_DOCK}
     >
-      {/* Page top (matches-toolbar.tsx): the title and its "new today" line,
-          the stage tabs, then the list filter, the chips and the term menu.
-          The header's search box opens the palette (jumps, Add URL, a pasted
-          link); the input here is the live table filter it cannot be, and
-          `/` still focuses it. With no rows at all there is nothing to
-          filter, so only the title shows above the empty state. */}
-      {hasAnyRows ? (
+      {/* Page top: a headline composed from the rows on screen
+          (lib/headline.ts), then the stage tabs and one row of narrowing
+          controls - the list filter, the chips, the term menu
+          (matches-toolbar.tsx). The header's search box opens the palette
+          (jumps, Add URL, a pasted link); the input here is the live table
+          filter it cannot be, and `/` still focuses it. With no rows at all
+          there is nothing to filter, so only the headline shows above the
+          empty state. */}
+      <h1 className="m-0 mb-3.5 min-w-0 text-[28px] leading-[1.05] font-semibold tracking-[-0.03em] text-ink min-[700px]:text-[40px]">
+        {headline}
+      </h1>
+      {hasAnyRows && (
         <MatchesToolbar
-          newTodayLine={composeNewToday(fresh)}
           stage={stage}
           stageCounts={filtered.stageCounts}
           onStage={pickStage}
@@ -1341,10 +1358,6 @@ export function Triage({
           narrowed={narrowed}
           onClear={clearFilters}
         />
-      ) : (
-        <h1 className="m-0 mb-[18px] text-[24px] leading-[1.1] font-semibold tracking-[-0.02em] text-ink">
-          Matches
-        </h1>
       )}
 
       {!hasAnyRows ? (
